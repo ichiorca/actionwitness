@@ -34,20 +34,6 @@ EXPECTED_LANES = (
     "unit",
 )
 
-# ---------------------------------------------------------------------------
-# Known gap, deliberately visible rather than silently tolerated.
-#
-# The cavesson L0 policy hook denies every write whose path contains an `evals`
-# segment ("eval corpus — immutable to autonomous sessions"). That rule is meant
-# for the root-level `/evals/` grading corpus, but it also matches this project's
-# own `tests/evals/` lane and `actionwitness_core/evals/` source. An autonomous
-# session therefore cannot create the evals lane's test.
-#
-# This exemption is asserted to be EXACTLY this set, so it cannot quietly grow.
-# Delete it once the hook is narrowed to the repository root.
-# ---------------------------------------------------------------------------
-LANES_BLOCKED_BY_POLICY = frozenset({"evals"})
-
 
 def _registered_markers() -> set[str]:
     config = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
@@ -86,9 +72,7 @@ def test_no_marker_is_registered_without_a_lane() -> None:
 
 
 @pytest.mark.architecture
-@pytest.mark.parametrize(
-    "lane", [lane for lane in EXPECTED_LANES if lane not in LANES_BLOCKED_BY_POLICY]
-)
+@pytest.mark.parametrize("lane", EXPECTED_LANES)
 def test_every_lane_selects_at_least_one_test(lane: str) -> None:
     """An empty lane passes vacuously; that is the failure mode worth catching."""
     result = _collect("-m", lane)
@@ -96,15 +80,6 @@ def test_every_lane_selects_at_least_one_test(lane: str) -> None:
     assert "no tests ran" not in result.stdout.lower()
     assert "/1 tests collected" in result.stdout or "tests collected" in result.stdout, (
         f"-m {lane} collected nothing:\n{result.stdout}"
-    )
-
-
-@pytest.mark.architecture
-def test_the_policy_blocked_lane_set_has_not_grown() -> None:
-    """Guards the exemption above: it documents one known gap, not a habit."""
-    assert frozenset({"evals"}) == LANES_BLOCKED_BY_POLICY, (
-        "a new lane was exempted from coverage; exemptions need an operator decision, "
-        f"not a code change. Found: {sorted(LANES_BLOCKED_BY_POLICY)}"
     )
 
 

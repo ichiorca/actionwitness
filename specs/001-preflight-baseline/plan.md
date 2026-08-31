@@ -52,19 +52,18 @@ Resolved as planned, with two deviations worth recording:
   native control path is implemented and tested, making "pin neither" a real
   fallback rather than a cliff.
 
-Blocked, needing an operator decision (not worked around):
+Blocked items — RESOLVED (2026-08-31, cavesson v0.1.0-322):
 
-1. **cavesson L0 hook over-matches `evals`.** Every write whose path contains an
-   `evals` segment is denied ("eval corpus — immutable to autonomous sessions").
-   That rule is for the root-level `/evals/` grading corpus, but it also covers
-   `tests/evals/` and `packages/actionwitness_core/.../evals/`. Consequences: the
-   §26 `evals` lane has no test, and one E501 in
-   `actionwitness_core/evals/__init__.py:1` keeps `ruff check .` red. Both are
-   recorded and bounded in `tests/architecture/test_test_lanes.py`. **This will
-   block M6 wholesale**, not just M0.
-2. **`.env.example` is denied** under the `.env` secrets rule, though it holds no
-   secrets. The feature-flag variable table lives in the `config.py` docstring
-   instead; the example file still lists only the older subset.
+Both blocks were symptoms of one upstream defect — the L0 matcher matched
+relative globs at any path depth and literal rules by substring — filed as
+cavessonhq/cavesson#9 and fixed in v0.1.0-322 (verified: `tests/evals/`
+writable, root `evals/` still denied). Closed out in the follow-up commit:
+the §26 evals lane has a real test (`tests/evals/test_evals_lane.py`, with a
+tripwire forcing M6 behavior to land with its own coverage), the E501 in
+`actionwitness_core/evals/__init__.py` is fixed and `ruff check .` is green,
+the exemption machinery in `test_test_lanes.py` is deleted per its own
+instructions, and `.env.example` now lists every variable from the
+`config.py` provenance table. M6 is no longer blocked.
 
 Note on `cavesson spec-kit progress`: it counts task IDs cited in **pass logs**
 under `progress/` (`review.json` shows `citedInLog: false`, `logFiles: null`),
