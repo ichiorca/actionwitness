@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WebMCP lifecycle spike — ActionWitness ADR-0002</title>
+  </head>
+  <body>
+    <!--
+      Separate entry from index.html on purpose: the spike is a decision tool, not
+      part of the product surface, and it must never ship inside the workspace UI.
+      Open at /spike.html with `npm run dev`.
+    -->
+    <div id="spike-root"></div>
+    <script type="module" src="/src/spike/main.tsx"></script>
+  </body>
+</html>

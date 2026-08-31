@@ -20,7 +20,7 @@ Cite the T-ID in every commit that advances it.
       disables only its module; unit tests for each absence combination.
 - [x] T9 — Add conftest fixture builders + one runnable placeholder test per
       §26 lane (no skips).
-- [ ] T10 — Build the WebMCP spike harness (both candidate hooks switchable,
+- [x] T10 — Build the WebMCP spike harness (both candidate hooks switchable,
       StrictMode, one read-only stub tool) + operator browser checklist.
 - [ ] T11 — (operator gate) Record spike results in ADR-0002; pin the chosen
       hook + `webmcp-types`; commit the frontend lockfile; record the tested

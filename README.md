@@ -111,6 +111,14 @@ commands when its Tier 1 UI lands (spec §29.1).
 
 ## Version pinning (spec §29.3) — fill during the §25.1 spike
 
+Run the spike harness first: `cd apps/actionwitness_service/frontend && npm install && npm run dev`,
+then open **`/spike.html`**. It mounts under StrictMode, switches between direct
+native registration and both hook candidates, and reports the live tool count from
+`document.modelContext.getTools()`. The step-by-step run is
+`tests/browser/webmcp-spike-checklist.md`; the decision rule is fixed in advance in
+`docs/adr/0002-webmcp-lifecycle-package.md`.
+
+
 | Item | Pinned value |
 |---|---|
 | Chrome build + flag/origin-trial config (`chrome://flags/#enable-webmcp-testing`) | TODO |
