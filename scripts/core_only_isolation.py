@@ -82,7 +82,7 @@ def _import_roots(path: Path) -> set[str]:
     return roots
 
 
-def core_only_test_files(tests_root: Path = TESTS_ROOT) -> list[Path]:
+def core_only_test_files() -> list[Path]:
     """Every test file that can run with only the core installed.
 
     Derived by reading the imports rather than by keeping a hand-written list,
@@ -92,9 +92,9 @@ def core_only_test_files(tests_root: Path = TESTS_ROOT) -> list[Path]:
     """
     return sorted(
         path
-        for path in tests_root.rglob("test_*.py")
+        for path in TESTS_ROOT.rglob("test_*.py")
         if "__pycache__" not in path.parts
-        and not (set(path.relative_to(tests_root).parts) & EXCLUDED_LANES)
+        and not (set(path.relative_to(TESTS_ROOT).parts) & EXCLUDED_LANES)
         and not (_import_roots(path) & NON_CORE_ROOTS)
     )
 
