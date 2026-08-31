@@ -263,12 +263,21 @@ EVALUATION_EVENT_DESCRIPTIONS: Mapping[EvaluationEventType, str] = {
 
 
 class EventActor(StrEnum):
-    """Who produced an event (spec §17.1, `events.actor`)."""
+    """Who produced an event (spec §17.1 `events.actor`; §10.3, §23.1).
+
+    `eval` is named by §10.3 ("actor `eval` in an eval replay") and §23.1
+    ("eval-run reports count actor-`eval` invocation starts separately"), while
+    §17.1's parenthetical list of the outcome stream's actors omits it - eval
+    events live in the separate `evaluation_events` stream of §16.3. It is
+    registered here so the trajectory engine can recognise a replayed occurrence
+    from the start rather than having replay masquerade as an agent.
+    """
 
     AGENT = "agent"
     HUMAN = "human"
     HARNESS = "harness"
     EXTERNAL = "external"
+    EVAL = "eval"
 
 
 EVENT_ACTOR_DESCRIPTIONS: Mapping[EventActor, str] = {
@@ -276,6 +285,11 @@ EVENT_ACTOR_DESCRIPTIONS: Mapping[EventActor, str] = {
     EventActor.HUMAN: "A person; used for confirmation decisions and timeline annotations.",
     EventActor.HARNESS: "The server itself, for lifecycle and boundary events.",
     EventActor.EXTERNAL: "Used only for accepted external observations.",
+    EventActor.EVAL: (
+        "A deterministic eval replay driving recorded tool calls. Counted "
+        "separately from agent calls so a replay is never presented as an agent "
+        "having chosen those tools."
+    ),
 }
 
 

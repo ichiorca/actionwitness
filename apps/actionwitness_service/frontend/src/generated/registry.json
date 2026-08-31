@@ -99,7 +99,8 @@
         "agent": "A browser agent acting through a registered tool.",
         "human": "A person; used for confirmation decisions and timeline annotations.",
         "harness": "The server itself, for lifecycle and boundary events.",
-        "external": "Used only for accepted external observations."
+        "external": "Used only for accepted external observations.",
+        "eval": "A deterministic eval replay driving recorded tool calls. Counted separately from agent calls so a replay is never presented as an agent having chosen those tools."
       }
     },
     "guidance_actor": {
