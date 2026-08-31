@@ -11,7 +11,7 @@ Cite the T-ID in every commit that advances it.
       repository canonicalization vectors under `tests/` fixtures.
 - [x] T5 — Establish Python command surface: ruff format/check config, pytest
       markers, `uv run pytest -q` and arch lane both green.
-- [ ] T6 — Establish frontend command surface: vitest config, strict
+- [x] T6 — Establish frontend command surface: vitest config, strict
       `tsc --noEmit` script, `npm run build`; document all three.
 - [ ] T7 — Implement the error-code + closed-enum registry (Python source of
       truth, generated JSON for the frontend) with a unit test that fails on
