@@ -85,12 +85,10 @@ Thumbs.db
 /.github/copilot-instructions.md
 /.github/workflows/lintopt.yml
 
-# Record-only bootstrap skeleton with an unconditional TODO failure. Future
-# deliberate evals remain trackable.
-/evals/project-acceptance.json
-/evals/graders/project-acceptance.sh
-/evals/fixtures/project-acceptance/
-/evals/README.md
+# Local eval-gate corpus — part of the development rig, kept out of the
+# repo wholesale by operator instruction (2026-08-31). The product's own
+# regression evals (M6) live in persisted artifacts and tests/, not here.
+/evals/
 
 # Planning inputs kept local by operator instruction — file by file, NOT the
 # whole directory: future docs (docs/adr/, diagrams, README material) remain
