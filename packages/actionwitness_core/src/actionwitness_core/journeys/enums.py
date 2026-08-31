@@ -9,6 +9,12 @@ Every enum here is **closed**: a value outside it is invalid input, not an unkno
 extension. Every member carries a description, and `tests/unit/test_registry.py`
 fails if a member is added without one.
 
+This module owns the *lifecycle* half of that vocabulary. Contract, port, evidence,
+engine, and report vocabularies live beside the code that uses them, and
+`actionwitness_core.registry` composes all of them into the single exported
+registry — so a reader looking for the assertion operators finds them in
+`contracts/`, not here.
+
 Scope boundary: this module is target-neutral, so it holds no Shopify pairing
 states and no HTTP semantics. Shopify's Tier 3 vocabulary belongs to
 `integrations.shopify`; API error codes carry status codes and live in
@@ -19,13 +25,11 @@ names, not rules.
 """
 
 from collections.abc import Mapping
-from dataclasses import dataclass
 from enum import StrEnum
 
 __all__ = [
-    "CLOSED_ENUMS",
+    "ENUM_REGISTRATIONS",
     "BenchmarkSuiteState",
-    "ClosedEnum",
     "EvalRunState",
     "EvaluationEventType",
     "EventActor",
@@ -324,43 +328,24 @@ WORKSPACE_KIND_DESCRIPTIONS: Mapping[WorkspaceKind, str] = {
 }
 
 
-@dataclass(frozen=True, slots=True)
-class ClosedEnum:
-    """One registered enum plus the provenance a reader needs to check it."""
-
-    name: str
-    spec_ref: str
-    members: Mapping[str, str]
-
-
-def _members(descriptions: Mapping[StrEnum, str]) -> dict[str, str]:
-    return {str(member.value): text for member, text in descriptions.items()}
-
-
-#: Every closed enum this project publishes, in a stable order. The registry
-#: exporter and the "no undocumented member" test both iterate this tuple, so a
-#: new enum is invisible to both until it is added here.
-CLOSED_ENUMS: tuple[ClosedEnum, ...] = (
-    ClosedEnum("run_state", "spec §16", _members(RUN_STATE_DESCRIPTIONS)),
-    ClosedEnum("eval_run_state", "spec §16.2", _members(EVAL_RUN_STATE_DESCRIPTIONS)),
-    ClosedEnum("benchmark_suite_state", "spec §16.4", _members(BENCHMARK_SUITE_STATE_DESCRIPTIONS)),
-    ClosedEnum("outcome_event_type", "spec §16.1", _members(OUTCOME_EVENT_DESCRIPTIONS)),
-    ClosedEnum("evaluation_event_type", "spec §16.3", _members(EVALUATION_EVENT_DESCRIPTIONS)),
-    ClosedEnum("event_actor", "spec §17.1", _members(EVENT_ACTOR_DESCRIPTIONS)),
-    ClosedEnum("guidance_actor", "spec §17.1 / FR-120", _members(GUIDANCE_ACTOR_DESCRIPTIONS)),
-    ClosedEnum("snapshot_phase", "spec §17.1", _members(SNAPSHOT_PHASE_DESCRIPTIONS)),
-    ClosedEnum("workspace_kind", "spec §17.1", _members(WORKSPACE_KIND_DESCRIPTIONS)),
-)
-
-#: Enum classes paired with their description maps, for coverage checking.
-REGISTERED_ENUM_CLASSES: tuple[tuple[str, type[StrEnum], Mapping[StrEnum, str]], ...] = (
-    ("run_state", RunState, RUN_STATE_DESCRIPTIONS),
-    ("eval_run_state", EvalRunState, EVAL_RUN_STATE_DESCRIPTIONS),
-    ("benchmark_suite_state", BenchmarkSuiteState, BENCHMARK_SUITE_STATE_DESCRIPTIONS),
-    ("outcome_event_type", OutcomeEventType, OUTCOME_EVENT_DESCRIPTIONS),
-    ("evaluation_event_type", EvaluationEventType, EVALUATION_EVENT_DESCRIPTIONS),
-    ("event_actor", EventActor, EVENT_ACTOR_DESCRIPTIONS),
-    ("guidance_actor", GuidanceActor, GUIDANCE_ACTOR_DESCRIPTIONS),
-    ("snapshot_phase", SnapshotPhase, SNAPSHOT_PHASE_DESCRIPTIONS),
-    ("workspace_kind", WorkspaceKind, WORKSPACE_KIND_DESCRIPTIONS),
+#: Every lifecycle enum this module publishes, paired with its spec reference and
+#: description map, in a stable order. `actionwitness_core.registry` concatenates
+#: this with the other vocabulary modules; an enum missing from here is invisible
+#: to the exporter, to the UI, and to the drift tests — which is what the
+#: registry gate catches.
+ENUM_REGISTRATIONS: tuple[tuple[str, str, type[StrEnum], Mapping[StrEnum, str]], ...] = (
+    ("run_state", "spec §16", RunState, RUN_STATE_DESCRIPTIONS),
+    ("eval_run_state", "spec §16.2", EvalRunState, EVAL_RUN_STATE_DESCRIPTIONS),
+    (
+        "benchmark_suite_state",
+        "spec §16.4",
+        BenchmarkSuiteState,
+        BENCHMARK_SUITE_STATE_DESCRIPTIONS,
+    ),
+    ("outcome_event_type", "spec §16.1", OutcomeEventType, OUTCOME_EVENT_DESCRIPTIONS),
+    ("evaluation_event_type", "spec §16.3", EvaluationEventType, EVALUATION_EVENT_DESCRIPTIONS),
+    ("event_actor", "spec §17.1", EventActor, EVENT_ACTOR_DESCRIPTIONS),
+    ("guidance_actor", "spec §17.1 / FR-120", GuidanceActor, GUIDANCE_ACTOR_DESCRIPTIONS),
+    ("snapshot_phase", "spec §17.1", SnapshotPhase, SNAPSHOT_PHASE_DESCRIPTIONS),
+    ("workspace_kind", "spec §17.1", WorkspaceKind, WORKSPACE_KIND_DESCRIPTIONS),
 )

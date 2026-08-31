@@ -19,13 +19,8 @@ import json
 from enum import StrEnum
 
 import pytest
-from actionwitness_core.journeys import enums as core_enums
-from actionwitness_core.journeys.enums import (
-    CLOSED_ENUMS,
-    REGISTERED_ENUM_CLASSES,
-    EvaluationEventType,
-    OutcomeEventType,
-)
+from actionwitness_core.journeys.enums import EvaluationEventType, OutcomeEventType
+from actionwitness_core.registry import CLOSED_ENUMS, REGISTERED_ENUM_CLASSES, REGISTRY_MODULES
 from actionwitness_service.api.errors import API_ERROR_DESCRIPTIONS, ApiErrorCode
 from actionwitness_service.api.registry_export import REGISTRY_PATH, render_registry
 from actionwitness_service.config import SERVICE_CLOSED_ENUMS
@@ -58,18 +53,32 @@ def test_every_enum_member_is_documented(
 
 
 @pytest.mark.unit
-def test_every_enum_class_in_the_core_module_is_registered() -> None:
-    """An unregistered enum is invisible to the exporter and to the UI."""
+def test_every_enum_class_in_every_registry_module_is_registered() -> None:
+    """An unregistered enum is invisible to the exporter and to the UI.
+
+    The vocabulary is split across modules so each enum sits beside the code that
+    uses it; `REGISTRY_MODULES` is the closed list of places one may live, so this
+    walks all of them rather than trusting a single file to hold everything.
+    """
     defined = {
         name
-        for name, obj in inspect.getmembers(core_enums, inspect.isclass)
-        if issubclass(obj, StrEnum) and obj is not StrEnum and obj.__module__ == core_enums.__name__
+        for module in REGISTRY_MODULES
+        for name, obj in inspect.getmembers(module, inspect.isclass)
+        if issubclass(obj, StrEnum) and obj is not StrEnum and obj.__module__ == module.__name__
     }
     registered = {enum_cls.__name__ for _, enum_cls, _ in REGISTERED_ENUM_CLASSES}
     assert defined == registered, (
         f"enum classes defined but not registered: {sorted(defined - registered)}; "
         f"registered but not defined: {sorted(registered - defined)}"
     )
+
+
+@pytest.mark.unit
+def test_registered_enum_names_are_unique() -> None:
+    """Two modules registering the same name would silently shadow one in the export."""
+    names = [name for name, _, _ in REGISTERED_ENUM_CLASSES]
+    duplicates = sorted({name for name in names if names.count(name) > 1})
+    assert duplicates == [], f"duplicate registry names: {duplicates}"
 
 
 @pytest.mark.unit

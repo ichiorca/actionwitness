@@ -26,7 +26,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from actionwitness_core.journeys.enums import CLOSED_ENUMS
+from actionwitness_core.registry import CLOSED_ENUMS
 
 from actionwitness_service.api.errors import API_ERROR_DESCRIPTIONS
 from actionwitness_service.config import SERVICE_CLOSED_ENUMS

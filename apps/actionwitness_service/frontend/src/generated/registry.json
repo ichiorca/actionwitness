@@ -125,6 +125,141 @@
         "eval": "A server-created isolated workspace for replay; its mutable state is removed after its report is persisted."
       }
     },
+    "assertion_operator": {
+      "spec_ref": "spec §9.4",
+      "members": {
+        "equals": "Final resolved value is deep-equal to the expected JSON value.",
+        "not_equals": "Final resolved value is not deep-equal to the expected JSON value.",
+        "exists": "Path is present, including when its value is null.",
+        "absent": "Path is not present; a present null value is not absent.",
+        "contains": "Expected string is a substring of an observed string, or the expected JSON value is a deep-equal member of an observed array.",
+        "unchanged": "Path resolves in both snapshots and the two values are deep-equal.",
+        "changed_by": "Final minus initial integer or decimal value equals the expected delta; decimal strings are compared as exact decimals.",
+        "count_equals": "Length of an observed object or array equals the expected non-negative integer."
+      }
+    },
+    "assertion_severity": {
+      "spec_ref": "spec §9.5 / FR-052",
+      "members": {
+        "info": "A mismatch stays visible in the report but does not change the overall result.",
+        "warning": "A mismatch yields passed_with_warnings when no critical check fails.",
+        "critical": "A mismatch fails the run."
+      }
+    },
+    "policy_type": {
+      "spec_ref": "spec §9.5",
+      "members": {
+        "requires_confirmation": "A successful protected mutation must correlate to an earlier approval; a denied, expired, or cancelled attempt with no mutation passes.",
+        "idempotent_by_request_id": "Repeating the same request ID and payload may change canonical state at most once.",
+        "maximum_mutations": "Qualifying state-changing completions may not exceed the configured limit.",
+        "forbidden_tool": "Any invocation-start event for the named tool fails the policy.",
+        "no_undeclared_changes": "No canonical state path outside the declared set may change during the run; every applied allow_paths waiver is recorded in the report.",
+        "stable_tool_surface": "The target partition of the tool surface may not change during a run except through a declared delta."
+      }
+    },
+    "execution_mode": {
+      "spec_ref": "spec §9.1",
+      "members": {
+        "managed": "The harness drives and can restore the target through its own integration, so fixtures replay through the same adapter.",
+        "external_webmcp": "The browser-owned target executes its own tools; the adapter observes them and never impersonates them through a second implementation."
+      }
+    },
+    "side_effect_class": {
+      "spec_ref": "spec §9.1 / §13.4",
+      "members": {
+        "read_only": "Declares no target-effect path; cannot change canonical state.",
+        "mutating": "May change canonical state under its declared effect paths.",
+        "protected_mutating": "May change canonical state and requires a bound human confirmation first."
+      }
+    },
+    "retry_semantics": {
+      "spec_ref": "spec §9.1 / FR-063",
+      "members": {
+        "read_only_safe": "Changes nothing, so repetition is always safe.",
+        "idempotent_by_request_id": "Repeating the same request ID with identical intent returns the first persisted result; reuse with changed intent is a conflict, not a retry.",
+        "not_retryable": "Repetition may duplicate the mutation, so an ambiguous outcome is surfaced rather than retried."
+      }
+    },
+    "evidence_source_classification": {
+      "spec_ref": "spec §9.3 / FR-044",
+      "members": {
+        "authoritative_observation": "Canonical target state captured by the selected observation provider. The only source that can settle an assertion (FR-044).",
+        "tool_reported": "A bounded summary of what a tool said about its own call. Evidence about the channel under test, never proof of its effect.",
+        "journey_events": "Recorded tool and confirmation activity. Consumed by policy evaluation and failure classification rather than resolved through an assertion path."
+      }
+    },
+    "tool_reported_status": {
+      "spec_ref": "FR-032",
+      "members": {
+        "success": "The tool reported that it did what it was asked. Independent observation decides whether that is true.",
+        "blocked_by_user": "A human denied the protected mutation; no state changed and the consent policy passes.",
+        "blocked_by_expiry": "The confirmation expired unresolved; no state changed and this is not a tool-execution failure.",
+        "already_applied": "A retry under the original request ID returned the first persisted result rather than repeating the mutation."
+      }
+    },
+    "check_type": {
+      "spec_ref": "spec §17.1 / §10.1",
+      "members": {
+        "precondition": "A precondition evaluated against the initial snapshot.",
+        "assertion": "A business assertion evaluated against the final snapshot, or across both snapshots for a transition operator.",
+        "expected_tools": "The observed-trajectory conformance check; one finding covers the whole expected_tools term.",
+        "policy": "A policy evaluated across recorded evidence; its check_id is the policy type."
+      }
+    },
+    "check_status": {
+      "spec_ref": "spec §16.1 / §17.1",
+      "members": {
+        "passed": "The check held.",
+        "failed": "The check did not hold; severity decides what that costs the run.",
+        "not_evaluated": "The contract carried no such term, so nothing was judged. Never a pass.",
+        "observation_unavailable": "Required evidence could not be supplied, so the check is unresolved. Never a pass."
+      }
+    },
+    "failure_classification": {
+      "spec_ref": "spec §22",
+      "members": {
+        "tool_execution_error": "Tool threw or returned an unexpected non-policy error; safe confirmation denial, expiry, or cancellation is excluded.",
+        "false_success_or_state_mismatch": "Tool reported success but authoritative state disagreed.",
+        "idempotency_violation": "Repeated request changed state more than once.",
+        "missing_confirmation": "Protected mutation lacked prior approval.",
+        "assertion_mismatch": "Deterministic expected value did not match.",
+        "missing_expected_tool": "A required observed tool call did not occur.",
+        "unexpected_tool": "A tool explicitly forbidden by policy appeared.",
+        "trajectory_order_violation": "Required call ordering was violated.",
+        "observation_unavailable": "Required state provider could not supply a value.",
+        "undeclared_state_change": "A canonical state path changed that no assertion, precondition, or executed tool's declared effect covered.",
+        "tool_surface_mutation": "The target tool surface changed during the run outside a declared delta.",
+        "harness_error": "The harness itself failed to complete verification."
+      }
+    },
+    "report_layer": {
+      "spec_ref": "spec §23.1 / FR-070",
+      "members": {
+        "model_tool_selection": "Whether a model chose the right tools and arguments. Only ever populated from an explicitly correlated external evaluator trial; the source outcome report finalizes it as not_evaluated.",
+        "observed_trajectory": "Whether the recorded invocation-start events conform to expected_tools. An observed-execution layer, never a model tool-selection score.",
+        "tool_execution": "Whether the tool calls themselves completed or failed.",
+        "business_outcome": "Whether authoritative state satisfied the contract's assertions.",
+        "safety_policy": "Whether consent, retry, and scope policies held."
+      }
+    },
+    "layer_result": {
+      "spec_ref": "spec §23.1",
+      "members": {
+        "passed": "Every check in this layer held.",
+        "passed_with_warnings": "No critical failure in this layer; warnings exist.",
+        "blocked_safely": "A protected action was denied, expired, or cancelled without mutation. Not a failure by itself; the contract decides whether the outcome is acceptable.",
+        "failed": "At least one critical check in this layer failed.",
+        "error": "This layer could not be evaluated because the harness failed.",
+        "not_evaluated": "Nothing in this run judged this layer. Never a pass, and never inferred from another layer's result."
+      }
+    },
+    "run_mode": {
+      "spec_ref": "spec §23.1",
+      "members": {
+        "verification": "The run judged a contract and carries a verdict.",
+        "proposal": "The run derived assertion candidates and carries no verdict."
+      }
+    },
     "module_status": {
       "spec_ref": "spec §29.1",
       "members": {
