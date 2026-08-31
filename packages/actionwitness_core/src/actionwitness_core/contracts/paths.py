@@ -23,7 +23,9 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Final
+from typing import Annotated, Final
+
+from pydantic import PlainSerializer, PlainValidator, WithJsonSchema
 
 from actionwitness_core.contracts.limits import MAX_OBSERVATION_PATH_LENGTH
 from actionwitness_core.kernel import CoreErrorCode, ErrorDetail, JsonValue, PathError
@@ -31,6 +33,7 @@ from actionwitness_core.kernel import CoreErrorCode, ErrorDetail, JsonValue, Pat
 __all__ = [
     "MISSING",
     "ObservationPath",
+    "ObservationPathField",
     "Resolution",
     "resolve",
 ]
@@ -186,3 +189,22 @@ def resolve(path: ObservationPath, context: Mapping[str, JsonValue]) -> Resoluti
         else:
             return MISSING
     return Resolution(found=True, value=current)
+
+
+def _coerce_path(value: object) -> ObservationPath:
+    return value if isinstance(value, ObservationPath) else ObservationPath.parse(value)
+
+
+#: A path as a Pydantic field: validated from the dotted text on the way in and
+#: serialized back to that exact text on the way out.
+#:
+#: Shared rather than redeclared per model. Contracts, tool specs, and policy
+#: waivers all carry paths, and a second declaration would eventually validate
+#: them by a second rule - which is how one surface starts accepting a path
+#: another rejects.
+type ObservationPathField = Annotated[
+    ObservationPath,
+    PlainValidator(_coerce_path),
+    PlainSerializer(str, return_type=str),
+    WithJsonSchema({"type": "string", "description": "Restricted dotted observation path (§10.2)"}),
+]

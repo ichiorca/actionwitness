@@ -52,7 +52,7 @@ from actionwitness_core.contracts.limits import (
     MAX_POLICIES,
     MAX_REDACTION_PATHS,
 )
-from actionwitness_core.contracts.paths import ObservationPath
+from actionwitness_core.contracts.paths import ObservationPathField
 from actionwitness_core.kernel import (
     ContractError,
     CoreErrorCode,
@@ -98,22 +98,13 @@ def _fail(message: str, *details: ErrorDetail) -> ContractError:
     )
 
 
-def _parse_path(value: object) -> ObservationPath:
-    return value if isinstance(value, ObservationPath) else ObservationPath.parse(value)
-
-
 def _parse_pattern(value: object) -> RedactionPattern:
     return value if isinstance(value, RedactionPattern) else RedactionPattern.parse(value)
 
 
-#: A restricted dotted observation path, carried as its parsed form and
-#: serialized back to the exact text §10.1 shows.
-type ContractPath = Annotated[
-    ObservationPath,
-    PlainValidator(_parse_path),
-    PlainSerializer(str, return_type=str),
-    WithJsonSchema({"type": "string", "description": "Restricted dotted observation path (§10.2)"}),
-]
+#: A restricted dotted observation path (§10.2), shared with the port models so
+#: one grammar is validated in exactly one place.
+type ContractPath = ObservationPathField
 
 #: A redaction glob (§20.3), which uses a *different* grammar from a path.
 type RedactionGlob = Annotated[
