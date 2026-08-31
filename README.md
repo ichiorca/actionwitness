@@ -74,7 +74,8 @@ These are the only commands the project supports; CI runs exactly these names
 |---|---|
 | `uv sync` | Resolve and install the `uv` workspace (all members + dev group) |
 | `uv run pytest -q` | Full Python suite — every lane under `tests/` |
-| `uv run pytest tests/architecture -q` | Architecture gates only (forbidden imports, layering) — spec §26.7 |
+| `uv run pytest tests/architecture -q` | Architecture gates only (forbidden imports, layering, core-only install) — spec §26.7 |
+| `uv run python scripts/core_only_isolation.py` | Install ONLY `actionwitness_core` in a clean venv and run its suite there (AC-19); also run by the architecture lane |
 | `uv run ruff format --check .` | Formatting gate (add `--diff` to see it; drop `--check` to apply) |
 | `uv run ruff check .` | Lint gate (`--fix` to apply safe fixes) |
 
