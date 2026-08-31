@@ -16,7 +16,7 @@ Cite the T-ID in every commit that advances it.
 - [x] T7 — Implement the error-code + closed-enum registry (Python source of
       truth, generated JSON for the frontend) with a unit test that fails on
       undocumented additions.
-- [ ] T8 — Implement feature-flag settings model; absent optional config
+- [x] T8 — Implement feature-flag settings model; absent optional config
       disables only its module; unit tests for each absence combination.
 - [ ] T9 — Add conftest fixture builders + one runnable placeholder test per
       §26 lane (no skips).

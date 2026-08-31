@@ -29,6 +29,7 @@ from typing import Any
 from actionwitness_core.journeys.enums import CLOSED_ENUMS
 
 from actionwitness_service.api.errors import API_ERROR_DESCRIPTIONS
+from actionwitness_service.config import SERVICE_CLOSED_ENUMS
 
 #: Bump when the artifact's *shape* changes, not when a member is added.
 REGISTRY_SCHEMA_VERSION = 1
@@ -62,11 +63,23 @@ def build_registry() -> dict[str, Any]:
         "//": _BANNER,
         "schema_version": REGISTRY_SCHEMA_VERSION,
         "enums": {
-            closed.name: {
-                "spec_ref": closed.spec_ref,
-                "members": dict(closed.members),
-            }
-            for closed in CLOSED_ENUMS
+            **{
+                closed.name: {
+                    "spec_ref": closed.spec_ref,
+                    "members": dict(closed.members),
+                }
+                for closed in CLOSED_ENUMS
+            },
+            # Service-owned vocabulary. `module_status` is here rather than in the
+            # core because module availability is a deployment concern, but the
+            # capability bar renders it, so it must not fork either.
+            **{
+                name: {
+                    "spec_ref": spec_ref,
+                    "members": {str(member.value): text for member, text in descriptions.items()},
+                }
+                for name, spec_ref, descriptions in SERVICE_CLOSED_ENUMS
+            },
         },
         "error_codes": {
             code.value: {

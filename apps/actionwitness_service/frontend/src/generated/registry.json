@@ -124,6 +124,14 @@
         "interactive": "An anonymous human-facing workspace.",
         "eval": "A server-created isolated workspace for replay; its mutable state is removed after its report is persisted."
       }
+    },
+    "module_status": {
+      "spec_ref": "spec §29.1",
+      "members": {
+        "enabled": "Configured and available.",
+        "disabled": "Not configured, or explicitly switched off. Not an error.",
+        "misconfigured": "Configuration was supplied but rejected. The module is off and the reason is shown as setup guidance; it never degrades into a partial enablement."
+      }
     }
   },
   "error_codes": {

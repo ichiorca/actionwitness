@@ -28,6 +28,7 @@ from actionwitness_core.journeys.enums import (
 )
 from actionwitness_service.api.errors import API_ERROR_DESCRIPTIONS, ApiErrorCode
 from actionwitness_service.api.registry_export import REGISTRY_PATH, render_registry
+from actionwitness_service.config import SERVICE_CLOSED_ENUMS
 
 # Responses that report a rejected intent. Repeating one cannot succeed, and
 # marking one retryable would invite a client to re-send a mutation.
@@ -188,8 +189,20 @@ def test_exporter_is_deterministic() -> None:
 def test_generated_registry_covers_both_halves() -> None:
     document = json.loads(REGISTRY_PATH.read_text(encoding="utf-8"))
     assert document["schema_version"] == 1
-    assert set(document["enums"]) == {closed.name for closed in CLOSED_ENUMS}
+    expected_enums = {closed.name for closed in CLOSED_ENUMS} | {
+        name for name, _, _ in SERVICE_CLOSED_ENUMS
+    }
+    assert set(document["enums"]) == expected_enums
     assert set(document["error_codes"]) == {code.value for code in ApiErrorCode}
+
+
+@pytest.mark.unit
+def test_service_owned_enums_reach_the_registry() -> None:
+    """Module availability is deployment state, but the capability bar renders it."""
+    document = json.loads(REGISTRY_PATH.read_text(encoding="utf-8"))
+    members = document["enums"]["module_status"]["members"]
+    assert set(members) == {"enabled", "disabled", "misconfigured"}
+    assert all(text.strip() for text in members.values())
 
 
 @pytest.mark.unit
