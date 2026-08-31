@@ -73,9 +73,7 @@ def test_at_least_one_decision_is_recorded() -> None:
 def test_record_is_structurally_complete(record: Path) -> None:
     text = record.read_text(encoding="utf-8")
 
-    assert RECORD_NAME.match(record.name), (
-        f"{record.name}: expected NNNN-kebab-title.md"
-    )
+    assert RECORD_NAME.match(record.name), f"{record.name}: expected NNNN-kebab-title.md"
 
     title = TITLE.search(text)
     assert title, f"{record.name}: first heading must be '# ADR-NNNN — <title>'"
@@ -125,9 +123,7 @@ def test_index_lists_every_record_and_agrees_on_status() -> None:
 
     for record in _records():
         adr_id = record.name[:4]
-        assert adr_id in index_statuses, (
-            f"{record.name} is not listed in the docket table"
-        )
+        assert adr_id in index_statuses, f"{record.name} is not listed in the docket table"
         file_status = STATUS_FIELD.search(record.read_text(encoding="utf-8"))
         assert file_status is not None
         assert index_statuses[adr_id] == file_status.group(1).strip(), (

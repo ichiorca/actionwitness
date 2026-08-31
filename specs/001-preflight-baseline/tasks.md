@@ -9,7 +9,7 @@ Cite the T-ID in every commit that advances it.
 - [x] T3 — Draft ADR-0003 (SQLite transaction/lock model) from spec §17/§32.
 - [x] T4 — Draft ADR-0004 (RFC 8785 implementation) and commit published +
       repository canonicalization vectors under `tests/` fixtures.
-- [ ] T5 — Establish Python command surface: ruff format/check config, pytest
+- [x] T5 — Establish Python command surface: ruff format/check config, pytest
       markers, `uv run pytest -q` and arch lane both green.
 - [ ] T6 — Establish frontend command surface: vitest config, strict
       `tsc --noEmit` script, `npm run build`; document all three.

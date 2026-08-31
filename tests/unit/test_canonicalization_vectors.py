@@ -25,9 +25,7 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-VECTOR_FILE = (
-    REPO_ROOT / "tests" / "fixtures" / "canonicalization" / "rfc8785_vectors.json"
-)
+VECTOR_FILE = REPO_ROOT / "tests" / "fixtures" / "canonicalization" / "rfc8785_vectors.json"
 
 SCHEMA_VERSION = 1
 NON_FINITE = {"nan": math.nan, "inf": math.inf, "-inf": -math.inf}
@@ -103,9 +101,7 @@ def test_corpus_carries_both_published_and_repository_vectors() -> None:
 @pytest.mark.unit
 def test_vector_names_are_unique() -> None:
     corpus = _corpus()
-    names = [v["name"] for v in corpus["accept"]] + [
-        v["name"] for v in corpus["reject"]
-    ]
+    names = [v["name"] for v in corpus["accept"]] + [v["name"] for v in corpus["reject"]]
     duplicates = sorted({name for name in names if names.count(name) > 1})
     assert duplicates == [], f"duplicate vector names: {duplicates}"
 
@@ -133,9 +129,7 @@ def test_expected_members_are_in_utf16_code_unit_order(vector: dict) -> None:
 @pytest.mark.parametrize("vector", _accept(), ids=lambda v: v["name"])
 def test_expected_text_has_no_insignificant_whitespace(vector: dict) -> None:
     offsets = _whitespace_outside_strings(vector["expected"])
-    assert offsets == [], (
-        f"{vector['name']}: whitespace outside strings at offsets {offsets}"
-    )
+    assert offsets == [], f"{vector['name']}: whitespace outside strings at offsets {offsets}"
 
 
 @pytest.mark.unit

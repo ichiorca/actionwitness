@@ -54,9 +54,7 @@ SPEC_PATH = "docs/actionwitness-functional-spec.md"
 
 # Matches "v1.8", "spec v1.8", "version 1.8" and friends, but not "1.80" or a
 # semantic version such as "0.1.8" that belongs to a package.
-STALE_SPEC_VERSION = re.compile(
-    r"(?<![\w.])(?:v|version\s+)1\.8(?![\w.])", re.IGNORECASE
-)
+STALE_SPEC_VERSION = re.compile(r"(?<![\w.])(?:v|version\s+)1\.8(?![\w.])", re.IGNORECASE)
 
 
 #: This module necessarily spells the superseded version out, so it excludes itself.
@@ -92,9 +90,7 @@ def test_no_source_file_cites_a_superseded_spec_version() -> None:
     stale = [
         f"{path.relative_to(REPO_ROOT).as_posix()}:{lineno}: {line.strip()}"
         for path in scanned
-        for lineno, line in enumerate(
-            path.read_text(encoding="utf-8").splitlines(), start=1
-        )
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1)
         if STALE_SPEC_VERSION.search(line)
     ]
     assert stale == [], (

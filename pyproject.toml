@@ -25,12 +25,79 @@ dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
     "httpx>=0.27",
+    # Exact pin: the formatter is a gate, and ruff's output changes between
+    # minor versions. A floating range would make `ruff format --check` pass
+    # locally and fail in CI for no reviewable reason.
+    "ruff==0.15.10",
 ]
 
+# ---------------------------------------------------------------------------
+# Test command surface (BUILD_ORDER §7/M0; spec §26)
+#   uv run pytest -q                      full suite
+#   uv run pytest tests/architecture -q   architecture gates only
+#   uv run pytest -q -m unit              one lane
+# ---------------------------------------------------------------------------
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# strict-markers: a typo'd marker is an error, not a silently unselected test.
+# strict-config: an unknown ini key is an error, not a silent default.
+# filterwarnings=error: the suite is required to be clean; a warning that is
+#   genuinely expected must be asserted with pytest.warns or ignored here with
+#   a reason, never left to scroll past.
+addopts = "--strict-markers --strict-config"
+filterwarnings = ["error"]
+# One marker per spec §26 test lane. Adding a lane means adding it here first —
+# strict-markers refuses the mark otherwise.
 markers = [
     "architecture: forbidden-import, layering, and repository-reference gates (spec §26.7)",
     "unit: engine operators, policies, hashing, canonicalization, classification (spec §26.1)",
+    "integration: run lifecycle, snapshots, confirmation, replay through the app (spec §26.2)",
+    "adapters: managed/external adapter protocol conformance incl. the non-commerce fake (spec §26.7)",
+    "contracts: outcome-contract parsing, validation, and limits (spec §26.1)",
+    "evals: regression-case generation, replay, and CLI exit codes (spec §26.2)",
+    "benchmarks: external-evaluator import, binding, matrix and metrics (spec §26.5)",
+    "guidance: human-agent collaboration guidance states (spec §12.13)",
+    "shopify: Tier 3 Shopify adapter and bridge tests (spec §26.6)",
+    "browser: manual smoke checklists — never automated in CI (spec §26.4, §7.5)",
 ]
+
+# ---------------------------------------------------------------------------
+# Format and lint command surface. Ruff only: BUILD_ORDER §7/M0 forbids adding a
+# large framework solely for linting, and one tool covering both keeps the gate
+# to two commands.
+#   uv run ruff format --check .   formatting gate (drop --check to apply)
+#   uv run ruff check .            lint gate (--fix to apply safe fixes)
+# ---------------------------------------------------------------------------
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+extend-exclude = [".venv", "node_modules", "shopify_bridge"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "W",    # pycodestyle warnings
+    "I",    # import sorting
+    "UP",   # pyupgrade — keep 3.12 idioms (X | None, builtin generics)
+    "B",    # bugbear — mutable defaults, shadowed loop vars, silent except
+    "SIM",  # simplify
+    "C4",   # comprehensions
+    "RUF",  # ruff-specific
+]
+ignore = [
+    # Ambiguous-unicode rules. This project's prose deliberately uses en/em
+    # dashes and § section marks in docstrings and comments; flagging them as
+    # homoglyph risks is noise here, and silencing per-line would be worse.
+    "RUF001",
+    "RUF002",
+    "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests assert on private-ish structure and use fixture-shadowing names by design.
+"tests/**" = ["B011"]
+
+[tool.ruff.format]
+docstring-code-format = true

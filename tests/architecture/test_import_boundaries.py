@@ -21,15 +21,27 @@ FORBIDDEN_FOR_CORE = {
     # application / composition layer
     "actionwitness_service",
     # integrations and demo/commerce modules
-    "integrations", "buggy_store", "shopify", "shopify_bridge",
+    "integrations",
+    "buggy_store",
+    "shopify",
+    "shopify_bridge",
     # evaluator vendors
-    "google_evals", "webmcp_evals",
+    "google_evals",
+    "webmcp_evals",
     # web framework / server / persistence drivers (application concerns)
-    "fastapi", "starlette", "uvicorn", "aiosqlite", "sqlite3", "httpx", "requests",
+    "fastapi",
+    "starlette",
+    "uvicorn",
+    "aiosqlite",
+    "sqlite3",
+    "httpx",
+    "requests",
 }
 
 FORBIDDEN_FOR_STORE = {
-    "actionwitness_core", "actionwitness_service", "integrations",
+    "actionwitness_core",
+    "actionwitness_service",
+    "integrations",
 }
 
 
