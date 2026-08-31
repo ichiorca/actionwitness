@@ -1,0 +1,38 @@
+# Normalise to LF in the repository. Windows checkouts still get CRLF for the
+# text formats where it is harmless. This file exists because core.autocrlf is
+# set machine-wide by the Git for Windows installer, so without explicit rules
+# the line endings a file gets depend on who checked it out.
+* text=auto
+
+# --- MUST stay LF, always -----------------------------------------------------
+# The service and its container run on Linux. A CRLF shebang fails there with
+# "bad interpreter: /usr/bin/env bash^M", and CRLF in Python source breaks
+# nothing at import time but corrupts any byte-level comparison over it.
+*.py            text eol=lf
+*.sh            text eol=lf
+*.bash          text eol=lf
+Dockerfile      text eol=lf
+*.Dockerfile    text eol=lf
+*.yaml          text eol=lf
+*.yml           text eol=lf
+.env.example    text eol=lf
+
+# Evidence integrity (constitution §4): evidence records are canonically
+# serialized and hash-linked, and fixtures are replayed byte-for-byte. A
+# line-ending rewrite changes the bytes and silently breaks chain verification
+# and every regression case restored from these files.
+*.json                       text eol=lf
+integrations/*/fixtures/**   text eol=lf
+evals/fixtures/**            text eol=lf
+
+# --- Binary: never touch ------------------------------------------------------
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.pdf    binary
+*.ico    binary
+*.woff   binary
+*.woff2  binary
+*.ttf    binary
+*.mp4    binary

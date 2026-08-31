@@ -1,0 +1,117 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+dist/
+build/
+.pytest_cache/
+.coverage
+
+# Node / frontend
+node_modules/
+*.local
+.vite/
+
+# Eval and report artifacts
+.evals/
+
+# Local environment and secrets — never commit credentials (FR-099, §29.1)
+.env
+*.sqlite3
+*.db
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# Editors
+.idea/
+.vscode/
+
+# ============================================================================
+# Local development tooling — machine-local rig, not part of the deliverable
+# ============================================================================
+
+# Runtime state, audit logs, grants, effective config, local policy engine.
+/.cavesson/
+/.gateweave/
+
+# Mixed durable inputs and derived/unredacted output. Keep the irreproducible
+# baselines/config/evals/policy; ignore everything else. Note the `/*` form:
+# git cannot re-include a path inside an excluded DIRECTORY, so a bare
+# `/.tracing2eval/` would make every negation below silently do nothing.
+/.tracing2eval/*
+!/.tracing2eval/baselines/
+!/.tracing2eval/agent-config.yaml
+!/.tracing2eval/evals/
+!/.tracing2eval/gate-policy.yaml
+!/.tracing2eval/README.md
+
+# Root tooling manifest, depth config, lockfile, and the enabled adapter
+# implementation. Anchored to the repo root on purpose: a bare `adapters/`
+# would match at any depth and swallow product code.
+/cavesson.json
+/levels.json
+/cavesson.lock
+/adapters/
+
+# Hook IR/scripts and every materialized editor/CLI projection. After a clean
+# rebuild these local copies are the ONLY ones; back them up outside Git before
+# deleting them.
+/hooks/
+/scripts/cavesson-*.sh
+/.codex/
+/.agents/
+/.claude/
+/.gemini/
+/.opencode/
+/.antigravity/
+
+# Vendor-neutral IR the adapters compile from: reviewer system prompts, agent
+# and skill fragments, slash-command sources, bundled skill scripts. Machine-
+# local, exactly like the projections they compile into. Anchored to the repo
+# root: a bare `agents/` or `skills/` would match at any depth and could swallow
+# product code later.
+/agents/
+/commands/
+/prompts/
+/skills/
+
+# Generated tool configuration and duplicate instruction/CI surfaces.
+/.lintopt.yml
+/policy/gateweave.yaml
+/tracing2eval/
+/.github/copilot-instructions.md
+/.github/workflows/lintopt.yml
+
+# Record-only bootstrap skeleton with an unconditional TODO failure. Future
+# deliberate evals remain trackable.
+/evals/project-acceptance.json
+/evals/graders/project-acceptance.sh
+/evals/fixtures/project-acceptance/
+/evals/README.md
+
+# Planning inputs kept local by operator instruction — file by file, NOT the
+# whole directory: future docs (docs/adr/, diagrams, README material) remain
+# trackable.
+/docs/BUILD_ORDER.md
+/docs/actionwitness-feature-recommendations.md
+/docs/actionwitness-functional-spec.md
+/docs/actionwitness-spec-v2.0-review.md
+/docs/actionwitness-top3-features-round2.md
+
+# Operator-gated spec drafts awaiting rename to spec.md; the runway README
+# and approved specs are tracked.
+/specs/*/spec.md.draft
+
+# Session handoffs, bootstrap working files, and atomic-write sentinels.
+/progress/
+/bootstrap*.log
+/specify*.log
+/resume-bootstrap.ps1
+/run-specify.ps1
+*.*.lock
+
+# Intentionally trackable: AGENTS.md, CLAUDE.md, GEMINI.md, memory/, future
+# specs/, deliberate evals/, and all product documentation and source code.

@@ -1,0 +1,24 @@
+# Buggy Store — independently runnable deterministic demo target (spec §18, LD-6/14).
+# NORMATIVE: builds and runs with actionwitness_core ABSENT (§26.7). It intentionally
+# depends on nothing from the assurance stack; tests/architecture enforces this.
+[project]
+name = "buggy-store"
+version = "0.1.0"
+description = "Deterministic commerce demo application with injectable failure profiles"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "pydantic>=2.9",
+]
+
+[project.scripts]
+buggy-store = "buggy_store.api:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/buggy_store"]

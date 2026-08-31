@@ -1,0 +1,20 @@
+# integrations.shopify — Tier 3 priority 2 (spec §12.12, §13.5).
+# One exact authorized development-store origin; independent same-session
+# GET /cart.js observations; no Admin credential, checkout, order, or payment.
+[project]
+name = "actionwitness-integration-shopify"
+version = "0.1.0"
+description = "ExternalTargetAdapter + shopify_cart_state ObservationProvider (dev store only)"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+dependencies = ["actionwitness-core"]
+
+[tool.uv.sources]
+actionwitness-core = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/integrations"]

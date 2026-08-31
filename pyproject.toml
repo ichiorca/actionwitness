@@ -1,0 +1,32 @@
+# Workspace root — virtual project only; installable code lives in member packages.
+# Normative layout: functional spec v1.8 §18. Dependency directions are normative:
+# actionwitness_core imports no app, integration, demo, evaluator-vendor, or commerce code (LD-7, §26.7).
+[project]
+name = "actionwitness-workspace"
+version = "0.1.0"
+description = "Workspace root for the ActionWitness (working title)"
+requires-python = ">=3.12"
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = [
+    "packages/actionwitness_core",
+    "apps/actionwitness_service",
+    "integrations/buggy_store",
+    "integrations/google_evals",
+    "integrations/shopify",
+    "examples/buggy_store",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "httpx>=0.27",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

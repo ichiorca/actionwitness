@@ -1,0 +1,19 @@
+# Render deployment — one web service, Docker runtime (spec §29.1).
+# Use an always-on paid instance (or verified no-sleep tier) from final video recording
+# through September 21; do not depend on a free-tier cold start during judging.
+services:
+  - type: web
+    name: actionwitness
+    runtime: docker
+    plan: starter
+    healthCheckPath: /healthz
+    envVars:
+      - key: HARNESS_PUBLIC_ORIGIN
+        sync: false
+      # Tier 3 Shopify module (optional; absent values disable only that module):
+      - key: SHOPIFY_STORE_ORIGIN
+        sync: false
+      - key: SHOPIFY_TEST_VARIANT_ID
+        sync: false
+      - key: SHOPIFY_EXPECTED_CURRENCY
+        sync: false

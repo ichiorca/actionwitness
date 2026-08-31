@@ -1,0 +1,7 @@
+{
+  "name": "buggy-store-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Ordinary standalone human UI for the Buggy Store demo (spec §18); built independently of the harness frontend (§29.1). Scaffold placeholder — tooling added in Tier 1."
+}
