@@ -89,6 +89,12 @@ source = { virtual = "." }
 
 [package.dev-dependencies]
 dev = [
+    { name = "actionwitness-core" },
+    { name = "actionwitness-integration-buggy-store" },
+    { name = "actionwitness-integration-google-evals" },
+    { name = "actionwitness-integration-shopify" },
+    { name = "actionwitness-service" },
+    { name = "buggy-store" },
     { name = "httpx" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -99,6 +105,12 @@ dev = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "actionwitness-core", editable = "packages/actionwitness_core" },
+    { name = "actionwitness-integration-buggy-store", editable = "integrations/buggy_store" },
+    { name = "actionwitness-integration-google-evals", editable = "integrations/google_evals" },
+    { name = "actionwitness-integration-shopify", editable = "integrations/shopify" },
+    { name = "actionwitness-service", editable = "apps/actionwitness_service" },
+    { name = "buggy-store", editable = "examples/buggy_store" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "pytest", specifier = ">=8.3" },
     { name = "pytest-asyncio", specifier = ">=0.24" },

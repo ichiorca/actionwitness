@@ -78,6 +78,17 @@ These are the only commands the project supports; CI runs exactly these names
 | `uv run ruff format --check .` | Formatting gate (add `--diff` to see it; drop `--check` to apply) |
 | `uv run ruff check .` | Lint gate (`--fix` to apply safe fixes) |
 
+One generator is part of the surface:
+
+| Command | Purpose |
+|---|---|
+| `uv run python -m actionwitness_service.api.registry_export` | Regenerate the shared name registry the frontend imports |
+
+The registry (`apps/actionwitness_service/frontend/src/generated/registry.json`)
+is the single source of stable API error codes and closed state/event enums, so
+handlers, UI, and tests cannot fork names. It is committed; `uv run pytest -q`
+fails if it drifts from its Python source.
+
 `pytest` markers select a lane inside the full run, e.g. `uv run pytest -q -m architecture`.
 Registered markers: `architecture`, `unit`, `integration`, `adapters`, `contracts`,
 `evals`, `benchmarks`, `guidance`, `shopify`, `browser`.

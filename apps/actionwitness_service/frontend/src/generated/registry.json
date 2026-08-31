@@ -1,0 +1,278 @@
+{
+  "//": "GENERATED FILE — do not edit by hand. Regenerate with: uv run python -m actionwitness_service.api.registry_export",
+  "schema_version": 1,
+  "enums": {
+    "run_state": {
+      "spec_ref": "spec §16",
+      "members": {
+        "armed": "Verification run created and initial snapshot captured.",
+        "proposing": "Proposal-mode run created and initial snapshot captured; no contract is being judged.",
+        "capturing": "Proposal closed; final snapshot taken and candidates being derived.",
+        "proposed": "Candidate list committed; terminal, and carries no verdict.",
+        "running": "Tool events being recorded.",
+        "awaiting_confirmation": "Sensitive tool is paused pending a human decision.",
+        "verifying": "Final snapshot and evaluation in progress.",
+        "passed": "All critical checks passed.",
+        "passed_with_warnings": "No critical failure; warnings exist.",
+        "failed": "One or more critical checks failed.",
+        "error": "Harness could not complete the run.",
+        "cancelled": "User reset or cancelled before verification completed."
+      }
+    },
+    "eval_run_state": {
+      "spec_ref": "spec §16.2",
+      "members": {
+        "queued": "Eval run accepted.",
+        "running": "Fixture restored and trajectory replaying.",
+        "passed": "Actual outcome matches the selected mode's expectation.",
+        "failed": "Valid execution completed but actual outcome differs from the selected mode's expectation.",
+        "cancelled": "User or workspace cancelled replay.",
+        "error": "Case or harness execution was invalid."
+      }
+    },
+    "benchmark_suite_state": {
+      "spec_ref": "spec §16.4",
+      "members": {
+        "draft": "Manifest created; imports or bindings incomplete.",
+        "ready": "All intended imports and bindings validate.",
+        "running": "Imported trajectories are replaying.",
+        "completed": "Immutable benchmark artifact finalized.",
+        "cancelled": "Workspace reset or user cancelled nonterminal work.",
+        "error": "Import, replay, or finalization could not complete safely."
+      }
+    },
+    "outcome_event_type": {
+      "spec_ref": "spec §16.1",
+      "members": {
+        "run_armed": "Run created with its immutable configuration copied in.",
+        "guidance_transitioned": "Guidance moved to a new actor or action, referencing the guidance-event ID.",
+        "snapshot_captured": "An authoritative observation was recorded.",
+        "external_observation_received": "An external target's session-API observation was accepted as evidence.",
+        "tool_invocation_started": "A target tool invocation was accepted and begun.",
+        "tool_invocation_completed": "A target tool invocation returned; carries the self-reported status, which is evidence and never proof.",
+        "tool_invocation_failed": "A target tool invocation returned an error.",
+        "tool_invocation_cancelled": "A target tool invocation was aborted before its commit won the race.",
+        "confirmation_requested": "A protected mutation created a pending human confirmation.",
+        "confirmation_approved": "A human approved a protected mutation once.",
+        "confirmation_denied": "A human denied a protected mutation.",
+        "confirmation_expired": "A pending confirmation passed its expiry unresolved.",
+        "confirmation_cancelled": "A pending confirmation was cancelled by reset or invocation abort.",
+        "verification_started": "The run transitioned atomically into verification.",
+        "assertion_evaluated": "One contract assertion produced a result.",
+        "policy_evaluated": "One contract policy produced a result.",
+        "verification_completed": "Terminal verification event; seals the run timeline and report.",
+        "run_cancelled": "The run was cancelled before verification completed.",
+        "resource_limit_exceeded": "A hard ceiling was reached; recorded as a boundary event rather than dropping evidence silently.",
+        "tool_surface_captured": "The armed tool-surface baseline was recorded; idempotent by (run_id, surface_content_hash).",
+        "tool_surface_changed": "An observed tool-surface delta was recorded.",
+        "assertions_proposed": "Terminal proposal event; seals a proposal run's timeline and carries no verdict.",
+        "annotation_added": "A human annotated one event; never affects verdict, assertions, or eligibility.",
+        "tool_identity_mismatch": "A pre-invocation tool-identity check failed. Distinct from tool_surface_changed because it must be recordable when no toolchange was observed at all.",
+        "audit_authorization_asserted": "An operator asserted authorization for an external audited origin."
+      }
+    },
+    "evaluation_event_type": {
+      "spec_ref": "spec §16.3",
+      "members": {
+        "snapshot_captured": "An authoritative observation was recorded in replay.",
+        "tool_invocation_started": "A replayed tool invocation was begun.",
+        "tool_invocation_completed": "A replayed tool invocation returned.",
+        "tool_invocation_failed": "A replayed tool invocation returned an error.",
+        "tool_invocation_cancelled": "A replayed tool invocation was aborted.",
+        "confirmation_requested": "Replay reached a protected mutation requiring consent.",
+        "confirmation_approved": "The recorded-approval interaction provider approved; never inferred consent.",
+        "confirmation_denied": "The recorded-denial interaction provider denied.",
+        "confirmation_expired": "A replayed confirmation expired unresolved.",
+        "confirmation_cancelled": "A replayed confirmation was cancelled.",
+        "assertion_evaluated": "One contract assertion produced a replay result.",
+        "policy_evaluated": "One contract policy produced a replay result.",
+        "resource_limit_exceeded": "A hard ceiling was reached during replay.",
+        "eval_replay_started": "Fixture restored and replay begun.",
+        "eval_replay_completed": "Replay finished and its report was persisted.",
+        "eval_replay_cancelled": "Replay was cancelled by user or workspace reset.",
+        "eval_replay_failed": "The case definition or harness execution was invalid."
+      }
+    },
+    "event_actor": {
+      "spec_ref": "spec §17.1",
+      "members": {
+        "agent": "A browser agent acting through a registered tool.",
+        "human": "A person; used for confirmation decisions and timeline annotations.",
+        "harness": "The server itself, for lifecycle and boundary events.",
+        "external": "Used only for accepted external observations."
+      }
+    },
+    "guidance_actor": {
+      "spec_ref": "spec §17.1 / FR-120",
+      "members": {
+        "operator": "The person configuring the workspace and selecting a contract.",
+        "agent": "The browser agent exercising target tools.",
+        "human_approver": "The person deciding a protected mutation. Reserved to a human by design; an agent can never occupy this role.",
+        "system": "The server, while work proceeds without either person."
+      }
+    },
+    "snapshot_phase": {
+      "spec_ref": "spec §17.1",
+      "members": {
+        "before": "The authoritative initial observation captured at arming.",
+        "after": "The authoritative final observation captured at verification."
+      }
+    },
+    "workspace_kind": {
+      "spec_ref": "spec §17.1",
+      "members": {
+        "interactive": "An anonymous human-facing workspace.",
+        "eval": "A server-created isolated workspace for replay; its mutable state is removed after its report is persisted."
+      }
+    }
+  },
+  "error_codes": {
+    "AUDIT_NOT_AUTHORIZED": {
+      "http_status": 403,
+      "retryable": false,
+      "description": "The audited origin is not both operator-asserted and present in the deployment allowlist. A workspace cannot authorize an origin the deployment did not configure.",
+      "spec_ref": "§15.8",
+      "provenance": "spec"
+    },
+    "CANDIDATES_UNCURATED": {
+      "http_status": 409,
+      "retryable": false,
+      "description": "A contract cannot be frozen while a machine-proposed candidate is uncurated; a human curates every proposed term.",
+      "spec_ref": "§15.8",
+      "provenance": "spec"
+    },
+    "CONFIRMATION_DENIED": {
+      "http_status": 403,
+      "retryable": false,
+      "description": "A human denied the protected mutation. No mutation occurred, and the confirmation policy outcome is a success.",
+      "spec_ref": "FR-064",
+      "provenance": "spec"
+    },
+    "CONFIRMATION_EXPIRED": {
+      "http_status": 409,
+      "retryable": false,
+      "description": "The confirmation expired unresolved. Creates no tool-execution failure classification and never converts into an approval.",
+      "spec_ref": "FR-065",
+      "provenance": "spec"
+    },
+    "CONTRACT_NOT_PUBLISHABLE": {
+      "http_status": 409,
+      "retryable": false,
+      "description": "The contract holds non-publishable terms and will not be partially disclosed.",
+      "spec_ref": "§15.8",
+      "provenance": "spec"
+    },
+    "CONTRACT_VALIDATION_FAILED": {
+      "http_status": 422,
+      "retryable": false,
+      "description": "The outcome contract is invalid. `details` names the offending paths; resubmitting the same document cannot succeed.",
+      "spec_ref": "§15.8",
+      "provenance": "spec"
+    },
+    "EVENT_LIMIT_EXCEEDED": {
+      "http_status": 409,
+      "retryable": false,
+      "description": "The run reached its persisted-event ceiling. Recorded as a terminal boundary event; existing evidence is preserved.",
+      "spec_ref": "FR-008",
+      "provenance": "spec"
+    },
+    "EXTERNAL_TARGET_FORBIDDEN_OPERATION": {
+      "http_status": 400,
+      "retryable": false,
+      "description": "An external contract named an operation the safe scope forbids.",
+      "spec_ref": "§15.8",
+      "provenance": "spec"
+    },
+    "IDEMPOTENCY_KEY_REUSED": {
+      "http_status": 409,
+      "retryable": false,
+      "description": "A request ID was reused with a different payload. Fails closed: a key identifies one intent, and retrying under a new key could duplicate the mutation.",
+      "spec_ref": "Appendix D.2",
+      "provenance": "spec"
+    },
+    "PRECONDITION_FAILED": {
+      "http_status": 409,
+      "retryable": false,
+      "description": "Arming validated preconditions against the observed initial state and they did not hold. Neither a run nor a partial snapshot is created.",
+      "spec_ref": "FR-030",
+      "provenance": "spec"
+    },
+    "PROPOSAL_RUN_NOT_ELIGIBLE": {
+      "http_status": 409,
+      "retryable": false,
+      "description": "A proposal-mode run cannot generate a regression eval case.",
+      "spec_ref": "§15.8",
+      "provenance": "spec"
+    },
+    "PROPOSAL_RUN_NOT_VERIFIABLE": {
+      "http_status": 409,
+      "retryable": false,
+      "description": "A proposal-mode run judges no contract and carries no verdict.",
+      "spec_ref": "§15.8",
+      "provenance": "spec"
+    },
+    "RUN_ALREADY_VERIFYING": {
+      "http_status": 409,
+      "retryable": false,
+      "description": "Verification already won the race, so a new target action is rejected. Creates no finding and no tool_execution_error: losing this race is correct behavior, not a defect in the call.",
+      "spec_ref": "FR-038",
+      "provenance": "spec"
+    },
+    "RUN_IN_PROGRESS": {
+      "http_status": 409,
+      "retryable": false,
+      "description": "The operation requires no active run, and one is nonterminal.",
+      "spec_ref": "§15.8",
+      "provenance": "spec"
+    },
+    "RUN_MUTATION_LOCKED": {
+      "http_status": 409,
+      "retryable": false,
+      "description": "A direct human target mutation was rejected because a run holds the exclusive lease. Reads, reset, and confirmation decisions remain available.",
+      "spec_ref": "FR-039",
+      "provenance": "spec"
+    },
+    "RUN_TIMELINE_SEALED": {
+      "http_status": 409,
+      "retryable": false,
+      "description": "The run's sealing event has been appended; its timeline is immutable.",
+      "spec_ref": "§15.8",
+      "provenance": "spec"
+    },
+    "SELF_OBSERVATION_LOOP": {
+      "http_status": 409,
+      "retryable": false,
+      "description": "A self-witnessing run would observe its own recording workspace, or exceed the recursion cap of one.",
+      "spec_ref": "§15.8",
+      "provenance": "spec"
+    },
+    "SURFACE_BASELINE_ALREADY_SET": {
+      "http_status": 409,
+      "retryable": false,
+      "description": "A differing tool-surface baseline was submitted for a run that already has one. Identical resubmissions are idempotent and do not reach this.",
+      "spec_ref": "§15.8",
+      "provenance": "spec"
+    },
+    "TARGET_UNAVAILABLE": {
+      "http_status": 409,
+      "retryable": false,
+      "description": "The selected contract's target adapter is not registered or its module is disabled. A missing optional target is a bounded unavailable state, never a process failure.",
+      "spec_ref": "FR-021",
+      "provenance": "spec"
+    },
+    "WORKSPACE_LIMIT_EXCEEDED": {
+      "http_status": 409,
+      "retryable": false,
+      "description": "A workspace resource cap was reached. The response names a purge action; no partial mutation is committed.",
+      "spec_ref": "FR-008",
+      "provenance": "spec"
+    },
+    "WORKSPACE_LOCK_TIMEOUT": {
+      "http_status": 503,
+      "retryable": true,
+      "description": "The per-workspace mutation lock or the SQLite busy timeout elapsed. Safe to retry under the original idempotency key because the transaction never began.",
+      "spec_ref": "§17 / ADR-0003",
+      "provenance": "project"
+    }
+  }
+}

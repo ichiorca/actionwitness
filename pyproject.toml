@@ -10,6 +10,14 @@ requires-python = ">=3.12"
 [tool.uv]
 package = false
 
+[tool.uv.sources]
+actionwitness-core = { workspace = true }
+actionwitness-service = { workspace = true }
+actionwitness-integration-buggy-store = { workspace = true }
+actionwitness-integration-google-evals = { workspace = true }
+actionwitness-integration-shopify = { workspace = true }
+buggy-store = { workspace = true }
+
 [tool.uv.workspace]
 members = [
     "packages/actionwitness_core",
@@ -21,7 +29,18 @@ members = [
 ]
 
 [dependency-groups]
+# Every workspace member is a dev dependency of the virtual root so a single
+# `uv sync` gives the test suite something to import. This is a development-time
+# edge only: it creates no dependency between the members themselves, and the
+# §26.7 gate that `actionwitness_core` installs with every other package absent
+# is unaffected — it is proved by a separate isolated install, not by this venv.
 dev = [
+    "actionwitness-core",
+    "actionwitness-service",
+    "actionwitness-integration-buggy-store",
+    "actionwitness-integration-google-evals",
+    "actionwitness-integration-shopify",
+    "buggy-store",
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
     "httpx>=0.27",
