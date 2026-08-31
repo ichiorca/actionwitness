@@ -1,5 +1,5 @@
 # Workspace root — virtual project only; installable code lives in member packages.
-# Normative layout: functional spec v1.8 §18. Dependency directions are normative:
+# Normative layout: functional spec v1.9 §18. Dependency directions are normative:
 # actionwitness_core imports no app, integration, demo, evaluator-vendor, or commerce code (LD-7, §26.7).
 [project]
 name = "actionwitness-workspace"
@@ -30,3 +30,6 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "architecture: forbidden-import, layering, and repository-reference gates (spec §26.7)",
+]

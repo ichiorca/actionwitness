@@ -9,8 +9,14 @@ and turns every silent failure into a portable regression test.
 Built for the [WebMCP Challenge](https://webmcp.devpost.com/) (submission Sep 3, 2026, 1:00 PM PDT).
 
 **Status: scaffold.** Structure, boundaries, and tooling are in place; no product
-behavior is implemented yet. Source of truth: `actionwitness-functional-spec.md`
-(kept beside this repository). Build order and kill-switch dates: `docs/BUILD_ORDER.md`.
+behavior is implemented yet.
+
+**Normative sources.** The functional specification is `docs/actionwitness-functional-spec.md`,
+version 1.9; the implementation plan and milestone gates are `docs/BUILD_ORDER.md`.
+Both live at those paths in a working tree but are deliberately untracked (see
+`.gitignore`) — they are planning inputs held locally by the operator, not published
+deliverables. Every in-repo `spec §N` citation refers to v1.9 of that file. The
+per-milestone contracts derived from it are tracked under `specs/`.
 
 ## Why a witness
 
@@ -56,6 +62,41 @@ Two distinctions worth stating up front (spec §2.2):
     cd apps/actionwitness_service/frontend && npm install && npm run dev
 
 60-second judge test: **TODO before submission** (spec §29.2).
+
+## Command surface
+
+These are the only commands the project supports; CI runs exactly these names
+(BUILD_ORDER §7/M0, spec §26). No linting framework beyond `ruff` is used.
+
+### Python — from the repository root
+
+| Command | Purpose |
+|---|---|
+| `uv sync` | Resolve and install the `uv` workspace (all members + dev group) |
+| `uv run pytest -q` | Full Python suite — every lane under `tests/` |
+| `uv run pytest tests/architecture -q` | Architecture gates only (forbidden imports, layering) — spec §26.7 |
+| `uv run ruff format --check .` | Formatting gate (add `--diff` to see it; drop `--check` to apply) |
+| `uv run ruff check .` | Lint gate (`--fix` to apply safe fixes) |
+
+`pytest` markers select a lane inside the full run, e.g. `uv run pytest -q -m architecture`.
+Registered markers: `architecture`, `unit`, `integration`, `adapters`, `contracts`,
+`evals`, `benchmarks`, `guidance`, `shopify`, `browser`.
+
+### Frontend — from `apps/actionwitness_service/frontend`
+
+| Command | Purpose |
+|---|---|
+| `npm ci` | Install from the committed lockfile |
+| `npm run typecheck` | **Strict `tsc --noEmit`.** A Vite build is bundling only and is *not* type-check coverage |
+| `npm test` | Vitest (jsdom) — lifecycle-adapter compatibility cases |
+| `npm run build` | Vite production bundle |
+
+> **`npm ci` is not runnable yet.** The frontend lockfile is committed only after
+> the ADR-0002 WebMCP hook spike pins exactly one package (`docs/adr/0002-webmcp-lifecycle-package.md`).
+> Until then use `npm install` locally and expect the pin to change the tree.
+
+`examples/buggy_store/frontend` builds independently and gains the same four
+commands when its Tier 1 UI lands (spec §29.1).
 
 ## Version pinning (spec §29.3) — fill during the §25.1 spike
 

@@ -1,4 +1,4 @@
-"""Architecture gates (spec v1.8 §26.7, LD-6/7/8) — enforced from day one.
+"""Architecture gates (spec v1.9 §26.7, LD-6/7/8) — enforced from day one.
 
 These tests parse source files with `ast`; they need no dependencies installed
 and must stay green for every commit:

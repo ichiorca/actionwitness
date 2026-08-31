@@ -1,4 +1,4 @@
-# Test layout (spec v1.8 §18, §26)
+# Test layout (spec v1.9 §18, §26)
 
 | Directory | Scope | Spec |
 |---|---|---|

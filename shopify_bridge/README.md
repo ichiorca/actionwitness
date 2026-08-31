@@ -1,7 +1,7 @@
 # shopify_bridge (Tier 3 priority 2 — scaffold placeholder)
 
 Minimal theme bridge for the authorized Shopify development store
-(spec v1.8 §12.12, FR-111/112/115, Appendix D.3). Planned contents per §18:
+(spec v1.9 §12.12, FR-111/112/115, Appendix D.3). Planned contents per §18:
 
 - `package.json` — build tooling for the bridge script
 - `src/bridge.ts` — pairing redemption (URL-fragment credential, removed

@@ -8,7 +8,7 @@ export default function App() {
   return (
     <main>
       <h1>ActionWitness</h1>
-      <p>Scaffold only — Tier 1 workspace UI not implemented yet (spec v1.8 §8.4).</p>
+      <p>Scaffold only — Tier 1 workspace UI not implemented yet (spec v1.9 §8.4).</p>
     </main>
   );
 }

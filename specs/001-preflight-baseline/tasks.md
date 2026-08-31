@@ -2,7 +2,7 @@
 
 Cite the T-ID in every commit that advances it.
 
-- [ ] T1 — Sweep v1.8 → v1.9 references; README names the spec's real path
+- [x] T1 — Sweep v1.8 → v1.9 references; README names the spec's real path
       and the full command surface.
 - [ ] T2 — Add `docs/adr/` with template + index; draft ADR-0001 (adapter
       transport) from spec §32 locked decisions.

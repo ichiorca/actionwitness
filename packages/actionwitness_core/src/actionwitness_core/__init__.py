@@ -1,6 +1,6 @@
 """actionwitness_core — target-neutral outcome-assurance library.
 
-Spec: actionwitness-functional-spec.md v1.8, §18 (structure), LD-2/LD-7
+Spec: actionwitness-functional-spec.md v1.9, §18 (structure), LD-2/LD-7
 (framework-neutral, no app/demo/integration/evaluator-vendor/commerce imports).
 
 Subpackages (all currently scaffolding — no behavior implemented yet):

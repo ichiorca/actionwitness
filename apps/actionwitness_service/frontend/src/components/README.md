@@ -1,4 +1,4 @@
-# Required Tier 1+ components (spec v1.8 §18, §8.4)
+# Required Tier 1+ components (spec v1.9 §18, §8.4)
 
 To be created as their tier begins — no placeholders committed for UI:
 

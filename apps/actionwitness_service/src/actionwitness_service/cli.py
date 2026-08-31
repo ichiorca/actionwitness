@@ -1,4 +1,4 @@
-"""`actionwitness` CLI (spec v1.8 §24.6, exit-code contract FR-088).
+"""`actionwitness` CLI (spec v1.9 §24.6, exit-code contract FR-088).
 
 Exit codes: 0 = expectation met; 1 = valid run, expectation not met;
 2 = invalid eval definition or harness execution.

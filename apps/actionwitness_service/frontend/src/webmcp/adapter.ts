@@ -1,6 +1,6 @@
 /**
  * Local WebMCP lifecycle adapter — the ONLY module application code may import
- * for tool registration (spec v1.8 §25.1, §19.1).
+ * for tool registration (spec v1.9 §25.1, §19.1).
  *
  * Contract to implement after the §25.1 hook spike selects exactly one package:
  *  - unsupported environment: every call is a safe no-op (`document.modelContext` absent);

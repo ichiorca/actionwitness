@@ -1,6 +1,6 @@
 """actionwitness_core.ports — the public protocols a target or application implements.
 
-These are the extension surface promised by spec v1.8 §29.2 ("documented
+These are the extension surface promised by spec v1.9 §29.2 ("documented
 ManagedTargetAdapter/ExternalTargetAdapter/ObservationProvider protocol") and the
 one-way boundary enforced by §26.7 / LD-7-8: the core talks ONLY to these
 protocols; it never imports an integration, demo, or commerce module.

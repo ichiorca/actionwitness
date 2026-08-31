@@ -1,1 +1,1 @@
-"""FastAPI application package (spec v1.8 §15 API surface)."""
+"""FastAPI application package (spec v1.9 §15 API surface)."""

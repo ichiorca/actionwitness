@@ -1,4 +1,4 @@
-# actionwitness_service — application/composition layer (spec v1.8 §18).
+# actionwitness_service — application/composition layer (spec v1.9 §18).
 # Owns FastAPI, persistence (aiosqlite), orchestration, guidance, adapter registry,
 # telemetry, and the CLI. Depends on actionwitness_core; demo access goes ONLY through
 # the registered adapter and Buggy Store's versioned HTTP API (LD-8/14).

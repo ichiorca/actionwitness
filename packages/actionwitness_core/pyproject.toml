@@ -1,4 +1,4 @@
-# actionwitness_core — reusable, target-neutral assurance library (spec v1.8 §18, LD-2/LD-7).
+# actionwitness_core — reusable, target-neutral assurance library (spec v1.9 §18, LD-2/LD-7).
 # NORMATIVE: this package must install and test on its own (spec §26.7) and must never
 # import FastAPI, frontend assets, an integration, a demo application, an evaluator
 # vendor, or a commerce-domain module. tests/architecture enforces this in CI.

@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Minimal React workspace for the assurance harness (spec v1.8 §8.4, §19.1). The WebMCP hook package is intentionally NOT pinned yet: run the §25.1 spike (use-webmcp-tool vs usewebmcp) against the exact tested Chrome build, then add exactly one and record the decision in the README pinning table.",
+  "description": "Minimal React workspace for the assurance harness (spec v1.9 §8.4, §19.1). The WebMCP hook package is intentionally NOT pinned yet: run the §25.1 spike (use-webmcp-tool vs usewebmcp) against the exact tested Chrome build, then add exactly one and record the decision in the README pinning table.",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
