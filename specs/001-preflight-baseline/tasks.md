@@ -4,7 +4,7 @@ Cite the T-ID in every commit that advances it.
 
 - [x] T1 — Sweep v1.8 → v1.9 references; README names the spec's real path
       and the full command surface.
-- [ ] T2 — Add `docs/adr/` with template + index; draft ADR-0001 (adapter
+- [x] T2 — Add `docs/adr/` with template + index; draft ADR-0001 (adapter
       transport) from spec §32 locked decisions.
 - [ ] T3 — Draft ADR-0003 (SQLite transaction/lock model) from spec §17/§32.
 - [ ] T4 — Draft ADR-0004 (RFC 8785 implementation) and commit published +
