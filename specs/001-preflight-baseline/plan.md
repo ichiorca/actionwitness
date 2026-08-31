@@ -36,3 +36,39 @@ Risks / dependencies:
   frontend lockfile before the spike verdict.
 - Keep the registry module in core only if it stays target-neutral; error
   codes referencing HTTP semantics live in the service instead.
+
+## Status after T1–T10 (2026-08-31)
+
+Resolved as planned, with two deviations worth recording:
+
+- **Registry split.** Step 3 said "one small module (core-owned)". It shipped as
+  two: `actionwitness_core.journeys.enums` for target-neutral domain vocabulary,
+  `actionwitness_service.api.errors` for codes carrying HTTP status and
+  retryability, composed by `registry_export`. The plan's own risk note called
+  for exactly this; `module_status` joined from the service side under the same
+  rule. Shopify pairing states stay out until M10 — they are target-specific.
+- **ADR-0002 exists as `Proposed`, not deferred.** It records the decision *rule*
+  ahead of the data so the pin cannot be rationalised after the fact, and the
+  native control path is implemented and tested, making "pin neither" a real
+  fallback rather than a cliff.
+
+Blocked, needing an operator decision (not worked around):
+
+1. **cavesson L0 hook over-matches `evals`.** Every write whose path contains an
+   `evals` segment is denied ("eval corpus — immutable to autonomous sessions").
+   That rule is for the root-level `/evals/` grading corpus, but it also covers
+   `tests/evals/` and `packages/actionwitness_core/.../evals/`. Consequences: the
+   §26 `evals` lane has no test, and one E501 in
+   `actionwitness_core/evals/__init__.py:1` keeps `ruff check .` red. Both are
+   recorded and bounded in `tests/architecture/test_test_lanes.py`. **This will
+   block M6 wholesale**, not just M0.
+2. **`.env.example` is denied** under the `.env` secrets rule, though it holds no
+   secrets. The feature-flag variable table lives in the `config.py` docstring
+   instead; the example file still lists only the older subset.
+
+Note on `cavesson spec-kit progress`: it counts task IDs cited in **pass logs**
+under `progress/` (`review.json` shows `citedInLog: false`, `logFiles: null`),
+not in commit messages. Commits here cite `001-T<n>` as instructed, and
+`spec-kit review` reports 0 findings, but `progress` will read 0/12 until the
+`spec-kit implement`/`close` orchestration writes a pass log. No pass log was
+fabricated to move that number.
