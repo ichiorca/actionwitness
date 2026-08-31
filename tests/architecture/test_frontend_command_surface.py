@@ -86,13 +86,11 @@ def test_vitest_config_exists_and_uses_jsdom() -> None:
 
 
 @pytest.mark.architecture
-def test_no_webmcp_hook_package_is_pinned_before_adr_0002() -> None:
-    """Guards the ADR-0002 operator gate from being closed by a stray install.
+def test_exactly_one_webmcp_hook_is_pinned_per_adr_0002() -> None:
+    """ADR-0002 is Accepted: use-webmcp-tool@0.2.0, exact (spec §32 LD-4).
 
-    The hook package is selected by a human running the spike against the target
-    browser build (spec §25.1, §33 q2). Until that record is Accepted, neither
-    candidate may appear in the manifest. When ADR-0002 lands, this test is
-    replaced by one asserting that exactly one of them is pinned.
+    Exactly one candidate, pinned to the tested version with no range operator —
+    a float would silently move the tree away from the build the spike measured.
     """
     manifest = _package_json()
     declared = {
@@ -100,16 +98,23 @@ def test_no_webmcp_hook_package_is_pinned_before_adr_0002() -> None:
         **manifest.get("devDependencies", {}),
     }
     candidates = sorted({"use-webmcp-tool", "usewebmcp"} & declared.keys())
-    assert candidates == [], (
-        f"ADR-0002 is not Accepted yet, but the manifest already pins {candidates}"
+    assert candidates == ["use-webmcp-tool"], (
+        f"ADR-0002 pins use-webmcp-tool alone; manifest declares {candidates}"
+    )
+    assert declared["use-webmcp-tool"] == "0.2.0", (
+        f"pin drifted from the tested 0.2.0: {declared['use-webmcp-tool']!r}"
+    )
+    assert declared.get("webmcp-types") == "0.1.5", (
+        f"webmcp-types must stay at the tested 0.1.5: {declared.get('webmcp-types')!r}"
     )
 
 
 @pytest.mark.architecture
-def test_frontend_lockfile_is_not_committed_before_adr_0002() -> None:
-    """The lockfile is committed *after* the pin, so it records the tested tree."""
+def test_frontend_lockfile_is_committed_with_the_pin() -> None:
+    """The lockfile records the tested tree; ADR-0002 landed, so it must exist."""
     lockfile = FRONTEND / "package-lock.json"
-    assert not lockfile.exists(), (
-        "package-lock.json exists before the ADR-0002 pin; it would lock in a "
-        "hook choice the spike has not made"
+    assert lockfile.exists(), (
+        "package-lock.json missing: the ADR-0002 pin is only reproducible with "
+        "the lockfile that recorded the tested tree"
     )
+    assert '"use-webmcp-tool"' in lockfile.read_text(encoding="utf-8")

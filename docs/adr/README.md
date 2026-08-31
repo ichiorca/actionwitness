@@ -20,7 +20,7 @@ closed.
 | ID | Decision | Status | Needed by |
 |---|---|---|---|
 | [ADR-0001](0001-buggy-store-adapter-transport.md) | Buggy Store adapter transport | Accepted | M2 adapter work |
-| [ADR-0002](0002-webmcp-lifecycle-package.md) | WebMCP lifecycle package | Proposed | M0 — **operator-gated** |
+| [ADR-0002](0002-webmcp-lifecycle-package.md) | WebMCP lifecycle package | Accepted | M0 — pin: `use-webmcp-tool@0.2.0`; native split for cancellation-sensitive tools |
 | [ADR-0003](0003-sqlite-transaction-and-lock-model.md) | SQLite transaction and lock model | Accepted | M3 repositories |
 | [ADR-0004](0004-rfc-8785-canonicalization.md) | RFC 8785 canonicalization implementation | Accepted | M1 immutable records |
 | ADR-0005 | External evaluator version and binding | Not started | M7 |

@@ -29,7 +29,9 @@ export type HookLoadState =
  */
 export type UnknownHook = (...args: unknown[]) => unknown;
 
-const HOOK_EXPORT_NAMES = ["useWebMcpTool", "useWebMCPTool", "useWebmcpTool", "default"];
+// "useWebMCP" observed live: both use-webmcp-tool@0.2.0 and (per its docs)
+// usewebmcp export the hook under this name. Recorded in ADR-0002.
+const HOOK_EXPORT_NAMES = ["useWebMCP", "useWebMcpTool", "useWebMCPTool", "useWebmcpTool", "default"];
 
 function pickHook(module: Record<string, unknown>): { hook: UnknownHook; name: string } | null {
   for (const name of HOOK_EXPORT_NAMES) {
@@ -49,7 +51,13 @@ export function useHookCandidate(specifier: HookCandidate): HookLoadState {
     let cancelled = false;
     setState({ status: "loading" });
 
-    import(/* @vite-ignore */ specifier).then(
+    // A bare specifier under @vite-ignore reaches the BROWSER unresolved and
+    // always fails ("Failed to resolve module specifier"). In dev, route the
+    // request through Vite's /@id/ resolution endpoint so an installed
+    // candidate loads and a missing one rejects into the "missing" state.
+    // Found during the ADR-0002 browser run; recorded there.
+    const resolved = import.meta.env.DEV ? `/@id/${specifier}` : specifier;
+    import(/* @vite-ignore */ resolved).then(
       (module: Record<string, unknown>) => {
         if (cancelled) {
           return;

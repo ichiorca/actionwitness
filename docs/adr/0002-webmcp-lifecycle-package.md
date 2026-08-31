@@ -1,14 +1,68 @@
 # ADR-0002 — WebMCP lifecycle package
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-08-31
-- **Implementing change:** 001-T10 (spike harness and checklist); the pin itself is 001-T11
+- **Implementing change:** 001-T10 (spike harness and checklist); pin recorded in 001-T11
+- **Verdict:** pin `use-webmcp-tool@0.2.0` + `webmcp-types@0.1.5`; cancellation-sensitive
+  tools use direct native registration (rule 3 split, binding on the adapter)
 
-> **Operator-gated.** This record is `Proposed`, not `Accepted`, and deliberately
-> states no verdict. Choosing the package requires a human running the spike
-> against the exact target browser build (spec §25.1, §33 open question 2). An
-> autonomous session can build the instrument and say what would count as
-> evidence; it cannot supply the observation.
+> The spike ran against the operator's real browser (Claude-driven, operator-
+> consented session grants; the operator enabled the flag and confirmed the pin).
+> Results below; the decision is a mechanical application of the rule fixed in
+> advance.
+
+## Spike results (2026-08-31)
+
+**Environment:** Chrome 151.0.0.0 stable (Windows), `#enable-webmcp-testing`
+Enabled. Before the flag: `document.modelContext` absent, page degraded
+correctly (check 1 pass). After: the API exists on **both**
+`document.modelContext` and `navigator.modelContext`, surface
+`registerTool` / `getTools` / `executeTool` / `ontoolchange`.
+
+| Check | native | use-webmcp-tool@0.2.0 | usewebmcp@5.1.0 |
+|---|---|---|---|
+| StrictMode count stays 1 (rule 1) | pass | pass | pass |
+| Unmount → 0 / remount → 1 | pass | pass | pass |
+| `toolchange` fires | pass (per-surface; bursts NOT coalesced, none dropped) | pass | pass |
+| Invoke result (size) | raw object (89 ch) | MCP content envelope (147 ch) | content + `structuredContent` + `isError:false` (262 ch) |
+| **Signal forwarded (rule 2)** | **false** | **false** | **false** |
+| Descriptions + `readOnlyHint` | pass (also `untrustedContentHint`) | pass | pass |
+
+**Rule application:** rule 1 rejects neither → rule 2 cannot separate them
+(no path forwards the signal — see below) → rule 3: pin the otherwise-better
+candidate; the runnable checks tied → rule 5 tie-break: **`use-webmcp-tool`**,
+the challenge-linked baseline.
+
+**The sharper finding under rule 3:** in this build the *native control* also
+receives no per-invocation signal via `executeTool` — the ceiling is the
+browser's, not either hook's. The rule-3 split (cancellation-sensitive tools
+via direct native registration) is recorded as binding on the adapter, and
+additionally: no Tier 1 design may treat the per-invocation `AbortSignal` as
+a safety mechanism in the pinned build. The server-side confirmation binding
+with atomic single consumption (spec §14, FR-037's real enforcement point)
+carries cancellation safety; the signal, when a future build forwards it, is
+a responsiveness improvement only.
+
+**Build-observed API facts (spec §29.3 table):**
+- `executeTool(tool, args)` — arity 2; `tool` is the descriptor object from
+  `getTools()` (not a name); `args` must be a JSON **string** (`"{}"`);
+  a third options/signal argument is silently ignored.
+- `registerTool(...)` returns a **Promise**; an invalid tool name is accepted
+  at call time (validation, if any, is asynchronous).
+- `getTools()` descriptors carry `description`, `inputSchema`, `annotations`
+  (`readOnlyHint`, `untrustedContentHint`), `origin`, `title`, `window` —
+  `stable_tool_surface` is viable in this build.
+- Known divergences from `src/test/modelContextDouble.ts` (kept, documented,
+  not yet reconciled): the double forwards `{ signal }` (build does not), models
+  `registerTool` synchronously (build returns a Promise), and lacks
+  `executeTool`. Reconcile when M5 wires real invocation paths.
+
+**Harness corrections made during the run (per checklist instruction):**
+- `hookPath.tsx` imported candidates with a bare specifier under
+  `@vite-ignore`, which reaches the browser unresolved and can never load; in
+  dev the specifier now routes through Vite's `/@id/` resolution endpoint.
+- Both candidates export the hook as `useWebMCP`, which `HOOK_EXPORT_NAMES`
+  did not list; added.
 
 ## Context
 

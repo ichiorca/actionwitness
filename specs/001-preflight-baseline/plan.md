@@ -71,3 +71,16 @@ not in commit messages. Commits here cite `001-T<n>` as instructed, and
 `spec-kit review` reports 0 findings, but `progress` will read 0/12 until the
 `spec-kit implement`/`close` orchestration writes a pass log. No pass log was
 fabricated to move that number.
+
+## T11/T12 closed — spec complete (2026-08-31)
+
+The ADR-0002 spike ran against the operator's real Chrome (151.0.0.0 stable,
+`#enable-webmcp-testing` Enabled), Claude-driven under operator-approved
+session grants. Both candidates passed every runnable check identically; no
+path (native included) forwards the per-invocation signal in this build, so
+rule 3 + the rule 5 tie-break pinned `use-webmcp-tool@0.2.0` +
+`webmcp-types@0.1.5` with the binding native-registration split for
+cancellation-sensitive tools. Two harness defects found and fixed during the
+run (a bare-specifier import could never load a candidate; the `useWebMCP`
+export name was unrecognized) — details in ADR-0002. Exit gate fully green
+including `npm ci` from the committed lockfile. 001 is complete.

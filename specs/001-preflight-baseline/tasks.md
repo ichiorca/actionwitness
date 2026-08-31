@@ -22,9 +22,9 @@ Cite the T-ID in every commit that advances it.
       §26 lane (no skips).
 - [x] T10 — Build the WebMCP spike harness (both candidate hooks switchable,
       StrictMode, one read-only stub tool) + operator browser checklist.
-- [ ] T11 — (operator gate) Record spike results in ADR-0002; pin the chosen
+- [x] T11 — (operator gate) Record spike results in ADR-0002; pin the chosen
       hook + `webmcp-types`; commit the frontend lockfile; record the tested
       browser build.
-- [ ] T12 — Verify the exit gate: arch lane, `npm ci`/`test`/`build`, spike
+- [x] T12 — Verify the exit gate: arch lane, `npm ci`/`test`/`build`, spike
       tool registers/cleans up without StrictMode duplication; confirm no
       unresolved decision touches core public types or persistence semantics.

@@ -109,24 +109,21 @@ Registered markers: `architecture`, `unit`, `integration`, `adapters`, `contract
 `examples/buggy_store/frontend` builds independently and gains the same four
 commands when its Tier 1 UI lands (spec §29.1).
 
-## Version pinning (spec §29.3) — fill during the §25.1 spike
+## Version pinning (spec §29.3)
 
-Run the spike harness first: `cd apps/actionwitness_service/frontend && npm install && npm run dev`,
-then open **`/spike.html`**. It mounts under StrictMode, switches between direct
-native registration and both hook candidates, and reports the live tool count from
-`document.modelContext.getTools()`. The step-by-step run is
-`tests/browser/webmcp-spike-checklist.md`; the decision rule is fixed in advance in
-`docs/adr/0002-webmcp-lifecycle-package.md`.
-
+Filled from the §25.1 spike run of 2026-08-31; full readings and the decision
+rule are in `docs/adr/0002-webmcp-lifecycle-package.md`. Re-run the spike
+(`npm run dev`, open **`/spike.html`**) before changing any row.
 
 | Item | Pinned value |
 |---|---|
-| Chrome build + flag/origin-trial config (`chrome://flags/#enable-webmcp-testing`) | TODO |
-| WebMCP API location | `document.modelContext` (verified Aug 2026) |
-| Hook package (`use-webmcp-tool` vs `usewebmcp` spike decision) | TODO |
-| `webmcp-types` version | TODO |
-| `webmcp-evals` package + reporter schema + normalizer version | TODO |
-| Primary demo client / fallback | ChatGPT in-app browser / Chrome 149 + DevTools (LD-18) |
+| Chrome build + flag/origin-trial config (`chrome://flags/#enable-webmcp-testing`) | Chrome 151.0.0.0 stable (Windows), flag **Enabled** |
+| WebMCP API location | `document.modelContext` **and** `navigator.modelContext` (verified live 2026-08-31; `registerTool`/`getTools`/`executeTool`/`ontoolchange`) |
+| `getTools()` / `toolchange` | both present; `toolchange` fires per change (bursts not coalesced, none dropped); descriptors carry descriptions + `readOnlyHint`/`untrustedContentHint` → `stable_tool_surface` viable |
+| Hook package (`use-webmcp-tool` vs `usewebmcp` spike decision) | `use-webmcp-tool@0.2.0` (exact); cancellation-sensitive tools use direct native registration — no path in this build forwards the per-invocation signal |
+| `webmcp-types` version | `0.1.5` (exact) |
+| `webmcp-evals` package + reporter schema + normalizer version | TODO — pinned in M7 (ADR-0005) |
+| Primary demo client / fallback | ChatGPT in-app browser / Chrome 151 + `#enable-webmcp-testing` + DevTools (LD-18) |
 
 ## Naming
 
