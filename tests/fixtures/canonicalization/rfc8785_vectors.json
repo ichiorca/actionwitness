@@ -1,0 +1,183 @@
+{
+  "schema_version": 1,
+  "description": "RFC 8785 (JSON Canonicalization Scheme) vectors for actionwitness_core. Each accept vector pairs a parsed input value with the exact canonical UTF-8 text. Reject vectors carry a non-finite float the canonicalizer must refuse rather than encode.",
+  "specification": "RFC 8785",
+  "adr": "docs/adr/0004-rfc-8785-canonicalization.md",
+  "origins": {
+    "published": "Traceable to RFC 8785's own normative text and worked example.",
+    "repository": "Authored for this project's shapes and known failure modes."
+  },
+  "accept": [
+    {
+      "name": "rfc8785-worked-example",
+      "origin": "published",
+      "description": "RFC 8785's own worked example: member reordering, ES6 number forms, minimal string escaping, and a literal non-ASCII character.",
+      "input": {
+        "numbers": [
+          333333333.3333333,
+          1e+30,
+          4.5,
+          0.002,
+          1e-27
+        ],
+        "string": "€$\u000f\nA'B\"\\\\\"/",
+        "literals": [
+          null,
+          true,
+          false
+        ]
+      },
+      "expected": "{\"literals\":[null,true,false],\"numbers\":[333333333.3333333,1e+30,4.5,0.002,1e-27],\"string\":\"€$\\u000f\\nA'B\\\"\\\\\\\\\\\"/\"}"
+    },
+    {
+      "name": "number-exponent-boundaries",
+      "origin": "repository",
+      "description": "ES6 switches to exponential form at >= 1e21 and below 1e-6, and pads no exponent digits. A serializer reusing a host language's float repr usually gets at least one of these three wrong.",
+      "input": {
+        "at_1e20": 1e+20,
+        "at_1e21": 1e+21,
+        "at_1e_minus_6": 1e-06,
+        "at_1e_minus_7": 1e-07,
+        "max_safe_integer": 9007199254740991,
+        "two_pow_53": 9007199254740992
+      },
+      "expected": "{\"at_1e20\":100000000000000000000,\"at_1e21\":1e+21,\"at_1e_minus_6\":0.000001,\"at_1e_minus_7\":1e-7,\"max_safe_integer\":9007199254740991,\"two_pow_53\":9007199254740992}"
+    },
+    {
+      "name": "number-zero-and-sign",
+      "origin": "repository",
+      "description": "Minus zero canonicalizes to 0, so two inputs that compare equal produce one hash. Trailing zeros and redundant exponents collapse.",
+      "input": {
+        "zero": 0,
+        "minus_zero": -0.0,
+        "trailing": 4.5,
+        "exponent": 0.002,
+        "negative": -1.5
+      },
+      "expected": "{\"exponent\":0.002,\"minus_zero\":0,\"negative\":-1.5,\"trailing\":4.5,\"zero\":0}"
+    },
+    {
+      "name": "string-escaping-minimal",
+      "origin": "repository",
+      "description": "Only quote, backslash and C0 controls are escaped; solidus is not, and non-ASCII is emitted literally as UTF-8. Over-escaping is the common failure and changes the hash.",
+      "input": {
+        "solidus": "a/b",
+        "controls": "\u0000\u0001\u001f",
+        "shorthand": "\b\f\n\r\t",
+        "quote_and_backslash": "\"\\",
+        "non_ascii": "café € 日本語",
+        "astral": "😀"
+      },
+      "expected": "{\"astral\":\"😀\",\"controls\":\"\\u0000\\u0001\\u001f\",\"non_ascii\":\"café € 日本語\",\"quote_and_backslash\":\"\\\"\\\\\",\"shorthand\":\"\\b\\f\\n\\r\\t\",\"solidus\":\"a/b\"}"
+    },
+    {
+      "name": "key-ordering-utf16-code-units",
+      "origin": "repository",
+      "description": "Keys sort by UTF-16 code unit, not code point. An astral key begins with a high surrogate (0xD83D), which orders BEFORE a BMP key above 0xD800 (0xFB00) but AFTER it by code point. Python's default sorted() sorts by code point and gets this backwards.",
+      "input": {
+        "ﬀ": "bmp-above-d800",
+        "😀": "astral",
+        "a": "ascii",
+        "é": "latin-1"
+      },
+      "expected": "{\"a\":\"ascii\",\"é\":\"latin-1\",\"😀\":\"astral\",\"ﬀ\":\"bmp-above-d800\"}"
+    },
+    {
+      "name": "nesting-and-empties",
+      "origin": "repository",
+      "description": "Array order is data and is never sorted; object order is not. Empty object and empty array are distinct canonical forms.",
+      "input": {
+        "z": [
+          3,
+          1,
+          2
+        ],
+        "a": {
+          "empty_obj": {},
+          "empty_arr": [],
+          "nested": {
+            "b": 2,
+            "a": 1
+          }
+        },
+        "arr_of_obj": [
+          {
+            "b": 1,
+            "a": 2
+          },
+          {}
+        ]
+      },
+      "expected": "{\"a\":{\"empty_arr\":[],\"empty_obj\":{},\"nested\":{\"a\":1,\"b\":2}},\"arr_of_obj\":[{\"a\":2,\"b\":1},{}],\"z\":[3,1,2]}"
+    },
+    {
+      "name": "repo-observation-snapshot",
+      "origin": "repository",
+      "description": "A shape this project actually hashes: money as exact decimal strings (never floats), UTC instants, and a target-namespaced observation.",
+      "input": {
+        "provider": "buggy_store_state",
+        "state_version": 7,
+        "captured_at": "2026-08-31T12:00:00Z",
+        "target": {
+          "cart": {
+            "subtotal": "49.98",
+            "discount_total": "0.00",
+            "total": "49.98",
+            "currency": "USD",
+            "lines": [
+              {
+                "variant_id": "v-002",
+                "quantity": 1,
+                "unit_price": "19.99"
+              },
+              {
+                "variant_id": "v-001",
+                "quantity": 1,
+                "unit_price": "29.99"
+              }
+            ]
+          }
+        }
+      },
+      "expected": "{\"captured_at\":\"2026-08-31T12:00:00Z\",\"provider\":\"buggy_store_state\",\"state_version\":7,\"target\":{\"cart\":{\"currency\":\"USD\",\"discount_total\":\"0.00\",\"lines\":[{\"quantity\":1,\"unit_price\":\"19.99\",\"variant_id\":\"v-002\"},{\"quantity\":1,\"unit_price\":\"29.99\",\"variant_id\":\"v-001\"}],\"subtotal\":\"49.98\",\"total\":\"49.98\"}}}"
+    },
+    {
+      "name": "repo-event-record",
+      "origin": "repository",
+      "description": "An append-only event as hashed for the evidence chain: null members are retained, not dropped, so an absent field and a null field differ.",
+      "input": {
+        "sequence_number": 3,
+        "event_type": "tool_invocation_completed",
+        "actor": "agent",
+        "tool_name": "apply_discount",
+        "reported_status": "success",
+        "state_version_before": 6,
+        "state_version_after": 6,
+        "duration_ms": 12,
+        "correlation_id": "c-9f2a",
+        "annotated_sequence_number": null
+      },
+      "expected": "{\"actor\":\"agent\",\"annotated_sequence_number\":null,\"correlation_id\":\"c-9f2a\",\"duration_ms\":12,\"event_type\":\"tool_invocation_completed\",\"reported_status\":\"success\",\"sequence_number\":3,\"state_version_after\":6,\"state_version_before\":6,\"tool_name\":\"apply_discount\"}"
+    }
+  ],
+  "reject": [
+    {
+      "name": "nan",
+      "encoding": "float",
+      "literal": "nan",
+      "reason": "NaN has no JSON representation and no canonical form."
+    },
+    {
+      "name": "positive-infinity",
+      "encoding": "float",
+      "literal": "inf",
+      "reason": "Infinity has no JSON representation."
+    },
+    {
+      "name": "negative-infinity",
+      "encoding": "float",
+      "literal": "-inf",
+      "reason": "-Infinity has no JSON representation."
+    }
+  ]
+}

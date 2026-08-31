@@ -32,4 +32,5 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 markers = [
     "architecture: forbidden-import, layering, and repository-reference gates (spec §26.7)",
+    "unit: engine operators, policies, hashing, canonicalization, classification (spec §26.1)",
 ]
