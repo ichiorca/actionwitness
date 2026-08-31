@@ -21,7 +21,7 @@ closed.
 |---|---|---|---|
 | [ADR-0001](0001-buggy-store-adapter-transport.md) | Buggy Store adapter transport | Accepted | M2 adapter work |
 | ADR-0002 | WebMCP lifecycle package | Not started | M0 — **operator-gated** |
-| ADR-0003 | SQLite transaction and lock model | Not started | M3 repositories |
+| [ADR-0003](0003-sqlite-transaction-and-lock-model.md) | SQLite transaction and lock model | Accepted | M3 repositories |
 | ADR-0004 | RFC 8785 canonicalization implementation | Not started | M1 immutable records |
 | ADR-0005 | External evaluator version and binding | Not started | M7 |
 | ADR-0006 | Deployment composition | Not started | M8 |

@@ -6,7 +6,7 @@ Cite the T-ID in every commit that advances it.
       and the full command surface.
 - [x] T2 — Add `docs/adr/` with template + index; draft ADR-0001 (adapter
       transport) from spec §32 locked decisions.
-- [ ] T3 — Draft ADR-0003 (SQLite transaction/lock model) from spec §17/§32.
+- [x] T3 — Draft ADR-0003 (SQLite transaction/lock model) from spec §17/§32.
 - [ ] T4 — Draft ADR-0004 (RFC 8785 implementation) and commit published +
       repository canonicalization vectors under `tests/` fixtures.
 - [ ] T5 — Establish Python command surface: ruff format/check config, pytest
