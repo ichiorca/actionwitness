@@ -24,6 +24,7 @@ __all__ = [
     "AssertionOperator",
     "AssertionSeverity",
     "PolicyType",
+    "SurfaceDeltaKind",
 ]
 
 
@@ -154,6 +155,34 @@ POLICY_TYPE_DESCRIPTIONS: Mapping[PolicyType, str] = {
 }
 
 
+class SurfaceDeltaKind(StrEnum):
+    """The delta kinds `stable_tool_surface` strictness selects from (spec §9.5).
+
+    Registered here rather than in a tool-surface package because this is
+    *contract configuration*: a contract author picks which kinds fail, and the
+    engine must recognise the whole set from the start so a seeded policy is
+    never silently ignored. Detecting the deltas themselves is later work.
+    """
+
+    ADDED = "added"
+    REMOVED = "removed"
+    SCHEMA_CHANGE = "schema_change"
+    HINT_CHANGE = "hint_change"
+    DESCRIPTION_CHANGE = "description_change"
+
+
+SURFACE_DELTA_KIND_DESCRIPTIONS: Mapping[SurfaceDeltaKind, str] = {
+    SurfaceDeltaKind.ADDED: "A tool appeared in the target partition of the surface.",
+    SurfaceDeltaKind.REMOVED: "A tool disappeared from the target partition of the surface.",
+    SurfaceDeltaKind.SCHEMA_CHANGE: "An input schema mutated under a stable tool name.",
+    SurfaceDeltaKind.HINT_CHANGE: "A side-effect hint changed during the run.",
+    SurfaceDeltaKind.DESCRIPTION_CHANGE: (
+        "A description changed between discovery and invocation. A warning by "
+        "default, because benign copy edits should not fail a run."
+    ),
+}
+
+
 ENUM_REGISTRATIONS: tuple[tuple[str, str, type[StrEnum], Mapping[StrEnum, str]], ...] = (
     ("assertion_operator", "spec §9.4", AssertionOperator, ASSERTION_OPERATOR_DESCRIPTIONS),
     (
@@ -163,4 +192,5 @@ ENUM_REGISTRATIONS: tuple[tuple[str, str, type[StrEnum], Mapping[StrEnum, str]],
         ASSERTION_SEVERITY_DESCRIPTIONS,
     ),
     ("policy_type", "spec §9.5", PolicyType, POLICY_TYPE_DESCRIPTIONS),
+    ("surface_delta_kind", "spec §9.5", SurfaceDeltaKind, SURFACE_DELTA_KIND_DESCRIPTIONS),
 )

@@ -157,6 +157,16 @@
         "stable_tool_surface": "The target partition of the tool surface may not change during a run except through a declared delta."
       }
     },
+    "surface_delta_kind": {
+      "spec_ref": "spec §9.5",
+      "members": {
+        "added": "A tool appeared in the target partition of the surface.",
+        "removed": "A tool disappeared from the target partition of the surface.",
+        "schema_change": "An input schema mutated under a stable tool name.",
+        "hint_change": "A side-effect hint changed during the run.",
+        "description_change": "A description changed between discovery and invocation. A warning by default, because benign copy edits should not fail a run."
+      }
+    },
     "execution_mode": {
       "spec_ref": "spec §9.1",
       "members": {
