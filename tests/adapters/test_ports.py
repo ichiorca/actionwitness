@@ -413,14 +413,11 @@ def test_no_insert_only_repository_declares_a_mutation_method(protocol: str) -> 
 
 
 @pytest.mark.adapters
-def test_importing_the_ports_package_pulls_in_no_target_or_framework(monkeypatch) -> None:
+def test_importing_the_ports_package_pulls_in_no_target_or_framework(reimported_core) -> None:
     """The extension surface must be reachable with every integration absent."""
     import sys
 
-    for name in list(sys.modules):
-        if name.startswith("actionwitness_core"):
-            del sys.modules[name]
-    import actionwitness_core.ports  # noqa: F401
+    reimported_core("actionwitness_core.ports")
 
     leaked = [
         module

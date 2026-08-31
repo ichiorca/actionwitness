@@ -26,7 +26,7 @@ def test_core_ports_import_without_any_integration_present() -> None:
 
 
 @pytest.mark.adapters
-def test_importing_core_ports_pulls_in_no_target_specific_module() -> None:
+def test_importing_core_ports_pulls_in_no_target_specific_module(reimported_core) -> None:
     """Importing the protocol surface must not drag in a target or a web framework.
 
     The AST gate in tests/architecture proves the *source* declares no such
@@ -35,11 +35,7 @@ def test_importing_core_ports_pulls_in_no_target_specific_module() -> None:
     """
     import sys
 
-    for name in list(sys.modules):
-        if name.startswith("actionwitness_core"):
-            del sys.modules[name]
-
-    importlib.import_module("actionwitness_core.ports")
+    reimported_core("actionwitness_core.ports")
 
     leaked = [
         module

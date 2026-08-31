@@ -11,6 +11,7 @@ Nothing here touches the network, the wall clock, or process state.
 
 from __future__ import annotations
 
+import importlib
 import json
 from collections.abc import Iterator, Mapping
 from datetime import UTC, datetime, timedelta
@@ -98,6 +99,39 @@ def frozen_clock() -> FrozenClock:
 def id_sequence() -> IdSequence:
     """Deterministic identifiers, so two runs of a test produce the same evidence."""
     return IdSequence()
+
+
+@pytest.fixture
+def reimported_core() -> Iterator[object]:
+    """Import `actionwitness_core` from a clean module table, then put it back.
+
+    Several lane tests prove the core is importable with no integration present
+    by dropping it from `sys.modules` and importing it again. Done naively that
+    leaves the *reloaded* classes installed for the rest of the session, so a
+    model built before the purge and a model built after it no longer share a
+    class - and an `isinstance` check that is correct in isolation starts failing
+    only in a full-suite run, ordered by which lane happened to run first.
+
+    So the module table is snapshotted and restored. The test still gets its
+    clean import; nothing after it inherits a second copy of the package.
+    """
+    import sys
+
+    snapshot = dict(sys.modules)
+
+    def _import(name: str = "actionwitness_core"):
+        for module in list(sys.modules):
+            if module.startswith("actionwitness_core"):
+                del sys.modules[module]
+        return importlib.import_module(name)
+
+    try:
+        yield _import
+    finally:
+        for module in list(sys.modules):
+            if module.startswith("actionwitness_core"):
+                del sys.modules[module]
+        sys.modules.update(snapshot)
 
 
 @pytest.fixture(scope="session")
