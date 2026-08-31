@@ -18,7 +18,7 @@ Cite the T-ID in every commit that advances it.
       undocumented additions.
 - [x] T8 — Implement feature-flag settings model; absent optional config
       disables only its module; unit tests for each absence combination.
-- [ ] T9 — Add conftest fixture builders + one runnable placeholder test per
+- [x] T9 — Add conftest fixture builders + one runnable placeholder test per
       §26 lane (no skips).
 - [ ] T10 — Build the WebMCP spike harness (both candidate hooks switchable,
       StrictMode, one read-only stub tool) + operator browser checklist.
