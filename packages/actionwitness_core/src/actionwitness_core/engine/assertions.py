@@ -39,6 +39,7 @@ __all__ = [
     "deep_equal",
     "evaluate_assertion",
     "evaluate_assertions",
+    "evaluate_operator",
     "evaluate_precondition",
     "evaluate_preconditions",
 ]
@@ -96,14 +97,20 @@ def _as_exact(value: object) -> Decimal | None:
     return None
 
 
-def _evaluate(
+def evaluate_operator(
     operator: AssertionOperator,
     expected: JsonValue,
     expected_supplied: bool,
     initial: Resolution,
     final: Resolution,
 ) -> tuple[bool, JsonValue, str | None]:
-    """Return (held, actual-for-the-report, reason-when-it-did-not-hold)."""
+    """Apply one operator and return (held, actual-for-the-report, reason).
+
+    Public because causal classification re-applies the same operator to the
+    immediate post-call observation (FR-055). Two implementations of one
+    operator - one for the verdict, one for the causal check - would eventually
+    disagree, and the disagreement would show up as a false accusation.
+    """
     match operator:
         case AssertionOperator.EQUALS:
             if not final.found:
@@ -202,7 +209,7 @@ def evaluate_assertion(assertion: Assertion, *, initial: Context, final: Context
             evidence={"reason": "the required authoritative observation was not available"},
         )
 
-    held, actual, reason = _evaluate(
+    held, actual, reason = evaluate_operator(
         assertion.operator,
         assertion.value,
         "value" in assertion.model_fields_set,
@@ -255,7 +262,7 @@ def evaluate_precondition(precondition: Precondition, *, initial: Context) -> Fi
             evidence={"reason": "the initial authoritative observation was not available"},
         )
 
-    held, actual, reason = _evaluate(
+    held, actual, reason = evaluate_operator(
         precondition.operator,
         precondition.value,
         "value" in precondition.model_fields_set,

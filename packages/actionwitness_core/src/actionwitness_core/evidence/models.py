@@ -78,6 +78,17 @@ class RunEvent(CoreModel):
     state_hash_after: ContentHash | None = None
     duration_ms: Annotated[int, Field(ge=0)] | None = None
     redacted_payload: Mapping[str, JsonValue] = Field(default_factory=dict)
+    #: The immediate authoritative post-call observation of this tool's declared
+    #: target-effect paths, as a namespace-rooted context fragment (FR-032:
+    #: "bounded before/after values for their declared target-effect paths so
+    #: idempotency and false-success evidence do not depend on tool-return text
+    #: or later actions").
+    #:
+    #: This is observed state, not the tool's report, and it is the second half
+    #: of FR-055's false-success test. `None` means no immediate observation was
+    #: captured, which FR-055 treats as a reason to fall back to the generic
+    #: classification rather than to infer causality.
+    post_call_effect_state: Mapping[str, JsonValue] | None = None
 
     @model_validator(mode="after")
     def _check_invocation_shape(self) -> RunEvent:
