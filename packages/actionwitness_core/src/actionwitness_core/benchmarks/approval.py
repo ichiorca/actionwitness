@@ -47,8 +47,10 @@ from actionwitness_core.security.canonical import content_hash
 
 __all__ = [
     "ApprovedVariants",
+    "FrozenVariantSet",
     "VariantApproval",
     "fingerprint",
+    "freeze",
 ]
 
 type ContentHash = Annotated[str, StringConstraints(pattern=r"^sha256:[0-9a-f]{64}$")]
@@ -197,3 +199,49 @@ def approve(
         note=note,
     )
     return ApprovedVariants(candidates=candidates, approval=approval)
+
+
+class FrozenVariantSet(CoreModel):
+    """Approved variants, sealed for a manifest (FR-100's final clause).
+
+    **This is the stage that carries a content hash**, and the contrast with
+    `CandidateVariants` is deliberate. Un-reviewed material has no hash because
+    it must not look sealable; this type has one because it *is* sealed, and
+    because FR-100 requires the variants to live in "the content-hashed
+    benchmark manifest".
+
+    It keeps the approval alongside the texts rather than only the texts. A
+    frozen set whose provenance had been dropped would be indistinguishable
+    from one somebody typed in, and the whole point of the review is that a
+    named person accepted these specific words.
+    """
+
+    canonical_intent: Annotated[str, StringConstraints(min_length=1, max_length=500)]
+    variants: tuple[IntentVariant, ...] = ()
+    approval: VariantApproval
+
+    def canonical_document(self) -> dict[str, JsonValue]:
+        return {
+            "canonical_intent": self.canonical_intent,
+            "variants": [variant.canonical_document() for variant in self.variants],
+            "approval": self.approval.canonical_document(),
+        }
+
+    def content_hash(self) -> str:
+        """Over the intent, the variants, and the decision that admitted them."""
+        return content_hash(self.canonical_document())
+
+
+def freeze(approved: ApprovedVariants) -> FrozenVariantSet:
+    """Seal an approved set for the manifest.
+
+    Takes `ApprovedVariants` and nothing looser, so freezing something that was
+    never reviewed is not expressible. The rejected variants are deliberately
+    *not* carried forward: they were not approved, and a manifest that listed
+    them would invite a later reader to wonder whether they ran.
+    """
+    return FrozenVariantSet(
+        canonical_intent=approved.candidates.canonical_intent,
+        variants=approved.approved,
+        approval=approved.approval,
+    )

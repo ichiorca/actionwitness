@@ -385,6 +385,19 @@ class BenchmarkManifest(CoreModel):
     scenario_ids: tuple[Identifier, ...] = ()
     #: The target configuration each scenario runs under (§24.7 step 1).
     scenarios: tuple[ScenarioDefinition, ...] = ()
+    #: FR-100's approved, frozen intent variants, as the record `freeze`
+    #: produced. `None` for a suite that never generated any — a Tier 2 import
+    #: from a checked-in fixture has no variants, and must not be made to invent
+    #: an empty approval to say so.
+    #:
+    #: Held as the canonical document rather than as `FrozenVariantSet`, so the
+    #: manifest can be read back from its own stored JSON. `UtcInstant` uses a
+    #: `BeforeValidator`, which runs ahead of Pydantic's string-to-datetime
+    #: parsing — so a model carrying one serialises to a form it cannot itself
+    #: re-validate. The structure is validated by `freeze` before it arrives
+    #: here; what this field owes a reader is a faithful record, and the
+    #: manifest's own hash covers it.
+    frozen_variants: Mapping[str, JsonValue] | None = None
     target_fixture: str | None = None
     target_build_commit: str | None = None
     evaluator_name: str | None = None
@@ -410,6 +423,9 @@ class BenchmarkManifest(CoreModel):
             "benchmark_id": self.benchmark_id,
             "scenario_ids": list(self.scenario_ids),
             "scenarios": [scenario.canonical_document() for scenario in self.scenarios],
+            "frozen_variants": (
+                None if self.frozen_variants is None else dict(self.frozen_variants)
+            ),
             "target_fixture": self.target_fixture,
             "target_build_commit": self.target_build_commit,
             "evaluator_name": self.evaluator_name,

@@ -160,6 +160,9 @@ def test_nothing_binds_a_trial_without_being_told_to() -> None:
         "start",
         "finalize",
         "mark_error",
+        # 010-T6. Seals FR-100's approved variants into the manifest while the
+        # suite is still `draft`. It binds no trial: no trial exists yet.
+        "freeze_variants",
     }
 
 

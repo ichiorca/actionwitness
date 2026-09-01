@@ -29,6 +29,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from actionwitness_core.benchmarks.approval import freeze
 from actionwitness_core.benchmarks.enums import (
     BenchmarkStatus,
     CorrelationMode,
@@ -230,6 +231,46 @@ class BenchmarkService:
                 "contract_content_hash": scenario.contract_content_hash,
             }
         )
+
+    async def freeze_variants(self, benchmark_id: str, approved: Any) -> str:
+        """FR-100: freeze approved variants into the manifest before trials.
+
+        **Only while the suite is `draft`.** "Before trials begin" is the
+        requirement, and `draft` is the only state in which no trial has been
+        imported or replayed — so the state machine is what enforces the timing
+        rather than a check on a clock.
+
+        **Once, and not again.** FR-100 adds "generation is not rerun between
+        repetitions": a suite whose variants changed midway would have
+        repetitions that measured different things, and the manifest hash would
+        describe none of them. A second freeze is refused rather than
+        overwriting, because overwriting is precisely the rerun the requirement
+        forbids.
+        """
+        suite = await self._draft(benchmark_id)
+        stored = json.loads(str(suite["manifest_json"]))
+        if stored.get("frozen_variants") is not None:
+            raise ApiError(
+                ApiErrorCode.PRECONDITION_FAILED,
+                "this benchmark already has frozen variants; FR-100 forbids "
+                "rerunning generation between repetitions, so a different set "
+                "requires a new suite",
+            )
+
+        frozen = freeze(approved)
+        stored["frozen_variants"] = frozen.canonical_document()
+        manifest = BenchmarkManifest.model_validate(stored)
+        await self._work.execute(
+            "UPDATE benchmark_suites SET manifest_json = ?, manifest_content_hash = ? "
+            "WHERE id = ? AND workspace_id = ?",
+            (
+                canonical_text(manifest.canonical_document()),
+                manifest.content_hash(),
+                benchmark_id,
+                self._workspace_id,
+            ),
+        )
+        return frozen.content_hash()
 
     # -- binding --------------------------------------------------------------
 

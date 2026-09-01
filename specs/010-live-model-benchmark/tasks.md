@@ -19,7 +19,7 @@ Cite the T-ID in every commit that advances it.
       instructions to bypass confirmation, before a human is asked to review.
       A model-authored variant is untrusted text, never an instruction.
 - [x] T5 — Explicit human approval, recorded, and prior to freezing.
-- [ ] T6 — Freeze approved variants into the content-hashed benchmark manifest
+- [x] T6 — Freeze approved variants into the content-hashed benchmark manifest
       before trials begin; generation is not rerun between repetitions.
 - [ ] T7 — Live trials: at least three scenarios with at least three completed
       live trials each, imported through the **unchanged** M7 path. A change
