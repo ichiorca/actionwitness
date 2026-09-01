@@ -18,6 +18,7 @@ import pytest
 from actionwitness_core.contracts.enums import PolicyType
 from actionwitness_core.contracts.models import parse_contract
 from actionwitness_core.ports.enums import SideEffectClass
+from actionwitness_core.security.canonical import content_hash
 from integrations.buggy_store.templates import TEMPLATES, template_for, template_ids
 
 from integrations.buggy_store import TARGET_ID, TOOL_SPECS
@@ -138,6 +139,29 @@ def test_a_template_expecting_a_protected_tool_requires_consent(template) -> Non
         assert tool in contract.confirmed_tools(), (
             f"{template.template_id} omits consent for {tool}"
         )
+
+
+@pytest.mark.contracts
+@pytest.mark.parametrize("template", TEMPLATES, ids=lambda t: t.template_id)
+def test_every_template_is_written_in_its_own_canonical_form(template) -> None:
+    """Otherwise the contract cannot generate an eval case (§24.2, FR-085).
+
+    Seeding hashes the template document *as written*; §24.2 step 6 re-verifies a
+    source contract by hashing the parsed contract's `canonical_document()`. A
+    field left to its default — `allow_paths` on `no_undeclared_changes` is the
+    one that bit — is absent from the first and present in the second, so the two
+    hashes differ and case generation refuses the run with "the source contract
+    does not match its stored hash".
+
+    The failure surfaces far from its cause: the contract validates, the run
+    arms, the journey succeeds, verification produces the right verdict, and only
+    *generating a regression case* fails. Caught here instead.
+    """
+    document = dict(template.document)
+    assert content_hash(document) == content_hash(parse_contract(document).canonical_document()), (
+        f"{template.template_id} is not written in canonical form; a field left to "
+        "its default will break eval-case generation for every run that uses it"
+    )
 
 
 @pytest.mark.contracts

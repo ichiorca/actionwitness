@@ -40,6 +40,7 @@ from actionwitness_core.contracts.models import (
     IdempotencyPolicy,
     MaximumMutationsPolicy,
     NoUndeclaredChangesPolicy,
+    OutcomeContract,
     Policy,
     RequiresConfirmationPolicy,
     StableToolSurfacePolicy,
@@ -53,9 +54,31 @@ from actionwitness_core.kernel import CoreModel, JsonValue
 
 __all__ = [
     "PolicyEvidence",
+    "declared_contract_paths",
     "evaluate_policies",
     "evaluate_policy",
 ]
+
+
+def declared_contract_paths(contract: OutcomeContract) -> tuple[ObservationPath, ...]:
+    """Every path §9.10(a) counts as declared: assertion *and* precondition.
+
+    Lives in the core, and is the single source of this rule, because two callers
+    need it: verification computes it from the live contract, and §24 replay
+    computes it from the case's recorded one. A replay that derived declared
+    paths even slightly differently would repartition the same snapshots and
+    report a classification the original run never produced — which is precisely
+    the parity §24.1's set-equality comparison exists to detect, arriving as a
+    false regression rather than a real one.
+
+    Deduplicated by canonical string, preserving first appearance, so a contract
+    that asserts and preconditions the same path contributes it once.
+    """
+    seen: dict[str, ObservationPath] = {}
+    for term in (*contract.preconditions, *contract.assertions):
+        seen.setdefault(str(term.path), term.path)
+    return tuple(seen.values())
+
 
 #: Approval must precede the mutation and belong to the same run and invocation
 #: (FR-060, FR-066), so correlation is by recorded correlation ID.

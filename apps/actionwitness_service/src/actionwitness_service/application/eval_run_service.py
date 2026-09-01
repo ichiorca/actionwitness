@@ -324,16 +324,34 @@ class EvalRunService:
         # same recorded event stream", which is exactly what a replay produces.
         # A run that judged only assertions would report a consent regression as
         # unreproducible while quietly leaving the policy unchecked.
-        from actionwitness_core.engine.policies import PolicyEvidence, evaluate_policies
+        from actionwitness_core.engine.diff import changed_paths_of, diff_states
+        from actionwitness_core.engine.policies import (
+            PolicyEvidence,
+            declared_contract_paths,
+            evaluate_policies,
+        )
 
         # §24.3a's surface facts come out of the replayed stream, so the
         # policy judges the same timeline the report shows.
         baseline_recorded, observed_deltas = surface_evidence(outcome.events)
+
+        # 013-T4. The FR-157 diff over the replayed snapshots, and the declared
+        # paths from the case's own recorded contract. Both come from the same
+        # core functions verification uses — a replay that derived either one
+        # differently would repartition identical snapshots and report a
+        # classification the original run never produced, arriving as a false
+        # regression under the set-equality comparison rather than a real one.
+        #
+        # 007's minimizer already keeps complete canonical state for a case
+        # carrying this policy, precisely so the diff has both sides here.
+        replayed_changes = diff_states(outcome.before.as_context(), outcome.after.as_context())
         policy_findings = evaluate_policies(
             case.contract.document.policies,
             PolicyEvidence(
                 events=outcome.events,
                 effect_map=effect_map or {},
+                contract_paths=declared_contract_paths(case.contract.document),
+                changed_paths=changed_paths_of(replayed_changes),
                 surface_baseline_recorded=baseline_recorded,
                 observed_surface_deltas=observed_deltas,
             ),

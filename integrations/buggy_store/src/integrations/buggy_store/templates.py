@@ -265,7 +265,15 @@ _NO_SIDE_EFFECTS: Final[Mapping[str, Any]] = {
     ],
     "policies": [
         {"type": "idempotent_by_request_id", "tool": "update_cart"},
-        {"type": "no_undeclared_changes"},
+        # `allow_paths` is spelled out even though it is empty, and both facts
+        # matter. Empty is the point of the contract — a waiver here would be the
+        # obvious way to make the demonstration pass, and it would delete the
+        # demonstration. Spelled out because a template is seeded by hashing the
+        # document *as written*, while §24.2 re-verifies it by hashing the parsed
+        # contract's canonical form: a field left to its default hashes
+        # differently in the two places, and case generation refuses the run with
+        # "the source contract does not match its stored hash".
+        {"type": "no_undeclared_changes", "allow_paths": []},
     ],
     "redaction": {"paths": ["**.email", "**.payment_token"]},
 }

@@ -44,7 +44,11 @@ from actionwitness_core.engine.classification import (
 from actionwitness_core.engine.diff import StateChange, changed_paths_of, diff_states
 from actionwitness_core.engine.enums import CheckStatus
 from actionwitness_core.engine.findings import Finding, aggregate, primary_failure
-from actionwitness_core.engine.policies import PolicyEvidence, evaluate_policies
+from actionwitness_core.engine.policies import (
+    PolicyEvidence,
+    declared_contract_paths,
+    evaluate_policies,
+)
 from actionwitness_core.engine.trajectory import evaluate_expected_tools
 from actionwitness_core.evidence.effects import redacted_observation
 from actionwitness_core.evidence.models import RunEvent
@@ -421,7 +425,7 @@ def _evaluate(
             PolicyEvidence(
                 events=tuple(events),
                 effect_map=effect_map,
-                contract_paths=_contract_paths(contract),
+                contract_paths=declared_contract_paths(contract),
                 changed_paths=None if changes is None else changed_paths_of(changes),
             ),
         ),
@@ -459,19 +463,6 @@ def _undeclared_changes_block(evaluation: Evaluation) -> UndeclaredChangesBlock 
     if finding is None or finding.status is CheckStatus.NOT_EVALUATED:
         return None
     return undeclared_changes_from(finding, changed_paths=len(evaluation.changes))
-
-
-def _contract_paths(contract: OutcomeContract) -> tuple[ObservationPath, ...]:
-    """Every path the contract resolves (§9.10(a)).
-
-    Preconditions count: a path the contract read at arming is a path it cares
-    about, and `no_undeclared_changes` compares against everything the contract
-    touches rather than only what it asserts at the end.
-    """
-    seen: dict[str, ObservationPath] = {}
-    for term in (*contract.preconditions, *contract.assertions):
-        seen[str(term.path)] = term.path
-    return tuple(seen.values())
 
 
 def _check_event(finding: Finding) -> OutcomeEventType:
