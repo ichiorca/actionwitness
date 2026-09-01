@@ -183,3 +183,21 @@ hand-rolling a thread-pool wrapper around stdlib `sqlite3` because ADR-0003's
 busy-timeout and `BEGIN IMMEDIATE` semantics require the driver to preserve
 per-connection transaction state across awaits, which a naive executor wrapper
 does not. Small, single-module, no transitive dependencies, actively maintained.
+
+### T4 — the lock key set is reference-counted, not swept when unlocked
+
+The obvious cleanup — delete a key once its lock reads unlocked — is wrong.
+`asyncio.Lock.release()` wakes the next waiter's future but leaves `locked()`
+false until that waiter actually resumes, so a caller arriving in that window
+finds no key, builds a *second* lock for the same workspace, and is admitted
+alongside the waiter about to acquire the first. Measured: with staggered
+arrivals the sweeping version admits three concurrent holders where the
+reference-counted version admits one. The key is therefore dropped when its
+holder-and-waiter count reaches zero, which is the only moment at which no
+coroutine can still hold a reference to the lock object.
+
+This is admission control, not correctness (ADR-0003). Deleting this module
+entirely would make the service slower and noisier with
+`WORKSPACE_LOCK_TIMEOUT`, never wrong — the transaction is the serialization
+boundary. `release_idle()` is kept for a periodic cleanup pass and returns a
+count so a test can show the map is bounded rather than merely believed to be.

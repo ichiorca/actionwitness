@@ -17,7 +17,7 @@ Cite the T-ID in every commit that advances it.
       protocols, insert-only and append-only with no update or delete path;
       deterministic sequence allocation inside the appending transaction, with
       the unique constraint proven to be a backstop rather than the mechanism.
-- [ ] T4 — Keyed per-workspace async lock manager with bounded cleanup;
+- [x] T4 — Keyed per-workspace async lock manager with bounded cleanup;
       concurrent mutations in one workspace serialize, mutations in different
       workspaces proceed concurrently (FR-007), and nothing is held across a
       wait.
