@@ -228,11 +228,20 @@ class DecisionService:
             await self._release(work, workspace_id, run_id)
             # The invocation ends here: it never dispatched, so its terminal
             # event is the safe block rather than a tool result.
+            #
+            # **The actor is the agent, not the human.** The human decided — and
+            # the `confirmation_denied` event above records that with
+            # `EventActor.HUMAN`. But this event terminates the *agent's*
+            # invocation, and §23.1's execution layer only counts terminals from
+            # acting actors. Recording a human here would drop the safe block
+            # out of the layer entirely, so a correctly refused checkout would
+            # report `tool_execution: passed` and the refusal would be invisible
+            # in the report.
             await EventRepository(work).append(
                 run_id,
                 {
                     "event_type": str(OutcomeEventType.TOOL_INVOCATION_CANCELLED.value),
-                    "actor": str(EventActor.HUMAN.value),
+                    "actor": str(EventActor.AGENT.value),
                     "tool_name": str(request["tool_name"]),
                     "correlation_id": str(request["correlation_id"]),
                     "status": str(status.value),
