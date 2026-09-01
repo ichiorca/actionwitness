@@ -22,6 +22,15 @@ dependencies = [
     # Small, single-module, no transitive dependencies, actively maintained.
     "aiosqlite==0.22.1",
     "pydantic>=2.9",
+    # Declared, not inherited. Both arrive transitively today — httpx through the
+    # buggy-store integration, starlette through FastAPI — and the service imports
+    # each one directly: `api/app.py` owns the lifespan HTTPX client (ADR-0001) and
+    # `api/middleware.py` subclasses Starlette's BaseHTTPMiddleware. An import that
+    # only resolves because some other distribution happened to pull it in breaks the
+    # moment that distribution is not installed, which is exactly what §29.1's
+    # "install ... as separate distributions" does in the image.
+    "httpx>=0.27",
+    "starlette>=0.40",
 ]
 
 [project.scripts]

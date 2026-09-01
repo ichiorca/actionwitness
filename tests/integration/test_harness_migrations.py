@@ -22,6 +22,7 @@ from actionwitness_service.persistence.database import Database
 from actionwitness_service.persistence.migrations import (
     MIGRATIONS,
     TIER_ONE_TABLES,
+    TIER_TWO_BENCHMARK_TABLES,
     TIER_TWO_EVAL_TABLES,
     Migration,
     apply_migrations,
@@ -31,14 +32,10 @@ from actionwitness_service.persistence.migrations import (
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
 #: Tables §17.1 defines that no milestone has yet written to. M6 landed the
-#: three eval tables in migration 2, so they moved out of this list and into
-#: `TIER_TWO_EVAL_TABLES`; the benchmark and Shopify tables belong to M7 and
-#: M10 and would still be placeholders today.
-UNBUILT_TABLES = (
-    "benchmark_suites",
-    "benchmark_trials",
-    "shopify_pairings",
-)
+#: three eval tables in migration 2 and M7 the two benchmark tables in migration
+#: 3, so each moved out of this list into its own tuple as its code arrived. The
+#: Shopify tables belong to M10 and would still be placeholders today.
+UNBUILT_TABLES = ("shopify_pairings",)
 
 
 async def _table_names(connection: aiosqlite.Connection) -> set[str]:
@@ -100,6 +97,7 @@ async def test_migration_one_still_carries_only_tier_one_tables(database: Databa
     # Assert
     assert created == set(TIER_ONE_TABLES)
     assert created.isdisjoint(TIER_TWO_EVAL_TABLES)
+    assert created.isdisjoint(TIER_TWO_BENCHMARK_TABLES)
 
 
 async def test_the_eval_tables_arrive_in_their_own_migration(database: Database) -> None:
@@ -111,6 +109,74 @@ async def test_the_eval_tables_arrive_in_their_own_migration(database: Database)
     assert version >= 2
     async with database.connect() as connection:
         assert set(TIER_TWO_EVAL_TABLES) <= await _table_names(connection)
+
+
+async def test_the_benchmark_tables_arrive_in_their_own_migration(database: Database) -> None:
+    """M7's tables ship in migration 3, applied by the same ordered runner.
+
+    Their own migration, not an edit to migration 2: a database that already ran
+    2 must reach the same schema by running 3, which is only true if 2 is left
+    exactly as it shipped.
+    """
+    # Arrange / Act
+    version = await database.initialize()
+
+    # Assert
+    assert version >= 3
+    async with database.connect() as connection:
+        assert set(TIER_TWO_BENCHMARK_TABLES) <= await _table_names(connection)
+
+    second = MIGRATIONS[1]
+    created_by_two = {
+        statement.split("CREATE TABLE")[1].split("(")[0].strip()
+        for statement in second.statements
+        if "CREATE TABLE" in statement
+    }
+    assert created_by_two == set(TIER_TWO_EVAL_TABLES)
+
+
+async def test_a_benchmark_trial_cannot_bind_one_run_twice(database: Database) -> None:
+    """FR-091 at the storage layer: "a source run cannot be counted twice in one
+    benchmark".
+
+    Enforced by a partial unique index rather than by a read-then-write, which
+    two concurrent binders would both pass.
+    """
+    # Arrange
+    await database.initialize()
+    async with database.connect() as connection:
+        await connection.execute(
+            "INSERT INTO workspaces (id, kind, created_at, last_seen_at) "
+            "VALUES ('ws', 'interactive', 't', 't')"
+        )
+        await connection.execute(
+            "INSERT INTO artifacts (id, workspace_id, artifact_type, schema_version, "
+            "content_hash, metadata_json, relative_path, created_at) "
+            "VALUES ('art', 'ws', 'evaluator_report', '1.0', 'sha256:x', '{}', 'p', 't')"
+        )
+        await connection.execute(
+            "INSERT INTO benchmark_suites (id, workspace_id, schema_version, source_kind, "
+            "manifest_content_hash, manifest_json, correlation_mode, status, "
+            "normalized_adapter_version, created_at) "
+            "VALUES ('suite', 'ws', '1.0', 'recorded_fixture', 'sha256:y', '{}', "
+            "'executed_browser', 'draft', '1', 't')"
+        )
+
+        def _trial(trial_id: str, external: str) -> tuple[str, ...]:
+            return (
+                f"INSERT INTO benchmark_trials (id, benchmark_suite_id, "
+                f"external_source_artifact_id, external_trial_id, scenario_id, "
+                f"correlation_mode, outcome_run_id, call_level_result, outcome_result, "
+                f"eligibility, metadata_json, created_at) VALUES "
+                f"('{trial_id}', 'suite', 'art', '{external}', 'scenario-a', "
+                f"'executed_browser', 'run-1', 'passed', 'failed', 'eligible', '{{}}', 't')",
+            )
+
+        await connection.execute(*_trial("t1", "trial-1"))
+
+        # Act / Assert — a second trial naming the same outcome run is refused.
+        with pytest.raises(sqlite3.IntegrityError):
+            await connection.execute(*_trial("t2", "trial-2"))
 
 
 async def test_applying_migrations_twice_is_a_no_op(database: Database) -> None:

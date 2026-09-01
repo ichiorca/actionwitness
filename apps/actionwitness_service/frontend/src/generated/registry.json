@@ -345,6 +345,68 @@
         "webmcp": "The source run was driven through the browser WebMCP surface. Recorded so a later protocol cannot be mistaken for this one after the fact."
       }
     },
+    "source_kind": {
+      "spec_ref": "spec §17.1 / FR-093",
+      "members": {
+        "external_import": "A report produced elsewhere by a supported evaluator and imported here. The evidence is real but this execution did not produce it.",
+        "live_model_run": "A configured model executed during this benchmark. Tier 3 only, and never claimed for a replayed or checked-in report.",
+        "recorded_fixture": "A redacted report committed to the repository so CI and the offline fallback reproduce the benchmark without a credential. Always labeled as such; never presented as evidence that a live call occurred."
+      }
+    },
+    "correlation_mode": {
+      "spec_ref": "spec §9.9 / FR-091",
+      "members": {
+        "executed_browser": "The imported trial is bound one-to-one to the exact completed outcome run that browser execution produced.",
+        "imported_trajectory_replay": "The imported, redacted, allowlisted tool trajectory is replayed in a fresh isolated eval workspace through the same registered target adapter."
+      }
+    },
+    "benchmark_status": {
+      "spec_ref": "spec §16.4",
+      "members": {
+        "draft": "Manifest created; imports or bindings incomplete.",
+        "ready": "All intended imports and bindings validate. Bindings become immutable here.",
+        "running": "Imported trajectories are replaying.",
+        "completed": "The immutable benchmark artifact is finalized. Terminal, and the suite cannot be recalculated in place — a change requires a new suite.",
+        "cancelled": "Workspace reset or user cancelled nonterminal work.",
+        "error": "Import, replay, or finalization could not complete safely. Terminal, and never a partial result: finalization commits everything or nothing."
+      }
+    },
+    "call_level_result": {
+      "spec_ref": "spec §17.1 / FR-092",
+      "members": {
+        "passed": "Every required selection, argument, and order constraint in the trial passed (FR-092). A partial pass is a fail, not a pass.",
+        "failed": "At least one required constraint failed.",
+        "error": "The evaluator or adapter errored, so the trial says nothing about call-level reliability. Excluded from the matrix rather than counted as a failure."
+      }
+    },
+    "trial_eligibility": {
+      "spec_ref": "spec §17.1 / FR-092",
+      "members": {
+        "eligible": "Both layers produced a usable result, so the trial lands in exactly one of the four matrix cells.",
+        "excluded": "Evidence was missing, errored, or insufficient for the declared correlation mode. Counted in coverage and never silently downgraded or rebound."
+      }
+    },
+    "exclusion_reason": {
+      "spec_ref": "spec §9.9 / FR-091",
+      "members": {
+        "evaluator_error": "The imported trial reported an evaluator error, so its call-level layer carries no verdict.",
+        "unbound": "No explicit one-to-one binding exists for this trial. FR-091 forbids guessing one from order, timestamps, or similar text.",
+        "missing_trajectory": "An `imported_trajectory_replay` trial carries no replayable trajectory, so there is nothing to execute through the adapter.",
+        "outcome_not_reached": "The outcome layer never produced a verdict for this trial — the replay did not run, or the bound run never completed.",
+        "outcome_error": "The outcome layer errored. Like an evaluator error, this says nothing about the target and is excluded rather than counted as a failure.",
+        "harness_error": "This harness failed to complete the trial. Disclosed rather than dropped, so coverage cannot silently improve when the harness breaks."
+      }
+    },
+    "outcome_trial_result": {
+      "spec_ref": "spec §17.1 / FR-092",
+      "members": {
+        "passed": "The deterministic engine passed the contract. Outcome pass.",
+        "passed_with_warnings": "No critical failure, warnings exist. FR-092 normalizes this to outcome pass; the warning counts stay visible rather than being absorbed.",
+        "failed": "The deterministic engine failed the contract. Outcome fail.",
+        "error": "The outcome layer errored, so it carries no verdict about the target. Excluded.",
+        "not_reached": "The outcome layer never ran for this trial — no binding, no replay, or an incomplete bound run. Excluded, and never read as a pass."
+      }
+    },
     "module_status": {
       "spec_ref": "spec §29.1",
       "members": {

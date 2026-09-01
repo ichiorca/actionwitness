@@ -436,6 +436,104 @@ MIGRATIONS: Final[tuple[Migration, ...]] = (
             """,
         ),
     ),
+    Migration(
+        version=3,
+        name="tier two benchmark suite and trial tables",
+        statements=(
+            # §17.1 `benchmark_suites`. `source_kind` and `correlation_mode` are
+            # columns on the *suite*, not on the trial alone, because FR-093
+            # says "every suite contains exactly one source kind" and §9.9 says
+            # the two correlation modes "shall never be aggregated into one
+            # rate". Storing them here is what makes pooling a schema error
+            # rather than a reporting mistake somebody has to notice.
+            #
+            # `result_artifact_id` is nullable until finalization and is set in
+            # the same transaction that writes the artifact (§16.4: "either the
+            # complete derived artifact and `result_artifact_id` are committed
+            # together, or the suite enters `error` without a partial result").
+            """
+            CREATE TABLE benchmark_suites (
+                id                        TEXT NOT NULL PRIMARY KEY,
+                workspace_id              TEXT NOT NULL,
+                schema_version            TEXT NOT NULL,
+                source_kind               TEXT NOT NULL,
+                manifest_content_hash     TEXT NOT NULL,
+                manifest_json             TEXT NOT NULL,
+                correlation_mode          TEXT NOT NULL,
+                status                    TEXT NOT NULL,
+                normalized_adapter_version TEXT NOT NULL,
+                result_artifact_id        TEXT,
+                created_at                TEXT NOT NULL,
+                completed_at              TEXT,
+                FOREIGN KEY (workspace_id) REFERENCES workspaces (id) ON DELETE CASCADE,
+                FOREIGN KEY (result_artifact_id) REFERENCES artifacts (id)
+            )
+            """,
+            """
+            CREATE INDEX benchmark_suites_by_workspace
+                ON benchmark_suites (workspace_id, created_at)
+            """,
+            # §17.1 `benchmark_trials`. The unique constraint is FR-091's
+            # one-to-one guarantee at the storage layer: "a source run cannot be
+            # counted twice in one benchmark". Enforced by the database rather
+            # than by a read-then-write, which two concurrent binders would both
+            # pass.
+            #
+            # `outcome_run_id` and `evaluation_run_id` carry no foreign keys for
+            # the same reason `evaluation_cases.source_run_id` does not: an
+            # imported report describes work done elsewhere, and a key would
+            # assert that this database has the run it names. The service
+            # validates a binding against rows that exist here before accepting
+            # it, which is a check about *this* workspace rather than a
+            # constraint that would make an imported artifact unstorable.
+            """
+            CREATE TABLE benchmark_trials (
+                id                          TEXT NOT NULL PRIMARY KEY,
+                benchmark_suite_id          TEXT NOT NULL,
+                external_source_artifact_id TEXT NOT NULL,
+                external_trial_id           TEXT NOT NULL,
+                scenario_id                 TEXT NOT NULL,
+                contract_content_hash       TEXT,
+                scenario_mode               TEXT,
+                failure_profile             TEXT,
+                correlation_mode            TEXT NOT NULL,
+                outcome_run_id              TEXT,
+                evaluation_run_id           TEXT,
+                call_level_result           TEXT NOT NULL,
+                outcome_result              TEXT NOT NULL,
+                eligibility                 TEXT NOT NULL,
+                exclusion_reason            TEXT,
+                metadata_json               TEXT NOT NULL,
+                created_at                  TEXT NOT NULL,
+                UNIQUE (benchmark_suite_id, external_trial_id),
+                FOREIGN KEY (benchmark_suite_id)
+                    REFERENCES benchmark_suites (id) ON DELETE CASCADE,
+                FOREIGN KEY (external_source_artifact_id) REFERENCES artifacts (id)
+            )
+            """,
+            # The partial uniqueness §17.1 asks for: "each non-null
+            # `outcome_run_id` and `evaluation_run_id` within a suite". Partial
+            # indexes rather than table constraints because SQLite treats NULLs
+            # as distinct in a UNIQUE constraint, which would let every unbound
+            # trial coexist — correct — but would also silently permit two
+            # bound trials to share a run if the columns were nullable in one
+            # constraint together.
+            """
+            CREATE UNIQUE INDEX benchmark_trials_one_outcome_run
+                ON benchmark_trials (benchmark_suite_id, outcome_run_id)
+                WHERE outcome_run_id IS NOT NULL
+            """,
+            """
+            CREATE UNIQUE INDEX benchmark_trials_one_evaluation_run
+                ON benchmark_trials (benchmark_suite_id, evaluation_run_id)
+                WHERE evaluation_run_id IS NOT NULL
+            """,
+            """
+            CREATE INDEX benchmark_trials_by_suite
+                ON benchmark_trials (benchmark_suite_id, created_at)
+            """,
+        ),
+    ),
 )
 
 #: §17.1's Tier 2 eval tables, added by migration 2. Named separately from
@@ -446,6 +544,15 @@ TIER_TWO_EVAL_TABLES: Final[tuple[str, ...]] = (
     "evaluation_cases",
     "evaluation_runs",
     "evaluation_events",
+)
+
+#: §17.1's Tier 2 benchmark tables, added by migration 3. Separate from the eval
+#: tuple above for the same reason that one is separate from Tier 1: the M3 gate
+#: asserts each milestone's tables arrived in its own migration, and one merged
+#: tuple could not tell migration 2's tables from migration 3's.
+TIER_TWO_BENCHMARK_TABLES: Final[tuple[str, ...]] = (
+    "benchmark_suites",
+    "benchmark_trials",
 )
 
 

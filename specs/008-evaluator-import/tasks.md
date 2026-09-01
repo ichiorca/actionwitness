@@ -2,10 +2,10 @@
 
 Cite the T-ID in every commit that advances it.
 
-- [ ] T1 — Complete ADR-0005 and pin the supported `webmcp-evals` reporter
+- [x] T1 — Complete ADR-0005 and pin the supported `webmcp-evals` reporter
       fixture/schema and normalizer version. The architecture lane's ADR record
       tests currently fail on this record; they pass as part of this task.
-- [ ] T2 — Benchmark suite and trial persistence, with the source/derived
+- [x] T2 — Benchmark suite and trial persistence, with the source/derived
       artifact relationships. A derived artifact references its sources; a
       source artifact is never rewritten.
 - [ ] T3 — Enforce the 1 MiB import and 100-trial limits **before** parsing,

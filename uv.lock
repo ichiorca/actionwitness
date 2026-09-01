@@ -69,7 +69,9 @@ dependencies = [
     { name = "actionwitness-core" },
     { name = "aiosqlite" },
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "pydantic" },
+    { name = "starlette" },
     { name = "uvicorn" },
 ]
 
@@ -78,7 +80,9 @@ requires-dist = [
     { name = "actionwitness-core", editable = "packages/actionwitness_core" },
     { name = "aiosqlite", specifier = "==0.22.1" },
     { name = "fastapi", specifier = ">=0.115" },
+    { name = "httpx", specifier = ">=0.27" },
     { name = "pydantic", specifier = ">=2.9" },
+    { name = "starlette", specifier = ">=0.40" },
     { name = "uvicorn", specifier = ">=0.30" },
 ]
 

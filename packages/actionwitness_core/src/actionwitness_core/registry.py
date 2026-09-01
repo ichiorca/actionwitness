@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from types import ModuleType
 
+from actionwitness_core.benchmarks import enums as benchmark_enums
 from actionwitness_core.contracts import enums as contract_enums
 from actionwitness_core.engine import enums as engine_enums
 from actionwitness_core.evals import enums as eval_enums
@@ -53,6 +54,7 @@ REGISTRY_MODULES: tuple[ModuleType, ...] = (
     # instead of shifting every existing one (the artifact is committed, and a
     # reordering would be a diff with no meaning).
     eval_enums,
+    benchmark_enums,
 )
 
 

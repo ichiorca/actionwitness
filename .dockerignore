@@ -1,0 +1,86 @@
+# Build-context exclusions for the release image (spec §29.1; constitution §8:
+# "Release artifacts contain no secrets, local paths, private fixtures,
+# generated build debris, or undeclared dependencies").
+#
+# This file is load-bearing, not an optimisation. Several of the paths below are
+# PRESENT in an operator's working tree and absent from git — the planning
+# documents and the local agent rig in particular. A build context assembled
+# from the working directory picks up whatever is on disk, so `.gitignore` does
+# not protect the image; only this file does. `tests/architecture` asserts the
+# entries that matter (`test_release_artifact_hygiene.py`).
+#
+# The Dockerfile also copies narrowly rather than `COPY . .`, so this is the
+# second lock rather than the only one.
+
+# --- planning inputs held locally by the operator, never shipped -------------
+docs/BUILD_ORDER.md
+docs/actionwitness-functional-spec.md
+docs/actionwitness-feature-recommendations.md
+docs/actionwitness-spec-v2.0-review.md
+docs/actionwitness-top3-features-round2.md
+
+# --- machine-local development rig (mirrors .gitignore's rig section) --------
+.cavesson/
+.gateweave/
+.tracing2eval/
+.codex/
+.agents/
+.claude/
+.gemini/
+.opencode/
+.antigravity/
+adapters/
+agents/
+commands/
+prompts/
+skills/
+hooks/
+evals/
+progress/
+cavesson.json
+cavesson.lock
+levels.json
+*.lock
+!uv.lock
+!**/package-lock.json
+
+# --- secrets and local state -------------------------------------------------
+.env
+.env.*
+!.env.example
+*.sqlite3
+*.db
+artifacts/
+
+# --- build debris and caches -------------------------------------------------
+**/node_modules/
+**/dist/
+**/build/
+**/.vite/
+**/__pycache__/
+**/*.py[cod]
+**/*.egg-info/
+.venv/
+**/.venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+
+# --- version control and editor noise ---------------------------------------
+.git/
+.gitignore
+.gitattributes
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# --- not part of a runtime image ---------------------------------------------
+# The suites run in CI against the source tree, not inside the shipped image;
+# `tests/fixtures` additionally carries checked-in evaluator reports that have no
+# business in a deployed artifact.
+tests/
+specs/
+memory/
+.github/
+render.yaml
