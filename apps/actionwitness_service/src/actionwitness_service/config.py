@@ -150,6 +150,11 @@ class HarnessSettings(_Frozen):
 
     environment: DeploymentEnvironment = DeploymentEnvironment.PRODUCTION
     database_path: str = DEFAULT_DATABASE_PATH
+    #: The operator's own origin, used to validate `Origin` on mutations
+    #: (§20.1). `None` means the documented local case, where the request's own
+    #: origin is compared instead — the harness is served same-origin, so a
+    #: legitimate page's `Origin` equals what it is posting to.
+    public_origin: str | None = None
 
     @property
     def secure_cookies(self) -> bool:
@@ -286,7 +291,22 @@ def _resolve_harness(environ: Mapping[str, str]) -> HarnessSettings:
         else DeploymentEnvironment.PRODUCTION
     )
     database_path = environ.get("HARNESS_DATABASE_PATH", "").strip() or DEFAULT_DATABASE_PATH
-    return HarnessSettings(environment=environment, database_path=database_path)
+
+    # Shared with the Shopify module, which requires it; here it is optional.
+    # A value that will not parse is dropped rather than accepted loosely: a
+    # half-parsed origin compared by equality refuses everything, which is the
+    # safe direction, and the fallback below is the documented local rule.
+    raw_origin = environ.get("HARNESS_PUBLIC_ORIGIN", "").strip()
+    try:
+        public_origin = _exact_origin(raw_origin, require_https=False) if raw_origin else None
+    except ValueError:
+        public_origin = None
+
+    return HarnessSettings(
+        environment=environment,
+        database_path=database_path,
+        public_origin=public_origin,
+    )
 
 
 def _resolve_buggy_store(

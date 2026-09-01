@@ -28,11 +28,18 @@ from typing import Final
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import Response
+from starlette.responses import JSONResponse, Response
 
+from actionwitness_service.api.errors import ApiError
+from actionwitness_service.api.origins import OriginPolicy
 from actionwitness_service.application.workspaces import WORKSPACE_COOKIE_NAME, WorkspaceStore
 
-__all__ = ["WORKSPACE_COOKIE_MAX_AGE_SECONDS", "WorkspaceCookieMiddleware", "workspace_id_of"]
+__all__ = [
+    "WORKSPACE_COOKIE_MAX_AGE_SECONDS",
+    "OriginMiddleware",
+    "WorkspaceCookieMiddleware",
+    "workspace_id_of",
+]
 
 #: Seven days. Project-allocated: FR-005 fixes no lifetime, and FR-009's
 #: stale-workspace cleanup is the real bound on how long a workspace lives.
@@ -85,3 +92,31 @@ class WorkspaceCookieMiddleware(BaseHTTPMiddleware):
     @staticmethod
     def _is_exempt(path: str) -> bool:
         return path.startswith(_EXEMPT_PREFIXES)
+
+
+class OriginMiddleware(BaseHTTPMiddleware):
+    """Refuses a mutating request whose `Origin` is not the harness's (§20.1).
+
+    Registered *after* the cookie middleware so that it runs *before* it —
+    Starlette applies middleware in reverse registration order. That ordering
+    is deliberate: a mutation from a disallowed origin should be refused
+    without first minting a workspace for whoever sent it, or a hostile page
+    could fill the table by being rejected repeatedly.
+
+    The refusal is built here rather than raised, because an exception thrown
+    from middleware travels outside the application's exception handlers and
+    would surface as a bare 500 with no envelope.
+    """
+
+    def __init__(self, app: object, *, policy: OriginPolicy) -> None:
+        super().__init__(app)  # type: ignore[arg-type]
+        self._policy = policy
+
+    async def dispatch(
+        self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        try:
+            self._policy.check(request)
+        except ApiError as refusal:
+            return JSONResponse(status_code=refusal.http_status, content=refusal.as_envelope())
+        return await call_next(request)

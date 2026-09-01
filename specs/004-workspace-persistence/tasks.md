@@ -27,7 +27,7 @@ Cite the T-ID in every commit that advances it.
 - [x] T6 — Workspace authorization on every stateful endpoint resolved from the
       cookie (FR-006). Two-client tests prove a known identifier grants nothing:
       cross-workspace run, contract, confirmation, and artifact access all fail.
-- [ ] T7 — `Origin` validation on mutations and the single §15.8 error envelope:
+- [x] T7 — `Origin` validation on mutations and the single §15.8 error envelope:
       core `CoreError` codes acquire an HTTP status here, invalid transitions
       return 409 using `journeys.transitions`, and no internal detail or
       traceback reaches a client.

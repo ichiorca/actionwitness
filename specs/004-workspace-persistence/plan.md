@@ -292,3 +292,48 @@ scope, and T13's exit gate re-checks isolation across whatever is mounted then.
 A transaction opened as a FastAPI dependency lives for the whole request,
 including any I/O the handler performs — exactly the "held across a wait" that
 ADR-0003 forbids. Handlers open their own around the work and nothing else.
+
+### T7 — a missing `Origin` is allowed; a mismatching one never is
+
+§20.1 requires validating `Origin` on mutating requests but does not say what to
+do when there is none. Browsers send it on every mutating request, same-origin
+included, so absence means the request did not come from a page — a CLI, a test,
+or an agent, none of which carry the ambient cookie authority a cross-site page
+does. Refusing them would break the documented `actionwitness` CLI without
+closing anything: an attacker who can set a header can also omit one, so
+trusting absence *less* than presence only inconveniences honest clients.
+`SameSite=Strict` remains the primary control; this is the second lock.
+
+Comparison is equality after normalization — never prefix, suffix, or host
+containment. `https://harness.test.evil.example` and `https://evilharness.test`
+are both in the test table, because those are the two shapes a "close enough"
+rule accepts.
+
+### T7 — `Origin` is checked before the workspace cookie is issued
+
+Starlette applies middleware in reverse registration order, so the origin check
+is registered last in order to run first. Without that ordering a hostile page
+could fill the workspaces table by being rejected repeatedly, and a test asserts
+that a refused origin leaves no row behind.
+
+The refusal is *built* inside the middleware rather than raised: an exception
+thrown from middleware travels outside the application's exception handlers and
+would reach the client as a bare 500 with no envelope.
+
+### T7 — `HARNESS_PUBLIC_ORIGIN` is optional for the harness, required for Shopify
+
+The same variable already exists for the Shopify module, which cannot run
+without it. Here it is optional: when absent — the documented local case — the
+request's own origin is compared instead, which is sound because §20.1 requires
+the frontend and API to be served same-origin. An unparseable value is dropped
+rather than accepted loosely.
+
+### T7 — three exception handlers, in widening order
+
+`ApiError` → its registry status and envelope. `CoreError` → `error_from_core`,
+where `INVALID_STATE_TRANSITION` becomes §16's 409 and an unmapped code becomes
+a 500 carrying none of its own text. `Exception` → a fixed `HARNESS_ERROR`
+message with no traceback, class name, or exception text, because an unhandled
+failure is exactly the case where the message is most likely to name a table, a
+path, or a value. Tests assert the absence of specific leaked substrings rather
+than merely the status.

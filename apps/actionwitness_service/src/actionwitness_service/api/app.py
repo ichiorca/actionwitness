@@ -19,11 +19,13 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 
+from actionwitness_core.kernel import CoreError
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from actionwitness_service.api.errors import ApiError
-from actionwitness_service.api.middleware import WorkspaceCookieMiddleware
+from actionwitness_service.api.errors import ApiError, ApiErrorCode, error_from_core
+from actionwitness_service.api.middleware import OriginMiddleware, WorkspaceCookieMiddleware
+from actionwitness_service.api.origins import OriginPolicy
 from actionwitness_service.application.workspaces import WorkspaceStore
 from actionwitness_service.config import ServiceSettings
 from actionwitness_service.persistence.database import Database
@@ -60,11 +62,15 @@ def create_app(
     app.state.workspaces = workspaces
     app.state.locks = WorkspaceLocks()
 
+    # Starlette runs middleware in reverse registration order, so the origin
+    # check registered last runs first: a mutation from a disallowed origin is
+    # refused before it can create a workspace (§20.1).
     app.add_middleware(
         WorkspaceCookieMiddleware,
         store=workspaces,
         secure=settings.harness.secure_cookies,
     )
+    app.add_middleware(OriginMiddleware, policy=OriginPolicy(settings.harness.public_origin))
 
     @app.exception_handler(ApiError)
     async def deliberate_refusal(request: Request, exc: ApiError) -> JSONResponse:
@@ -77,6 +83,31 @@ def create_app(
         cannot widen either.
         """
         return JSONResponse(status_code=exc.http_status, content=exc.as_envelope())
+
+    @app.exception_handler(CoreError)
+    async def core_failure(request: Request, exc: CoreError) -> JSONResponse:
+        """A domain failure acquires its HTTP status here and nowhere else.
+
+        The core carries no status of its own — it has to install alone — so
+        this is the seam where `INVALID_STATE_TRANSITION` becomes §16's 409 and
+        an unmapped code becomes a 500 with no text of its own.
+        """
+        translated = error_from_core(exc)
+        return JSONResponse(status_code=translated.http_status, content=translated.as_envelope())
+
+    @app.exception_handler(Exception)
+    async def unhandled_failure(request: Request, exc: Exception) -> JSONResponse:
+        """The last line: no traceback, no exception text, no class name.
+
+        §15.8 gives one envelope and §20 forbids leaking internals. An
+        unhandled exception is precisely the case where the message is most
+        likely to name a table, a path, or a value, so none of it is forwarded
+        — the detail belongs in the server log, which is not this response.
+        """
+        refusal = ApiError(
+            ApiErrorCode.HARNESS_ERROR, "The harness could not complete the request."
+        )
+        return JSONResponse(status_code=refusal.http_status, content=refusal.as_envelope())
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:  # spec §29.1
