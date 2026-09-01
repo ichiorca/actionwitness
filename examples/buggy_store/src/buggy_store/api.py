@@ -236,6 +236,19 @@ def create_app(*, database_path: Path | str, service: StoreService | None = None
             "order": state.target_state.order.canonical_document(),
         }
 
+    @app.get(f"{API_PREFIX}/store/state")
+    async def read_state(workspace_id: WorkspaceDependency) -> dict[str, Any]:
+        """The complete canonical state document (§13.2).
+
+        Project-allocated alongside §15.5's "read cart state". The observation
+        provider needs the *whole* target state, not the cart: §13.2 includes
+        `preferences` precisely so a journey can change a path no cart contract
+        asserts, and an observation that could not see it would make §12.16's
+        undeclared-change detection structurally impossible.
+        """
+        state = await resolved.read_state(workspace_id)
+        return state.canonical_document()
+
     @app.post(f"{API_PREFIX}/store/cart/mutations")
     async def mutate_cart(
         workspace_id: WorkspaceDependency, body: CartMutationRequest

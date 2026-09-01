@@ -81,10 +81,20 @@ class RetrySemantics(StrEnum):
     `not_retryable` is the default an adapter should declare when it is unsure.
     Constitution §5: an ambiguous outcome is never automatically retried, because
     a retry that is not idempotent duplicates the mutation it was meant to repair.
+
+    `naturally_idempotent` exists because Appendix D.2's `apply_discount` fits
+    none of the other three: it mutates, so it is not read-only safe; it carries
+    no request ID, so it is not idempotent *by* one; and calling it twice cannot
+    duplicate anything, so declaring it not-retryable would publish a false
+    statement about the target and make every caller more conservative than the
+    tool requires. Added when the Buggy Store adapter needed it, which
+    `specs/003-buggy-store-target/plan.md` names as the signal that the ports
+    were underspecified rather than that the target was unusual.
     """
 
     READ_ONLY_SAFE = "read_only_safe"
     IDEMPOTENT_BY_REQUEST_ID = "idempotent_by_request_id"
+    NATURALLY_IDEMPOTENT = "naturally_idempotent"
     NOT_RETRYABLE = "not_retryable"
 
 
@@ -93,6 +103,12 @@ RETRY_SEMANTICS_DESCRIPTIONS: Mapping[RetrySemantics, str] = {
     RetrySemantics.IDEMPOTENT_BY_REQUEST_ID: (
         "Repeating the same request ID with identical intent returns the first "
         "persisted result; reuse with changed intent is a conflict, not a retry."
+    ),
+    RetrySemantics.NATURALLY_IDEMPOTENT: (
+        "Changes state, but repeating the same call cannot change it a second time, "
+        "so it needs no request ID. Appendix D.2's apply_discount is the worked "
+        "example: reapplying the active code is a successful no-op reporting "
+        "already_applied."
     ),
     RetrySemantics.NOT_RETRYABLE: (
         "Repetition may duplicate the mutation, so an ambiguous outcome is surfaced "

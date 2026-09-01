@@ -135,6 +135,10 @@ def test_retry_semantics_offer_an_explicit_not_retryable_value() -> None:
     assert _values(RetrySemantics) == {
         "read_only_safe",
         "idempotent_by_request_id",
+        # A mutation that cannot be duplicated by repetition and carries no
+        # request ID - Appendix D.2's `apply_discount`. Without it such a tool
+        # would have to publish `not_retryable`, which is a false statement.
+        "naturally_idempotent",
         "not_retryable",
     }
 

@@ -188,6 +188,7 @@
       "members": {
         "read_only_safe": "Changes nothing, so repetition is always safe.",
         "idempotent_by_request_id": "Repeating the same request ID with identical intent returns the first persisted result; reuse with changed intent is a conflict, not a retry.",
+        "naturally_idempotent": "Changes state, but repeating the same call cannot change it a second time, so it needs no request ID. Appendix D.2's apply_discount is the worked example: reapplying the active code is a successful no-op reporting already_applied.",
         "not_retryable": "Repetition may duplicate the mutation, so an ambiguous outcome is surfaced rather than retried."
       }
     },

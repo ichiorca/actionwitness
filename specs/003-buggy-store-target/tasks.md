@@ -29,17 +29,17 @@ Cite the T-ID in every commit that advances it.
 - [ ] T9 — The store runs and tests with every assurance package absent: extend
       the architecture lane with a standalone install/run job for
       `examples/buggy_store`, mirroring the core-only job from 002-T13.
-- [ ] T10 — Adapter: the five Appendix D.2 `TargetToolSpec` records and schemas,
+- [x] T10 — Adapter: the five Appendix D.2 `TargetToolSpec` records and schemas,
       the §13.4 effect map, and allowlist enforcement; conformance tests
       including rejection of a tool outside the allowlist.
-- [ ] T11 — Adapter `prepare`/`execute`/`observe` through the ADR-0001 injected
+- [x] T11 — Adapter `prepare`/`execute`/`observe` through the ADR-0001 injected
       `httpx.AsyncClient` (ASGI transport in tests); canonical observation
       mapped under `target` with provider `buggy_store_state` and
       `state_version` as metadata; a test proves no store service import.
-- [ ] T12 — Buggy Store contract templates in the integration package: all three
+- [x] T12 — Buggy Store contract templates in the integration package: all three
       required prebuilt contracts seeded and exposed, with the retry contract
       exercising correct idempotent behavior and the broken duplicate-retry
       profile unavailable.
-- [ ] T13 — Trace one target call end to end — harness-facing arguments →
+- [x] T13 — Trace one target call end to end — harness-facing arguments →
       adapter HTTP request → store mutation → authoritative adapter observation
       — and verify the full exit gate.
