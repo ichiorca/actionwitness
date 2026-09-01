@@ -117,3 +117,6 @@ Thumbs.db
 # Storefront build output (examples/buggy_store/frontend). The lockfile is
 # committed; the bundle is not.
 examples/buggy_store/frontend/dist/
+
+# Generated evidence written by a locally started service.
+/artifacts/
