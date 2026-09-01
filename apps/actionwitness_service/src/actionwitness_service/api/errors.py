@@ -54,6 +54,9 @@ class ApiErrorCode(StrEnum):
     PROPOSAL_RUN_NOT_ELIGIBLE = "PROPOSAL_RUN_NOT_ELIGIBLE"
     SURFACE_BASELINE_ALREADY_SET = "SURFACE_BASELINE_ALREADY_SET"
     SELF_OBSERVATION_LOOP = "SELF_OBSERVATION_LOOP"
+    TRIAL_BINDING_AMBIGUOUS = "TRIAL_BINDING_AMBIGUOUS"
+    TRIAL_ALREADY_BOUND = "TRIAL_ALREADY_BOUND"
+    BENCHMARK_BINDINGS_SEALED = "BENCHMARK_BINDINGS_SEALED"
     IDEMPOTENCY_KEY_REUSED = "IDEMPOTENCY_KEY_REUSED"
 
     # Consent
@@ -195,6 +198,42 @@ API_ERROR_DESCRIPTIONS: Mapping[ApiErrorCode, ApiErrorSpec] = {
         description="A proposal-mode run cannot generate a regression eval case.",
         spec_ref="§15.8",
         provenance="spec",
+    ),
+    # §26.5 requires duplicate, cross-workspace, and ambiguous bindings to be
+    # rejected. They get distinct codes because a caller has to tell them apart:
+    # an ambiguous binding needs a human to choose, a duplicate needs a
+    # different trial, and a sealed suite needs a new suite entirely. One shared
+    # code would leave that to string matching on a message.
+    ApiErrorCode.TRIAL_BINDING_AMBIGUOUS: ApiErrorSpec(
+        http_status=409,
+        retryable=False,
+        description=(
+            "The trial carries no stable address of its own, so FR-091 permits only "
+            "an explicit one-to-one choice. The importer never guesses a binding "
+            "from list position, similar text, or timestamps."
+        ),
+        spec_ref="FR-091",
+        provenance="project",
+    ),
+    ApiErrorCode.TRIAL_ALREADY_BOUND: ApiErrorSpec(
+        http_status=409,
+        retryable=False,
+        description=(
+            "The trial, or the run it names, is already bound in this suite. §17.1: "
+            "a source run cannot be counted twice in one benchmark."
+        ),
+        spec_ref="FR-091 / §17.1",
+        provenance="project",
+    ),
+    ApiErrorCode.BENCHMARK_BINDINGS_SEALED: ApiErrorSpec(
+        http_status=409,
+        retryable=False,
+        description=(
+            "Bindings became immutable when the suite entered `ready`. §16.4: a "
+            "changed binding requires a new suite."
+        ),
+        spec_ref="§16.4",
+        provenance="project",
     ),
     ApiErrorCode.SURFACE_BASELINE_ALREADY_SET: ApiErrorSpec(
         http_status=409,

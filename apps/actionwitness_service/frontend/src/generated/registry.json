@@ -431,6 +431,13 @@
       "spec_ref": "§15.8",
       "provenance": "spec"
     },
+    "BENCHMARK_BINDINGS_SEALED": {
+      "http_status": 409,
+      "retryable": false,
+      "description": "Bindings became immutable when the suite entered `ready`. §16.4: a changed binding requires a new suite.",
+      "spec_ref": "§16.4",
+      "provenance": "project"
+    },
     "CANDIDATES_UNCURATED": {
       "http_status": 409,
       "retryable": false,
@@ -584,6 +591,20 @@
       "description": "The selected contract's target adapter is not registered or its module is disabled. A missing optional target is a bounded unavailable state, never a process failure.",
       "spec_ref": "FR-021",
       "provenance": "spec"
+    },
+    "TRIAL_ALREADY_BOUND": {
+      "http_status": 409,
+      "retryable": false,
+      "description": "The trial, or the run it names, is already bound in this suite. §17.1: a source run cannot be counted twice in one benchmark.",
+      "spec_ref": "FR-091 / §17.1",
+      "provenance": "project"
+    },
+    "TRIAL_BINDING_AMBIGUOUS": {
+      "http_status": 409,
+      "retryable": false,
+      "description": "The trial carries no stable address of its own, so FR-091 permits only an explicit one-to-one choice. The importer never guesses a binding from list position, similar text, or timestamps.",
+      "spec_ref": "FR-091",
+      "provenance": "project"
     },
     "WORKSPACE_LIMIT_EXCEEDED": {
       "http_status": 409,

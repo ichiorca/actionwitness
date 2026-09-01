@@ -168,6 +168,11 @@ def test_project_allocated_codes_are_visibly_distinguished() -> None:
         if entry.provenance == "project"
     )
     assert project_codes == [
+        # 008-T5. §16.4 makes bindings immutable at `ready` and sends a change to
+        # a new suite, but names no code for the refusal. Distinct from the two
+        # below because the caller's remedy is different: not "choose again" or
+        # "pick another trial", but "start a new suite".
+        "BENCHMARK_BINDINGS_SEALED",
         # 004-T2/T7. The catch-all for an internal fault, so an unmapped failure
         # surfaces as a stable 500 rather than as a leaked message.
         "HARNESS_ERROR",
@@ -180,6 +185,16 @@ def test_project_allocated_codes_are_visibly_distinguished() -> None:
         # grant nothing; deliberately 404, not 403, because a 403 would confirm
         # that the identifier names something real.
         "RESOURCE_NOT_FOUND",
+        # 008-T5. §26.5 requires duplicate bindings to be rejected and §17.1
+        # forbids counting one source run twice; neither names a code. Separate
+        # from the ambiguity code because a duplicate is resolved by choosing a
+        # different trial or run, never by confirming the same one.
+        "TRIAL_ALREADY_BOUND",
+        # 008-T5. FR-091 requires an "explicit one-to-one developer choice" when
+        # a stable trial ID is absent, and §26.5 requires ambiguous bindings to
+        # be rejected, but neither names a code. It is the one refusal here whose
+        # remedy is a human decision rather than a different request.
+        "TRIAL_BINDING_AMBIGUOUS",
         # 003. Contention on the per-workspace write lock (ADR-0003).
         "WORKSPACE_LOCK_TIMEOUT",
     ], (

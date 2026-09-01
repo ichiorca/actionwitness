@@ -14,7 +14,7 @@ Cite the T-ID in every commit that advances it.
 - [x] T4 — Normalize only the required call-selection, arguments, order, error,
       trajectory, and reproducibility fields. Preserve unsupported metadata as
       `null`.
-- [ ] T5 — Require explicit one-to-one trial binding, validated and saved before
+- [x] T5 — Require explicit one-to-one trial binding, validated and saved before
       the suite becomes ready. Never guess from order, timestamps, or similar
       text.
 - [ ] T6 — Isolated imported-trajectory replay through the registered adapter
