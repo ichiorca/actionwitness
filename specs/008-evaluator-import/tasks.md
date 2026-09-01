@@ -30,7 +30,7 @@ Cite the T-ID in every commit that advances it.
       and interpretation guardrails.
 - [x] T11 — Check in at least three scenarios with three trials each, including
       a call-level pass / outcome fail trial labeled `silent_outcome_defect`.
-- [ ] T12 — The exit gate: the complete fixture path with Node unavailable and
+- [x] T12 — The exit gate: the complete fixture path with Node unavailable and
       no LLM or Shopify credentials; malformed, oversized, unsupported,
       ambiguous, duplicate, and cross-workspace inputs fail closed; matrix cells
       sum to eligible trials and eligible plus excluded equals total, with

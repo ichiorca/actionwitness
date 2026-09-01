@@ -411,12 +411,77 @@ EXIT_GATE_009: dict[str, tuple[str, str]] = {
     ),
 }
 
+#: 008's exit gate, each criterion to its covering test.
+EXIT_GATE_008: dict[str, tuple[str, str]] = {
+    "1a. the import path is configured without any credential": (
+        "tests/integration/test_008_exit_gate.py",
+        "test_gate_1_the_import_path_is_configured_without_any_credential",
+    ),
+    "1b. the complete fixture path runs with no LLM or Shopify credential": (
+        "tests/integration/test_008_exit_gate.py",
+        "test_gate_1_the_complete_fixture_path_runs_with_no_credential",
+    ),
+    "1c. …and with Node unavailable — the importer runs no process": (
+        "tests/integration/test_008_exit_gate.py",
+        "test_gate_1_no_node_or_subprocess_is_used",
+    ),
+    "2a. malformed, unsupported, and unpinned reports fail closed": (
+        "tests/integration/test_008_exit_gate.py",
+        "test_gate_2_unreadable_reports_fail_closed",
+    ),
+    "2b. an oversized report fails closed before parsing": (
+        "tests/integration/test_008_exit_gate.py",
+        "test_gate_2_an_oversized_report_fails_closed",
+    ),
+    "2c. an ambiguous binding fails closed": (
+        "tests/integration/test_008_exit_gate.py",
+        "test_gate_2_an_ambiguous_binding_fails_closed",
+    ),
+    "2d. a duplicate binding fails closed": (
+        "tests/integration/test_008_exit_gate.py",
+        "test_gate_2_a_duplicate_binding_fails_closed",
+    ),
+    "2e. a cross-workspace benchmark fails closed": (
+        "tests/integration/test_008_exit_gate.py",
+        "test_gate_2_a_cross_workspace_benchmark_fails_closed",
+    ),
+    "3a. matrix cells sum to eligible; eligible plus excluded equals total": (
+        "tests/integration/test_008_exit_gate.py",
+        "test_gate_3_the_counting_identities_hold_on_the_fixture",
+    ),
+    "3b. errors are a disclosed subset of excluded, never a third population": (
+        "tests/integration/test_008_exit_gate.py",
+        "test_gate_3_errors_are_a_disclosed_subset_never_a_third_population",
+    ),
+    "3c. an empty population yields null rates rather than zeroes": (
+        "tests/integration/test_008_exit_gate.py",
+        "test_gate_3_an_empty_population_yields_null_rates_not_zeroes",
+    ),
+    "4a. source kinds, scenario modes, and failure profiles are never pooled": (
+        "tests/integration/test_008_exit_gate.py",
+        "test_gate_4_populations_are_never_pooled",
+    ),
+    "4b. correlation modes stay separate": (
+        "tests/integration/test_008_exit_gate.py",
+        "test_gate_4_a_suite_refuses_a_trial_from_the_other_mode",
+    ),
+    "5a. AC-16 passes from the checked-in fixture": (
+        "tests/integration/test_008_exit_gate.py",
+        "test_gate_5_ac_16_passes_from_the_checked_in_fixture",
+    ),
+    "5b. …and the Tier 2 gate still needs AC-25 and AC-26 from later milestones": (
+        "tests/integration/test_008_exit_gate.py",
+        "test_gate_5_the_tier_two_gate_needs_more_than_this_milestone",
+    ),
+}
+
 MAPS = {
     "003": EXIT_GATE_003,
     "004": EXIT_GATE_004,
     "005": EXIT_GATE_005,
     "006": EXIT_GATE_006,
     "007": EXIT_GATE_007,
+    "008": EXIT_GATE_008,
     "009": EXIT_GATE_009,
 }
 
@@ -522,7 +587,15 @@ def test_every_exit_gate_criterion_names_a_covering_test(milestone: str) -> None
 #: criterion in its own right, and 007 lists seven. A shared constant would have
 #: to be loosened to admit each of them, and loosening it is exactly how a
 #: dropped criterion gets through.
-PUBLISHED_CRITERIA: dict[str, int] = {"003": 5, "004": 5, "005": 5, "006": 6, "007": 7, "009": 6}
+PUBLISHED_CRITERIA: dict[str, int] = {
+    "003": 5,
+    "004": 5,
+    "005": 5,
+    "006": 6,
+    "007": 7,
+    "008": 5,
+    "009": 6,
+}
 
 
 @pytest.mark.architecture
