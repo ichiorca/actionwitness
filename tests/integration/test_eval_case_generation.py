@@ -94,9 +94,9 @@ async def _failed_run(visitor: httpx.AsyncClient) -> tuple[str, str]:
     return workspace_id, run_id
 
 
-async def _generate(database: Database, workspace_id: str, run_id: str):
+async def _generate(database: Database, workspace_id: str, run_id: str, registry=None):
     async with database.transaction() as work:
-        return await EvalCaseService(work, workspace_id).generate(run_id)
+        return await EvalCaseService(work, workspace_id, registry).generate(run_id)
 
 
 # --- generation --------------------------------------------------------------
@@ -363,3 +363,54 @@ async def test_another_workspaces_run_cannot_be_turned_into_a_case(
     async with database.reading() as work:
         rows = await work.fetch_all("SELECT id FROM evaluation_cases")
     assert rows == []
+
+
+# --- §24.2's content rules, through the real service -------------------------
+
+
+async def test_the_fixture_keeps_only_what_the_contract_needs(stack: FastAPI) -> None:
+    """§24.2 step 2, with a real recorded observation rather than a literal.
+
+    The canonical contract asserts on the cart and the order, so a fixture
+    carrying the store's other state has been trimmed — and `complete` says so,
+    which is what lets the runner tell "small because nothing else mattered"
+    from "small because somebody trimmed it wrongly".
+    """
+    # Arrange
+    database: Database = stack.state.database
+    async with client(stack) as visitor:
+        workspace_id, run_id = await _failed_run(visitor)
+
+    # Act
+    case = (await _generate(database, workspace_id, run_id, stack.state.adapters)).case
+
+    # Assert
+    assert set(case.fixture.target_state) <= {"cart", "order"}
+    assert "cart" in case.fixture.target_state
+    assert case.fixture.content_hash.startswith("sha256:")
+
+
+async def test_a_read_only_call_feeding_a_mutation_survives_minimization(
+    stack: FastAPI,
+) -> None:
+    """§24.2 step 3, through the adapter's own read-only metadata.
+
+    `search_catalog` is read-only and nothing asserts on it, but a mutation
+    follows it — and nothing here can prove the product id it returned was not
+    what that mutation used. Keeping it is the conservative direction, and the
+    one that keeps the replay able to start.
+    """
+    # Arrange
+    database: Database = stack.state.database
+    async with client(stack) as visitor:
+        workspace_id, run_id = await _failed_run(visitor)
+
+    # Act
+    case = (await _generate(database, workspace_id, run_id, stack.state.adapters)).case
+
+    # Assert
+    assert [step.tool for step in case.trajectory] == [
+        "search_catalog",
+        "update_cart",
+        "apply_discount",
+    ]

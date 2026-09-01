@@ -9,7 +9,7 @@ Cite the T-ID in every commit that advances it.
 - [x] T2 — Generate a case from a terminal failed or warning-bearing run, and
       only from one. Idempotent: the same source run yields the same case, and a
       proposal run is refused with `PROPOSAL_RUN_NOT_ELIGIBLE`.
-- [ ] T3 — Case content per §24.2: embed the source contract verbatim and verify
+- [x] T3 — Case content per §24.2: embed the source contract verbatim and verify
       its stored hash first, minimize the fixture (retaining the complete
       canonical state when the contract carries `no_undeclared_changes`), drop a
       read-only call only when it is irrelevant to every check and later

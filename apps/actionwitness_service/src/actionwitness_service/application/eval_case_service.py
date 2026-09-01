@@ -32,6 +32,7 @@ from actionwitness_core.contracts.models import OutcomeContract
 from actionwitness_core.engine.enums import CheckStatus, FailureClassification
 from actionwitness_core.evals.enums import ConfirmationStrategy
 from actionwitness_core.evals.factory import build_case
+from actionwitness_core.evals.minimize import minimize_fixture, prune_trajectory
 from actionwitness_core.evals.models import (
     CASE_SCHEMA_VERSION,
     RegressionEvalCase,
@@ -81,9 +82,13 @@ class GeneratedCase:
 class EvalCaseService:
     """Loads a run's immutable evidence and turns it into a portable case."""
 
-    def __init__(self, work: UnitOfWork, workspace_id: str) -> None:
+    def __init__(self, work: UnitOfWork, workspace_id: str, registry: Any = None) -> None:
         self._work = work
         self._workspace_id = workspace_id
+        #: Optional so a caller that only reads cases needs no adapter registry.
+        #: Generation without one keeps the trajectory whole rather than
+        #: guessing which calls are read-only.
+        self._registry = registry
 
     async def generate(self, run_id: str) -> GeneratedCase:
         """§24.2, end to end. Refuses rather than guessing."""
@@ -92,6 +97,13 @@ class EvalCaseService:
         fixture_state, fixture_version = await self._initial_fixture(run_id)
         trajectory = await self._trajectory(run_id)
         findings = await self._findings(run_id)
+
+        # §24.2 steps 2-3. Minimization happens here, where the adapter is
+        # reachable: which tools are read-only is the adapter's published
+        # metadata, and a core that guessed from tool names would be inventing
+        # target knowledge.
+        minimized, is_complete = minimize_fixture(fixture_state, contract)
+        trajectory = prune_trajectory(trajectory, contract, self._read_only_tools(run))
 
         try:
             case = build_case(
@@ -108,12 +120,9 @@ class EvalCaseService:
                 adapter_id=str(run["target_adapter_id"]),
                 contract=contract,
                 stored_contract_hash=stored_hash,
-                fixture_state=fixture_state,
+                fixture_state=minimized,
                 fixture_state_version=fixture_version,
-                # T3 owns minimization; until then the complete canonical state
-                # is retained, which is the safe direction — a fixture that is
-                # too complete replays correctly, one that is too small cannot.
-                fixture_is_complete=True,
+                fixture_is_complete=is_complete,
                 trajectory=trajectory,
                 source_findings=findings,
                 confirmation_strategy=_strategy_for(contract),
@@ -253,6 +262,28 @@ class EvalCaseService:
                 actual=_loads(row["actual_json"]),
             )
             for row in rows
+        )
+
+    def _read_only_tools(self, run: Mapping[str, Any]) -> frozenset[str]:
+        """Which of this target's tools change nothing, per the adapter itself.
+
+        Read from the adapter's published specs rather than inferred from a
+        name: §9.1 makes the adapter the authority on its own surface, and a
+        harness that decided `get_cart` sounded harmless would be guessing about
+        a target it is not allowed to know.
+
+        An unavailable adapter yields an empty set, which drops nothing — the
+        safe direction, since a trajectory kept whole always replays.
+        """
+        from actionwitness_core.ports.enums import SideEffectClass
+
+        slot = self._registry.resolve(str(run["target_adapter_id"])) if self._registry else None
+        if slot is None or slot.factory is None:
+            return frozenset()
+        return frozenset(
+            spec.name
+            for spec in slot.factory().tool_specs()
+            if spec.side_effect is SideEffectClass.READ_ONLY
         )
 
     # -- persistence ---------------------------------------------------------
