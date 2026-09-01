@@ -80,6 +80,10 @@ async def read_workspace(
     async with database.reading() as work:
         status = dict(await WorkspaceService(work, workspace_id).status())
     status["capabilities"] = registry.capability_report()
+    # Additive alongside `capabilities`, which stays the target list the UI's
+    # capability bar renders. `modules` is the wider view a judge needs: a feature
+    # that was cut has to be visibly off rather than simply absent (§8, M11).
+    status["modules"] = registry.module_report()
     return status
 
 
