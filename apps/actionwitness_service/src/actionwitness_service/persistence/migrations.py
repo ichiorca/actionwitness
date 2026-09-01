@@ -534,9 +534,80 @@ MIGRATIONS: Final[tuple[Migration, ...]] = (
             """,
         ),
     ),
+    Migration(
+        version=4,
+        name="an evaluation run may originate from a benchmark trial",
+        statements=(
+            # §17.1 requires an eligible `imported_trajectory_replay` trial to
+            # reference an evaluation run once it executes — but migration 2
+            # shaped `evaluation_runs` around eval *cases* alone, with
+            # `evaluation_case_id NOT NULL`. A benchmark replay has no case, and
+            # both ways of satisfying the old shape were wrong: manufacturing a
+            # case to carry the trial fabricates provenance the harness never
+            # recorded, and leaving the trial unreferenced contradicts §17.1.
+            #
+            # The column is *widened*, never repurposed. Widening loses nothing
+            # — every existing row is copied first and keeps its case id — and
+            # the CHECK makes "exactly one origin" a schema fact rather than a
+            # convention some later writer can forget. SQLite cannot relax NOT
+            # NULL in place, so this is the documented table rebuild, running
+            # inside the migration runner's single transaction: an interrupted
+            # run rolls back rather than leaving the table half-copied.
+            #
+            # Operator-approved before it was written (008-T6).
+            """
+            CREATE TABLE evaluation_runs_rebuilt (
+                id                            TEXT NOT NULL PRIMARY KEY,
+                owner_workspace_id            TEXT NOT NULL,
+                execution_workspace_id        TEXT NOT NULL,
+                evaluation_case_id            TEXT,
+                benchmark_trial_id            TEXT,
+                evaluation_case_content_hash  TEXT NOT NULL,
+                mode                          TEXT NOT NULL,
+                environment_profile           TEXT NOT NULL,
+                implementation_version        TEXT NOT NULL,
+                build_commit                  TEXT,
+                status                        TEXT NOT NULL,
+                overall_result                TEXT,
+                started_at                    TEXT NOT NULL,
+                completed_at                  TEXT,
+                report_json                   TEXT,
+                CHECK (
+                    (evaluation_case_id IS NOT NULL AND benchmark_trial_id IS NULL)
+                    OR (evaluation_case_id IS NULL AND benchmark_trial_id IS NOT NULL)
+                ),
+                FOREIGN KEY (owner_workspace_id) REFERENCES workspaces (id) ON DELETE CASCADE,
+                FOREIGN KEY (execution_workspace_id) REFERENCES workspaces (id),
+                FOREIGN KEY (evaluation_case_id) REFERENCES evaluation_cases (id),
+                FOREIGN KEY (benchmark_trial_id) REFERENCES benchmark_trials (id)
+            )
+            """,
+            """
+            INSERT INTO evaluation_runs_rebuilt (
+                id, owner_workspace_id, execution_workspace_id, evaluation_case_id,
+                benchmark_trial_id, evaluation_case_content_hash, mode,
+                environment_profile, implementation_version, build_commit, status,
+                overall_result, started_at, completed_at, report_json
+            )
+            SELECT
+                id, owner_workspace_id, execution_workspace_id, evaluation_case_id,
+                NULL, evaluation_case_content_hash, mode,
+                environment_profile, implementation_version, build_commit, status,
+                overall_result, started_at, completed_at, report_json
+            FROM evaluation_runs
+            """,
+            "DROP TABLE evaluation_runs",
+            "ALTER TABLE evaluation_runs_rebuilt RENAME TO evaluation_runs",
+            """
+            CREATE INDEX evaluation_runs_by_owner
+                ON evaluation_runs (owner_workspace_id, started_at)
+            """,
+        ),
+    ),
 )
 
-#: §17.1's Tier 2 eval tables, added by migration 2. Named separately from
+#: §17.1's Tier 2 eval tables, added by migration 2. Migration 4 rebuilt
+#: `evaluation_runs` to widen one column; the table is still migration 2's. Named separately from
 #: `TIER_ONE_TABLES` so the M3 gate keeps asserting that nothing from Tier 2
 #: slipped into migration 1 — the check that would otherwise quietly weaken the
 #: moment this milestone landed.

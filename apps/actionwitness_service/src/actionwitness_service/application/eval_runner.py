@@ -167,6 +167,42 @@ class TrajectoryReplayer:
         already counts `eval` alongside `agent` for exactly that reason — so
         nothing here adjusts the classifier, and if it needed to, that would be
         a finding rather than a patch.
+
+        A case's own trajectory, handed to the shared step loop. 008's imported
+        trajectories go through the same loop with a different source, so the
+        allowlist check, the consent gate, and the per-call observation cannot
+        drift apart between the two callers.
+        """
+        return await self.replay_steps(
+            workspace_id,
+            case.trajectory,
+            identity=case.id,
+            surface=case.surface,
+            eval_run_id=eval_run_id,
+            before=before,
+            consent=consent,
+            work_factory=work_factory,
+        )
+
+    async def replay_steps(
+        self,
+        workspace_id: str,
+        steps: Sequence[TrajectoryStep],
+        *,
+        identity: str,
+        surface: Any = None,
+        eval_run_id: str,
+        before: Observation,
+        consent: Any,
+        work_factory: Callable[[], Any],
+    ) -> ReplayOutcome:
+        """Replay an allowlisted trajectory, whatever recorded it.
+
+        Extracted from `replay` when 008 needed to replay an *imported* trial's
+        trajectory (FR-091). Both callers share one loop deliberately: the
+        allowlist refusal, the deterministic consent gate, and the observation
+        after every step are the safety properties, and two copies of them are
+        two things to keep in step.
         """
         allowlisted = {spec.name for spec in self._adapter.tool_specs()}
         effect_paths = {spec.name: tuple(spec.effect_paths) for spec in self._adapter.tool_specs()}
@@ -176,7 +212,7 @@ class TrajectoryReplayer:
         stopped_at: int | None = None
         detail = ""
 
-        for step in case.trajectory:
+        for step in steps:
             if step.tool not in allowlisted:
                 # FR-086. Refused rather than skipped: skipping would replay a
                 # different journey and report its outcome as this case's.
@@ -186,7 +222,7 @@ class TrajectoryReplayer:
                     "not publish; the case cannot be replayed as written",
                 )
 
-            correlation = f"{case.id}-{step.sequence}"
+            correlation = f"{identity}-{step.sequence}"
             granted = await consent.grant_for(step, correlation)
 
             started = self._clock()
@@ -197,11 +233,11 @@ class TrajectoryReplayer:
                     dict(step.arguments),
                     ExecutionContext(
                         workspace_id=workspace_id,
-                        run_id=case.id,
+                        run_id=identity,
                         invocation_id=self._id_source(),
-                        request_id=_request_id(step, case.id),
+                        request_id=_request_id(step, identity),
                         correlation_id=correlation,
-                        idempotency_key=_request_id(step, case.id),
+                        idempotency_key=_request_id(step, identity),
                         actor=EventActor.EVAL,
                         human_consent_granted=granted,
                     ),
@@ -251,7 +287,7 @@ class TrajectoryReplayer:
             # classification and would fail permanently" without it.
             events=(
                 *events,
-                *surface_events(case.surface, step_count=len(case.trajectory), now=self._clock()),
+                *surface_events(surface, step_count=len(steps), now=self._clock()),
             ),
             stopped_at=stopped_at,
             detail=detail,

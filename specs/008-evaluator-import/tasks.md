@@ -17,7 +17,7 @@ Cite the T-ID in every commit that advances it.
 - [x] T5 — Require explicit one-to-one trial binding, validated and saved before
       the suite becomes ready. Never guess from order, timestamps, or similar
       text.
-- [ ] T6 — Isolated imported-trajectory replay through the registered adapter
+- [x] T6 — Isolated imported-trajectory replay through the registered adapter
       and a deterministic confirmation provider, reusing 007's eval-workspace
       and interaction machinery rather than forking it.
 - [ ] T7 — Calculate coverage, exclusions, the 2x2 matrix, zero-denominator
