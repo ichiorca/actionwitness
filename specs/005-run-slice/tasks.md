@@ -42,7 +42,7 @@ Cite the T-ID in every commit that advances it.
       without a surface to return it on — see the plan's ledger.)
 - [x] T12 — Paged events (§15.3, `after_sequence` and `limit`) and the report
       endpoint. (The comparison endpoint landed in T11.)
-- [ ] T13 — Verify the full exit gate: Journey A fails with
+- [x] T13 — Verify the full exit gate: Journey A fails with
       `false_success_or_state_mismatch` in `pre_fix` and passes in `post_fix`;
       the report shows trajectory pass, execution pass, business outcome fail,
       and model selection `not_evaluated`; a late action loses with

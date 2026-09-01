@@ -936,3 +936,47 @@ The repository returns whole rows. Publishing them would export every column
 added later on the day it is added, including one nobody meant to expose;
 §20.3 puts redaction before export, so the published field list is named in one
 reviewable place and `redacted_payload_json` never reaches a client as itself.
+
+### T13 — AC-20's fault-activation bullet is met behaviourally, not as a field
+
+"Activates the fault only for the `pre_fix` run" holds where it matters: the two
+runs reach opposite verdicts, which is criterion 1. What is missing is the
+recorded field — `runs.fault_active` is never populated, for the reason ledgered
+under T10 (no protocol method reports it, and deriving it from the mode name is
+what §9.1 forbids).
+
+The gap is covered by a **characterization test** that asserts the field is
+false on both runs and fails the moment it is populated. It was written as a
+strict `xfail` first, which the lane gate correctly rejected: the constitution
+forbids quarantined failures, and weakening that gate to admit one is an
+escalation rather than a fix. The characterization test gives the same signal —
+implementing `fault_active` breaks it — without touching the gate. The
+traceability map names it as a known gap rather than omitting the bullet.
+
+**Still the operator's decision** (carried from T10): protocol change, new
+optional method, or accept the field stays unset in Tier 1.
+
+### T13 — criterion 3 is recorded as it behaves
+
+The spec says a late action loses with `RUN_ALREADY_VERIFYING`. Because
+verification is synchronous, that code is the answer during the overlap window;
+an action arriving after the seal gets `RUN_TIMELINE_SEALED`. Both are tested,
+and both leave no partial snapshot and no evidence. The gate test accepts either
+code from an overlapped request because the race genuinely has two legitimate
+orderings — what it does not accept is both requests succeeding, or a phase
+snapshot captured twice. Flagged for operator confirmation under T5; T13 does
+not resolve it, it documents it.
+
+### T13 — a wall-clock dependence in 004's rate-limit gate (**fixed**)
+
+`test_gate_3_a_rate_limit_refusal_leaves_no_partial_state` bursts past FR-009's
+token bucket under the real clock. The bucket refills against that clock, so on
+a slow enough run the burst takes long enough to refill and the request that
+should be refused succeeds. It passed for months and failed once the suite grew
+— which is exactly how a latent flake behaves.
+
+The constitution forbids wall-clock dependence in a required suite, so this was
+a defect rather than bad luck. Fixed by giving that one test an application with
+a stopped clock, so the burst is decided by the bucket's capacity and nothing
+else. The other rate-limit suites already injected clocks; this was the only one
+that did not.

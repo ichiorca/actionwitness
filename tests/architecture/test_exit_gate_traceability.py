@@ -2,7 +2,7 @@
 
 Spec 002 carries its own roll-up in `test_core_only_install.py`, next to the
 core-only isolation job that criterion 1 depends on. This module holds the map
-for 003 and 004 and, from here on, for each milestone as it lands.
+for 003, 004, and 005, and, from here on, for each milestone as it lands.
 
 The point of naming the covering test rather than counting tests: a milestone
 can be declared finished with one criterion covered by nothing at all, and
@@ -19,6 +19,7 @@ criteria are also spelled out here in the spec's own words.
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 
 import pytest
@@ -122,7 +123,92 @@ EXIT_GATE_004: dict[str, tuple[str, str]] = {
     ),
 }
 
-MAPS = {"003": EXIT_GATE_003, "004": EXIT_GATE_004}
+#: `specs/005-run-slice/spec.md`, in the spec's own words.
+#:
+#: Criterion 5 names five acceptance criteria rather than one behaviour, so it
+#: splits furthest. AC-19 is carried by tests that predate this milestone — the
+#: point of naming them here is that 005 *depends* on them, so deleting one has
+#: to break this map rather than pass unnoticed.
+EXIT_GATE_005: dict[str, tuple[str, str]] = {
+    "1. API-level Journey A fails with `false_success_or_state_mismatch` in "
+    "`pre_fix` and passes in `post_fix`": (
+        "tests/integration/test_005_exit_gate.py",
+        "test_gate_1_the_same_journey_fails_before_and_passes_after",
+    ),
+    "1b. the contradicted call reported success (the premise of criterion 1)": (
+        "tests/integration/test_005_exit_gate.py",
+        "test_gate_1_the_failing_tool_call_itself_reported_success",
+    ),
+    "2. the report shows trajectory pass, execution pass, business outcome fail, "
+    "and model selection `not_evaluated`": (
+        "tests/integration/test_005_exit_gate.py",
+        "test_gate_2_the_report_separates_execution_from_outcome",
+    ),
+    "3a. a new target action loses cleanly to verification, with no partial snapshot": (
+        "tests/integration/test_005_exit_gate.py",
+        "test_gate_3_an_action_overlapping_verification_loses_cleanly",
+    ),
+    "3b. the rejection creates no finding and no evidence": (
+        "tests/integration/test_005_exit_gate.py",
+        "test_gate_3_a_rejected_late_action_leaves_no_evidence",
+    ),
+    "3c. the genuine `RUN_ALREADY_VERIFYING` overlap window": (
+        "tests/integration/test_verification_gate.py",
+        "test_an_invocation_overlapping_verification_loses_cleanly",
+    ),
+    "4. a mismatched rerun remains valid but returns `not_comparable` with the differing fields": (
+        "tests/integration/test_005_exit_gate.py",
+        "test_gate_4_a_mismatched_rerun_stays_valid_and_is_not_comparable",
+    ),
+    "5a. AC-03 — the human view and the independent observation agree": (
+        "tests/integration/test_005_exit_gate.py",
+        "test_gate_5_ac_03_the_human_view_and_the_observation_agree",
+    ),
+    "5b. AC-04 — execution passes while the business outcome fails": (
+        "tests/integration/test_005_exit_gate.py",
+        "test_gate_5_ac_04_execution_passes_while_the_outcome_fails",
+    ),
+    "5c. AC-11 — two visitors share no contract, run, event, or artifact": (
+        "tests/integration/test_005_exit_gate.py",
+        "test_gate_5_ac_11_two_visitors_share_nothing",
+    ),
+    "5d. AC-19 — the core installs and tests with every application package absent": (
+        "tests/architecture/test_core_only_install.py",
+        "test_the_core_installs_and_tests_in_a_clean_environment",
+    ),
+    "5e. AC-19 — a forbidden-import gate fails if the core reaches an application": (
+        "tests/architecture/test_import_boundaries.py",
+        "test_actionwitness_core_has_no_forbidden_imports",
+    ),
+    "5f. AC-19 — a non-commerce fake target completes a contract through the "
+    "same core interfaces": (
+        "tests/adapters/test_non_commerce_adapter.py",
+        "test_a_non_commerce_path_is_evaluated_end_to_end",
+    ),
+    "5g. AC-20 — two immutable runs differ in one variable and the original "
+    "critical classification resolves": (
+        "tests/integration/test_005_exit_gate.py",
+        "test_gate_5_ac_20_two_immutable_runs_differ_in_one_variable",
+    ),
+    "5h. AC-20 — a completed run's scenario is never relabelled": (
+        "tests/integration/test_005_exit_gate.py",
+        "test_gate_5_ac_20_a_completed_runs_scenario_never_changes",
+    ),
+    # AC-20's "activates the fault only for the pre_fix run" holds
+    # behaviourally — criterion 1 is that difference — but is not recorded as a
+    # field: `runs.fault_active` is never populated, and the 005 plan carries it
+    # as an open operator decision. The covering test characterizes the gap and
+    # fails once the field lands, which is the prompt to restore this entry to
+    # an ordinary assertion. Named here so the gap is part of the map rather
+    # than an omission from it.
+    "5i. AC-20 — the fault is active only for `pre_fix` (KNOWN GAP: recorded "
+    "behaviourally, not as `runs.fault_active`; awaiting an operator decision)": (
+        "tests/integration/test_005_exit_gate.py",
+        "test_gate_5_ac_20_the_fault_activation_field_is_not_yet_recorded",
+    ),
+}
+
+MAPS = {"003": EXIT_GATE_003, "004": EXIT_GATE_004, "005": EXIT_GATE_005}
 
 
 def _defines(path: Path, function: str) -> bool:
@@ -153,12 +239,15 @@ def test_every_exit_gate_criterion_names_a_covering_test(milestone: str) -> None
 @pytest.mark.architecture
 @pytest.mark.parametrize("milestone", sorted(MAPS))
 def test_each_map_covers_all_five_published_criteria(milestone: str) -> None:
-    """Both milestones list five criteria; these maps split some into parts.
+    """Every milestone lists five criteria; these maps split some into parts.
 
-    Checked by leading digit rather than by count, so splitting criterion 2 into
-    four entries stays honest while dropping criterion 3 entirely does not.
+    Checked by leading number rather than by count, so splitting criterion 5
+    into nine entries stays honest while dropping criterion 3 entirely does not.
     """
-    covered = {criterion.split(".")[0].rstrip("abcd") for criterion in MAPS[milestone]}
+    covered = {
+        re.match(r"\d+", criterion.split(".")[0])[0]  # type: ignore[index]
+        for criterion in MAPS[milestone]
+    }
     assert covered == {"1", "2", "3", "4", "5"}
 
 

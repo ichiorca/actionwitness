@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
@@ -48,6 +49,30 @@ async def app(tmp_path: Path) -> AsyncIterator[FastAPI]:
     application = create_app(
         environ={**ENABLED, "HARNESS_ARTIFACT_ROOT": str(tmp_path / "artifacts")},
         database_path=tmp_path / "harness.sqlite3",
+    )
+    async with application.router.lifespan_context(application):
+        yield application
+
+
+@pytest.fixture
+async def app_with_a_stopped_clock(tmp_path: Path) -> AsyncIterator[FastAPI]:
+    """The same application, with time held still.
+
+    FR-009's limiter is a token bucket that refills against the clock. Bursting
+    past it under the real clock makes the outcome depend on how fast the burst
+    runs: on a slow machine the loop takes long enough to refill, the request
+    that should be refused succeeds, and the test fails for a reason that has
+    nothing to do with rate limiting. The constitution forbids wall-clock
+    dependence in a required suite for exactly this reason.
+
+    Stopping the clock removes the refill entirely, so the burst is decided by
+    the bucket's capacity and nothing else.
+    """
+    stopped = datetime(2026, 1, 1, tzinfo=UTC)
+    application = create_app(
+        environ={**ENABLED, "HARNESS_ARTIFACT_ROOT": str(tmp_path / "artifacts")},
+        database_path=tmp_path / "harness.sqlite3",
+        clock=lambda: stopped,
     )
     async with application.router.lifespan_context(application):
         yield application
@@ -265,14 +290,18 @@ async def test_gate_3_a_resource_ceiling_refusal_leaves_no_partial_state(
 
 
 async def test_gate_3_a_rate_limit_refusal_leaves_no_partial_state(
-    app: FastAPI,
+    app_with_a_stopped_clock: FastAPI,
 ) -> None:
     """FR-009: "shall never partially commit a mutation."
 
     The refused request is a real mutating route, and the assertion is that the
     workspace it would have changed is unchanged.
+
+    Runs against a stopped clock so the bucket cannot refill mid-burst; see the
+    fixture.
     """
     # Arrange
+    app = app_with_a_stopped_clock
     database: Database = app.state.database
     async with client(app) as visitor:
         workspace_id = await _workspace_id(visitor)
