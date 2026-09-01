@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import importlib
 import json
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -106,31 +106,41 @@ def reimported_core() -> Iterator[object]:
     """Import `actionwitness_core` from a clean module table, then put it back.
 
     Several lane tests prove the core is importable with no integration present
-    by dropping it from `sys.modules` and importing it again. Done naively that
-    leaves the *reloaded* classes installed for the rest of the session, so a
-    model built before the purge and a model built after it no longer share a
-    class - and an `isinstance` check that is correct in isolation starts failing
-    only in a full-suite run, ordered by which lane happened to run first.
+    by dropping it from `sys.modules` and importing it again. Two things make
+    that harder than it looks.
 
-    So the module table is snapshotted and restored. The test still gets its
-    clean import; nothing after it inherits a second copy of the package.
+    First, done naively it leaves the *reloaded* classes installed for the rest
+    of the session, so a model built before the purge and one built after it no
+    longer share a class - and an `isinstance` check that is correct in isolation
+    starts failing only in a full-suite run, ordered by whichever lane ran first.
+    So the module table is snapshotted and restored.
+
+    Second, a leak check that merely scans `sys.modules` afterwards is not
+    measuring what the import pulled in; it is measuring what any *other* test
+    module imported at collection time, since pytest imports the whole suite
+    before running any of it. So the caller names the roots it intends to watch,
+    those are purged too, and their presence afterwards means this import really
+    did reach them.
     """
     import sys
 
     snapshot = dict(sys.modules)
+    purged: list[str] = ["actionwitness_core"]
 
-    def _import(name: str = "actionwitness_core"):
+    def _drop(roots: Iterable[str]) -> None:
         for module in list(sys.modules):
-            if module.startswith("actionwitness_core"):
+            if any(module == root or module.startswith(f"{root}.") for root in roots):
                 del sys.modules[module]
+
+    def _import(name: str = "actionwitness_core", watch: Iterable[str] = ()):
+        purged.extend(watch)
+        _drop(purged)
         return importlib.import_module(name)
 
     try:
         yield _import
     finally:
-        for module in list(sys.modules):
-            if module.startswith("actionwitness_core"):
-                del sys.modules[module]
+        _drop(purged)
         sys.modules.update(snapshot)
 
 

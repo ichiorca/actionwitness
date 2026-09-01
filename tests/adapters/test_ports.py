@@ -414,14 +414,19 @@ def test_no_insert_only_repository_declares_a_mutation_method(protocol: str) -> 
 
 @pytest.mark.adapters
 def test_importing_the_ports_package_pulls_in_no_target_or_framework(reimported_core) -> None:
-    """The extension surface must be reachable with every integration absent."""
+    """The extension surface must be reachable with every integration absent.
+
+    The watched roots are purged first, so a hit afterwards is this import
+    reaching one rather than another test module having imported it earlier.
+    """
     import sys
 
-    reimported_core("actionwitness_core.ports")
+    watched = ("integrations", "buggy_store", "shopify", "fastapi", "httpx", "aiosqlite")
+    reimported_core("actionwitness_core.ports", watch=watched)
 
     leaked = [
         module
-        for module in ("integrations", "buggy_store", "shopify", "fastapi", "httpx", "aiosqlite")
+        for module in watched
         if any(name == module or name.startswith(f"{module}.") for name in sys.modules)
     ]
     assert leaked == [], f"importing core ports pulled in {leaked}"

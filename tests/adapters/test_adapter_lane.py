@@ -32,10 +32,14 @@ def test_importing_core_ports_pulls_in_no_target_specific_module(reimported_core
     The AST gate in tests/architecture proves the *source* declares no such
     import; this proves the *runtime* graph agrees, which also catches a lazy
     import hidden inside a function body.
+
+    The watched roots are purged before the import, so their presence afterwards
+    means *this* import reached them - not that some other test module imported
+    one at collection time.
     """
     import sys
 
-    reimported_core("actionwitness_core.ports")
+    reimported_core("actionwitness_core.ports", watch=TARGET_SPECIFIC_MODULES)
 
     leaked = [
         module
