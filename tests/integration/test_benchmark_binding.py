@@ -154,6 +154,12 @@ def test_nothing_binds_a_trial_without_being_told_to() -> None:
         # 008-T7. Reads the stored trials and reports FR-092's numbers; it
         # decides no binding and creates none.
         "summarize",
+        # 008-T8. `ready` → `running`, finalization into the immutable
+        # artifact, and §16.4's error path. None of them binds anything: by the
+        # time a suite reaches `ready` its bindings are already frozen.
+        "start",
+        "finalize",
+        "mark_error",
     }
 
 

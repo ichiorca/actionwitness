@@ -114,8 +114,16 @@ class ArtifactStore:
         written: WrittenArtifact,
         *,
         metadata: dict[str, Any] | None = None,
+        benchmark_suite_id: str | None = None,
+        source_artifact_id: str | None = None,
     ) -> str:
         """Insert the row, inside the caller's transaction.
+
+        `source_artifact_id` is FR-094's derived→source link: a benchmark report
+        *references* the evaluator artifact it was computed from and never
+        contains or rewrites it. The column carries the reference so the
+        relationship is a row anybody can follow, rather than a claim inside a
+        document that would have to be trusted.
 
         FR-008's ceilings are checked here rather than before the write, because
         the count and the insert have to be the same transaction — a guard that
@@ -132,14 +140,17 @@ class ArtifactStore:
         await work.execute(
             """
             INSERT INTO artifacts (
-                id, workspace_id, run_id, artifact_type, schema_version,
-                content_hash, metadata_json, relative_path, byte_size, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                id, workspace_id, run_id, benchmark_suite_id, source_artifact_id,
+                artifact_type, schema_version, content_hash, metadata_json,
+                relative_path, byte_size, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 artifact_id,
                 workspace_id,
                 run_id,
+                benchmark_suite_id,
+                source_artifact_id,
                 written.artifact_type,
                 written.schema_version,
                 written.content_hash,

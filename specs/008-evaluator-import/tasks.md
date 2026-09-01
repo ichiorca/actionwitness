@@ -23,7 +23,7 @@ Cite the T-ID in every commit that advances it.
 - [x] T7 — Calculate coverage, exclusions, the 2x2 matrix, zero-denominator
       behavior, four-decimal presentation strings, per-scenario/profile
       breakdowns, and the five required metrics from integer counts.
-- [ ] T8 — Atomically finalize one immutable benchmark artifact that references,
+- [x] T8 — Atomically finalize one immutable benchmark artifact that references,
       but never rewrites, the source evaluator and outcome artifacts.
 - [ ] T9 — The §15.6 import/binding/replay/finalize APIs.
 - [ ] T10 — `BenchmarkPanel` with source kind, mode, coverage, evidence links,

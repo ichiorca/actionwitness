@@ -37,8 +37,10 @@ from actionwitness_core.benchmarks.enums import (
     TrialEligibility,
 )
 from actionwitness_core.benchmarks.models import (
+    BENCHMARK_SCHEMA_VERSION,
     MANIFEST_SCHEMA_VERSION,
     BenchmarkManifest,
+    BenchmarkReport,
     NormalizedTrial,
     TrialBinding,
 )
@@ -315,6 +317,152 @@ class BenchmarkService:
                 ExclusionReason.OUTCOME_NOT_REACHED.value,
             ),
         )
+
+    # -- running and finalizing -----------------------------------------------
+
+    async def start(self, benchmark_id: str) -> BenchmarkStatus:
+        """`ready` → `running` (§16.4), before replays execute.
+
+        Only an `imported_trajectory_replay` suite needs this: §16.4 lets an
+        `executed_browser` suite finalize straight from `ready` because its
+        outcome runs already exist, while a replay suite's outcome evidence does
+        not exist until the replay produces it.
+        """
+        suite = await self.get(benchmark_id)
+        target = require_transition(BenchmarkStatus(str(suite["status"])), BenchmarkStatus.RUNNING)
+        await self._set_status(benchmark_id, target)
+        return target
+
+    async def finalize(self, benchmark_id: str, store: Any) -> str:
+        """FR-094: one immutable derived artifact, committed with the suite.
+
+        **Atomic in the sense §16.4 means it.** Everything that could refuse —
+        the transition, the trials, the report's own validators — happens before
+        anything is written, so a refusal leaves no partial result to clean up.
+        The artifact row and the suite's `result_artifact_id` then go into the
+        same transaction as this call, so a reader never sees a completed suite
+        pointing at nothing, or an artifact no suite claims.
+
+        The report *references* its sources by hash and never contains them.
+        §7's non-goal is explicit that an immutable source outcome report is
+        never rewritten to embed evaluator data; recalculating later creates a
+        new artifact beside the old sources rather than editing them.
+        """
+        suite = await self.get(benchmark_id)
+        mode = CorrelationMode(str(suite["correlation_mode"]))
+        target = require_transition(
+            BenchmarkStatus(str(suite["status"])),
+            BenchmarkStatus.COMPLETED,
+            correlation_mode=mode,
+        )
+
+        rows = await self.trials(benchmark_id)
+        summary = summarize(rows)
+        sources = self._source_artifacts(rows)
+        manifest = self._manifest_of(suite, summary, await self._hashes_of(sources))
+
+        # Constructed before anything is written: `BenchmarkReport`'s own
+        # validators refuse a mixed-mode population, and a refusal must not
+        # leave a file or a row behind.
+        report = BenchmarkReport(
+            benchmark_id=benchmark_id,
+            manifest=manifest,
+            counts=summary.counts,
+            metrics=summary.metrics,
+            by_scenario=summary.by_scenario,
+            by_failure_profile=summary.by_failure_profile,
+            trials=summary.trials,
+        )
+
+        written = store.write(
+            self._workspace_id,
+            benchmark_id,
+            report.as_stored_document(),
+            artifact_type="benchmark_report",
+            schema_version=BENCHMARK_SCHEMA_VERSION,
+        )
+        artifact_id = await store.record(
+            self._work,
+            self._workspace_id,
+            None,
+            written,
+            metadata={"correlation_mode": mode.value, "source_kind": str(suite["source_kind"])},
+            benchmark_suite_id=benchmark_id,
+            # FR-094's derived→source link. One report may draw on one imported
+            # artifact today; the first is recorded here and every hash is in
+            # the manifest, so nothing is lost if that ever becomes several.
+            source_artifact_id=sources[0] if sources else None,
+        )
+        await self._work.execute(
+            "UPDATE benchmark_suites SET status = ?, result_artifact_id = ?, "
+            "completed_at = ? WHERE id = ? AND workspace_id = ?",
+            (target.value, artifact_id, self._work.now(), benchmark_id, self._workspace_id),
+        )
+        return artifact_id
+
+    async def mark_error(self, benchmark_id: str) -> BenchmarkStatus:
+        """§16.4: "the suite enters `error` without a partial result".
+
+        Called by a caller whose finalization refused, in a *fresh* transaction
+        — the one that failed has rolled back, and writing the error status into
+        it would roll back too.
+        """
+        suite = await self.get(benchmark_id)
+        target = require_transition(BenchmarkStatus(str(suite["status"])), BenchmarkStatus.ERROR)
+        await self._set_status(benchmark_id, target)
+        return target
+
+    async def _set_status(self, benchmark_id: str, status: BenchmarkStatus) -> None:
+        await self._work.execute(
+            "UPDATE benchmark_suites SET status = ? WHERE id = ? AND workspace_id = ?",
+            (status.value, benchmark_id, self._workspace_id),
+        )
+
+    def _source_artifacts(self, rows: Sequence[Mapping[str, Any]]) -> tuple[str, ...]:
+        """The immutable evaluator artifacts this suite was computed from.
+
+        Order-preserving and de-duplicated rather than a set, so the recorded
+        order is the order the trials referenced them in and the manifest hashes
+        identically across runs.
+        """
+        seen: list[str] = []
+        for row in rows:
+            artifact_id = str(row["external_source_artifact_id"])
+            if artifact_id not in seen:
+                seen.append(artifact_id)
+        return tuple(seen)
+
+    async def _hashes_of(self, artifact_ids: Sequence[str]) -> tuple[str, ...]:
+        """Each source artifact's own content hash.
+
+        Read from the artifact rows rather than recomputed: FR-094 makes the
+        derived artifact reference "immutable source evaluator and outcome
+        artifacts", and a hash this method recalculated would be a claim about
+        the source rather than a reference to what was actually stored.
+        """
+        hashes: list[str] = []
+        for artifact_id in artifact_ids:
+            row = await self._work.fetch_one(
+                "SELECT content_hash FROM artifacts WHERE id = ? AND workspace_id = ?",
+                (artifact_id, self._workspace_id),
+            )
+            if row is not None:
+                hashes.append(str(row["content_hash"]))
+        return tuple(hashes)
+
+    def _manifest_of(
+        self, suite: Mapping[str, Any], summary: Any, source_hashes: Sequence[str]
+    ) -> BenchmarkManifest:
+        """The manifest recorded at creation, plus what finalization learned.
+
+        The evaluator and model metadata are *not* re-read from configuration
+        here: FR-093 records what produced the trials, and a manifest refreshed
+        at finalization would describe this moment instead of that one.
+        """
+        stored = json.loads(str(suite["manifest_json"]))
+        stored["scenario_ids"] = sorted({trial.scenario_id for trial in summary.trials})
+        stored["source_artifact_hashes"] = list(source_hashes)
+        return BenchmarkManifest.model_validate(stored)
 
     # -- reads ----------------------------------------------------------------
 
