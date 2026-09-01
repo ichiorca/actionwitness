@@ -9,7 +9,7 @@ Cite the T-ID in every commit that advances it.
       baseline snapshot must not be reachable.
 - [x] T2 — Derive guidance at arming and append the first guidance events, using
       the server-derived `GuidanceState` rather than a client-supplied one.
-- [ ] T3 — Generic target-tool invocation: Python validation against the
+- [x] T3 — Generic target-tool invocation: Python validation against the
       adapter's published schema, run-state checks, event-cap reservation
       (FR-008), the start event, adapter dispatch, immediate authoritative effect
       observation, and exactly one terminal event. No branch on a tool name.

@@ -1,12 +1,13 @@
 """Outcome-run routes (spec v1.9 §15.3).
 
-| Method | Endpoint  | Status |
-|--------|-----------|--------|
-| `POST` | `/runs`   | 005-T1 |
+| Method | Endpoint                                          | Status |
+|--------|---------------------------------------------------|--------|
+| `POST` | `/runs`                                           | 005-T1 |
+| `POST` | `/runs/{run_id}/target-tools/{tool_name}:invoke`   | 005-T3 |
 
-The rest of §15.3 — the run read, paged events, tool invocation, confirmation
-decisions, verify, report, and comparison — arrives with the tasks that own it
-and is deliberately absent rather than stubbed.
+The rest of §15.3 — the run read, paged events, confirmation decisions, verify,
+report, and comparison — arrives with the tasks that own it and is deliberately
+absent rather than stubbed.
 
 `POST /runs` takes no contract identifier. §15.3 describes arming "a contract",
 and FR-024 already made exactly one contract active in the workspace with its
@@ -19,7 +20,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Body
+from fastapi import APIRouter, Body, Path
 from pydantic import BaseModel, ConfigDict, Field
 
 from actionwitness_service.api.dependencies import (
@@ -28,6 +29,7 @@ from actionwitness_service.api.dependencies import (
     RegistryDependency,
     WorkspaceDependency,
 )
+from actionwitness_service.application.invocation_service import InvocationService
 from actionwitness_service.application.run_service import RunMode, RunService
 
 __all__ = ["router"]
@@ -69,4 +71,70 @@ async def arm_run(
             "state_version": armed.state_version,
             "content_hash": armed.snapshot_content_hash,
         },
+    }
+
+
+class InvokeRequest(BaseModel):
+    """§15.3's invocation body.
+
+    `arguments` is deliberately an open mapping *here* and closed one layer
+    down: the tool's own published schema is the authority on what it accepts,
+    and duplicating that as a Pydantic model would give the harness a second
+    opinion about a target's surface (§9.1).
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    #: §15.3: "the identity of the tool definition as observed immediately
+    #: before dispatch, which FR-169 compares against the armed baseline." It is
+    #: recorded on the start event here; the comparison is FR-169's own task.
+    tool_identity_hash: Annotated[str, Field(min_length=1, max_length=128)] | None = None
+
+
+_DEFAULT_INVOKE = InvokeRequest()
+
+RunId = Annotated[str, Path(min_length=1, max_length=128)]
+ToolName = Annotated[str, Path(min_length=1, max_length=128)]
+
+
+@router.post("/{run_id}/target-tools/{tool_name}:invoke")
+async def invoke_target_tool(
+    run_id: RunId,
+    tool_name: ToolName,
+    workspace_id: WorkspaceDependency,
+    database: DatabaseDependency,
+    locks: LocksDependency,
+    registry: RegistryDependency,
+    request: Annotated[InvokeRequest, Body()] = _DEFAULT_INVOKE,
+) -> dict[str, Any]:
+    """One allowlisted target action, recorded either side of its dispatch.
+
+    The response separates what the tool *reported* from what was independently
+    *observed*, because a client that saw only the first would have no way to
+    know the two disagreed — which is the disagreement this product exists to
+    surface.
+    """
+    outcome = await InvocationService(database, registry, locks).invoke(
+        workspace_id,
+        run_id,
+        tool_name,
+        request.arguments,
+        tool_identity_hash=request.tool_identity_hash,
+    )
+    return {
+        "invocation_id": outcome.invocation_id,
+        "sequence_number": outcome.sequence_number,
+        "terminal_event": outcome.terminal_event,
+        "reported": {
+            "status": outcome.reported_status,
+            "summary": outcome.reported_summary,
+            "error_code": outcome.error_code,
+        },
+        "observed": {
+            "state_version": outcome.observed_state_version,
+            "state_changed": outcome.observed_state_changed,
+        },
+        "duration_ms": outcome.duration_ms,
+        "next_action": outcome.next_action,
     }

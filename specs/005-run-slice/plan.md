@@ -266,3 +266,78 @@ asserts that no instruction addressed to the agent contains approve/authorize
 language, that only `human_approver` is ever asked to decide a confirmation,
 that every waiting phase says what it is waiting for (FR-124), and that `system`
 is the active actor only while it is genuinely working.
+
+### T3 — the canonical state columns hold the observation, never the tool's claim
+
+The sharpest decision in this task. `ToolExecutionResult.state_version_after` is
+the version the *tool's own response body* claimed; `events.state_version_after`
+is what the observation provider independently saw. FR-032 calls the column
+value "canonical", and canonical means observed.
+
+So the two channels are recorded in different places: the observed values fill
+the `state_version_*` / `state_hash_*` columns, and the tool's claim lives in
+the event payload under a `reported` key beside an `observed` sibling. A tool
+that reports success while changing nothing therefore produces an event whose
+`reported_status` is `success` and whose observed state hash is unchanged —
+which is the disagreement the product exists to surface. Collapsing them into
+one column would pass every other test in the suite and delete the only evidence
+that matters, so there is a test that arms the real discount fault and asserts
+both halves.
+
+### T3 — two observations per invocation
+
+FR-032 requires canonical `state_version_before` *and* `state_version_after`, so
+the pipeline observes on both sides of the dispatch rather than carrying the
+previous event's "after" forward as the next "before". A derived value would be
+wrong the moment anything changed out of band, and out-of-band change is exactly
+what an assurance harness must be able to see. The cost is two target reads per
+call, accepted deliberately.
+
+### T3 — a closed-subset schema validator in the core rather than a dependency
+
+A general JSON Schema library is built to be permissive about what it does not
+recognise: an unknown keyword is ignored and the document validates. FR-021
+keeps the declarative surface "to allowlisted scalars" and §11.4 calls these
+schemas closed, so `actionwitness_core.ports.schemas` implements the exact
+subset the published specs use and **refuses a keyword it does not implement**.
+That turns a silently-ignored constraint into a loud failure when the tool spec
+is written. No new dependency, and the closure FR-021 asks for is enforced
+rather than assumed.
+
+Defaults are applied here rather than inside the adapter, so the arguments that
+reached the target are the arguments the timeline recorded.
+
+### T3 — an unobservable target before the call refuses; after the call does not
+
+With no baseline there is nothing to compare against, so a pre-call observation
+failure dispatches nothing. After the call the invocation has already happened:
+refusing to write its terminal event would leave the timeline claiming a call
+that never ended, so the absence is recorded (`observed.available: false`,
+null state hash) and the verdict deals with it. Constitution §5's "never
+degrades to success" is satisfied by recording the absence, not by hiding it.
+
+### T3 — FR-008's ceiling refusal is raised outside the transaction
+
+`trip_if_event_budget_exhausted` returns its refusal so the boundary event
+commits (the 004-T8 shape). `_start` therefore returns a sentinel and
+`_start_or_trip` raises after the `async with` closes — raising inside would
+roll back the very evidence explaining why the run stopped, which is the bug
+004-T8 caught and this must not reintroduce.
+
+### T3 — `tool_identity_hash` is recorded but not compared
+
+§15.3 accepts it as "the identity of the tool definition as observed immediately
+before dispatch, which FR-169 compares against the armed baseline". It lands on
+the start event; the comparison, the armed baseline, and
+`tool_identity_mismatch` are FR-169's own work and belong to the tool-surface
+task. **Queued for the operator:** which milestone owns FR-169 — no BUILD_ORDER
+milestone lists it, and `tool_surface_poisoned` is a Tier 2 profile.
+
+### T3 — the fault tests set the store's scenario directly, and say why
+
+The harness records a scenario selection (004-T11) but does not yet reseed the
+target through the adapter — that is T10. A test needing a genuinely faulty
+target therefore drives the store's own `/demo` surface rather than setting a
+harness column and hoping. Discovered by a failing test: the first version
+selected `pre_fix` on the harness and the store cheerfully applied the discount,
+because nothing had told it to misbehave.
