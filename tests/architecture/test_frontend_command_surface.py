@@ -22,8 +22,16 @@ FRONTEND = REPO_ROOT / "apps" / "actionwitness_service" / "frontend"
 PACKAGE_JSON = FRONTEND / "package.json"
 TSCONFIG = FRONTEND / "tsconfig.json"
 VITEST_CONFIG = FRONTEND / "vitest.config.ts"
+ESLINT_CONFIG = FRONTEND / "eslint.config.js"
 
-REQUIRED_SCRIPTS = ("typecheck", "test", "build")
+REQUIRED_SCRIPTS = ("typecheck", "lint", "test", "build")
+
+#: The store frontend does not yet declare `lint`. It is a separate application
+#: with its own gates (§29.1), and adding an ESLint configuration to it is not
+#: this milestone's work — but the quality bars apply to it too, so the gap is
+#: named here rather than hidden by a shared constant that quietly excused it.
+#: Recorded in the 006 deviations ledger for the repository-hardening milestone.
+STORE_REQUIRED_SCRIPTS = ("typecheck", "test", "build")
 
 # Mandated by the project's TypeScript rules, not by taste: the harness narrows
 # untrusted HTTP and WebMCP payloads, where an absent property and an explicit
@@ -135,7 +143,7 @@ def _store_package_json() -> dict:
 def test_store_frontend_declares_every_required_script() -> None:
     """§29.1 builds the two frontends independently, so each carries its own gates."""
     scripts = _store_package_json().get("scripts", {})
-    missing = [name for name in REQUIRED_SCRIPTS if name not in scripts]
+    missing = [name for name in STORE_REQUIRED_SCRIPTS if name not in scripts]
     assert missing == [], f"store frontend package.json omits scripts: {missing}"
     assert scripts["test"] == "vitest run"
     assert "--noEmit" in scripts["typecheck"]
@@ -214,3 +222,30 @@ def test_the_storefront_calls_only_the_stores_own_surface() -> None:
 def test_the_store_frontend_lockfile_is_committed() -> None:
     """A frontend gate is only reproducible with the tree it was run against."""
     assert (STORE_FRONTEND / "package-lock.json").is_file()
+
+
+@pytest.mark.architecture
+def test_the_frontend_has_a_lint_configuration() -> None:
+    """The quality bars require configured lint checks to pass.
+
+    Until 006 this package declared no lint script and carried no ESLint
+    configuration at all — cheap to overlook while the frontend was a few
+    hundred lines, and not once it carries the Tier 1 UI. A `lint` script with
+    nothing behind it would be worse than none, so the config file is asserted
+    too.
+    """
+    assert ESLINT_CONFIG.is_file(), "the harness frontend has no ESLint configuration"
+    scripts = _package_json()["scripts"]
+    assert "eslint" in scripts["lint"], "the lint script must actually invoke eslint"
+
+
+@pytest.mark.architecture
+def test_lint_is_not_folded_into_another_command() -> None:
+    """Separate gates stay separately reportable.
+
+    A `test` script that also linted would make a lint failure look like a test
+    failure, and a green `test` run would no longer mean what it says.
+    """
+    scripts = _package_json()["scripts"]
+    for name in ("test", "build", "typecheck"):
+        assert "eslint" not in scripts[name], f"{name} must not run eslint"
