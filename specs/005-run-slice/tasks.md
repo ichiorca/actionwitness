@@ -26,7 +26,7 @@ Cite the T-ID in every commit that advances it.
 - [x] T7 — The layered outcome report (§23): observed trajectory, execution,
       business outcome, and model selection, composed through the core's
       `compose_outcome_report`.
-- [ ] T8 — The false-success classifier (§12, §22): the last relevant
+- [x] T8 — The false-success classifier (§12, §22): the last relevant
       intended-effect action and its immediate authoritative post-call evidence.
       An adapter that declares no effect map loses causal attribution and nothing
       else.

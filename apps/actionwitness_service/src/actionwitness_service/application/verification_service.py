@@ -36,7 +36,10 @@ from typing import Any
 from actionwitness_core.contracts.models import OutcomeContract, parse_contract
 from actionwitness_core.contracts.paths import ObservationPath
 from actionwitness_core.engine.assertions import evaluate_assertions
-from actionwitness_core.engine.classification import tool_execution_layer
+from actionwitness_core.engine.classification import (
+    classify_assertion_failures,
+    tool_execution_layer,
+)
 from actionwitness_core.engine.findings import Finding, aggregate, primary_failure
 from actionwitness_core.engine.policies import PolicyEvidence, evaluate_policies
 from actionwitness_core.engine.trajectory import evaluate_expected_tools
@@ -350,14 +353,29 @@ def _evaluate(
     Assembled here and decided there: this function chooses *what* to evaluate
     and the engine decides *how* each one turns out.
     """
+    effect_map = _effect_map(adapter)
+
+    # FR-055: a failed assertion is refined into a causal classification before
+    # anything reads it. It has to happen here rather than at report time,
+    # because §22 orders failures *by* classification — picking the primary
+    # failure from unclassified findings would choose by the wrong key, and the
+    # persisted findings would disagree with the report that summarises them.
+    assertions = classify_assertion_failures(
+        evaluate_assertions(contract.assertions, initial=initial, final=final),
+        contract.assertions,
+        events=events,
+        effect_map=effect_map,
+        initial=initial,
+    )
+
     return Evaluation(
-        assertions=evaluate_assertions(contract.assertions, initial=initial, final=final),
+        assertions=assertions,
         trajectory=evaluate_expected_tools(contract.expected_tools, events),
         policies=evaluate_policies(
             contract.policies,
             PolicyEvidence(
                 events=tuple(events),
-                effect_map=_effect_map(adapter),
+                effect_map=effect_map,
                 contract_paths=_contract_paths(contract),
                 # FR-157's full-state diff is not produced yet, and `None` is
                 # what says so: a policy needing it reports `not_evaluated` with

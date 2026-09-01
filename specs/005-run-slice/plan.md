@@ -609,3 +609,43 @@ T1 defined a `RunMode` class of string constants in `run_service`, not realising
 the core already had `reports.enums.RunMode` with exactly those two values. The
 report has to name the mode, so two lists of the same two strings would
 eventually disagree. The service now uses the core's enum.
+
+### T8 — the classifier is mostly about *not* accusing
+
+FR-055 uses `false_success_or_state_mismatch` **only when** the last relevant
+action reported success *and* its immediate post-call observation also
+mismatched. Every other route — the action failed, was cancelled, has no
+immediate observation, or no declared effect overlaps the path — falls back to
+`assertion_mismatch` rather than inferring causality.
+
+A classifier that accused whenever an assertion failed after a successful-looking
+call would pass the headline test and be wrong every other time, and being wrong
+here means telling somebody their target lied when it did not. So six of the
+nine tests are fall-back cases, one per route FR-055 lists.
+
+The engine itself is the core's, unchanged; this task wired it in and proved
+each branch through the real store.
+
+### T8 — classification runs before the primary failure is chosen
+
+§22 orders failures *by* classification, so picking the primary failure from
+unclassified findings would choose by the wrong key — and the findings persisted
+alongside the report would then disagree with the report's own headline.
+Classification therefore happens inside `_evaluate`, before aggregation and
+before composition.
+
+### T8 — an adapter without effect metadata keeps its verdict and loses only blame
+
+§12.2: "missing effect metadata disables only causal false-success
+attribution." Tested by emptying the adapter's effect map and asserting two
+things at once — the run still fails on the same assertion, and the finding
+falls back to `assertion_mismatch` with `kind: none`. Asserting only the second
+would not show that the verdict survived.
+
+### T8 — the missing-observation test edits the timeline, not the provider
+
+The first version blinded the observation provider mid-journey and depended on
+call ordering that was hard to reason about — it passed, but I could not say
+confidently that it passed for the right reason. The classifier reads the stored
+timeline, so the test now removes `post_call_effect_state` from the stored event
+and verifies. Same branch, no fixture whose ordering has to be argued about.

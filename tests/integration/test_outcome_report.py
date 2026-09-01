@@ -26,12 +26,11 @@ from pathlib import Path
 
 import httpx
 import pytest
-from fastapi import FastAPI
-
 from actionwitness_core.security.canonical import content_hash
 from actionwitness_service.api.app import API_PREFIX, create_app
 from actionwitness_service.persistence.database import Database
 from buggy_store.api import create_app as create_store
+from fastapi import FastAPI
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
@@ -72,7 +71,7 @@ def client(app: FastAPI) -> httpx.AsyncClient:
 
 async def _scenario(app: FastAPI, workspace_id: str, mode: str, profile: str) -> None:
     adapter = app.state.adapters.adapter("buggy_store")
-    response = await adapter._client.post(  # noqa: SLF001 - the store's own surface
+    response = await adapter._client.post(
         "/demo/api/v1/store/scenario",
         headers={"X-Workspace-Id": workspace_id},
         json={"scenario_mode": mode, "fault_profile": profile},
