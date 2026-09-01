@@ -17,7 +17,7 @@ Cite the T-ID in every commit that advances it.
       timing, request and correlation IDs, state versions and hashes, and
       effect-path evidence. Redaction happens before persistence, hashing, or
       export (§20.3).
-- [ ] T5 — The exclusive run mutation lease and the atomic verification race
+- [x] T5 — The exclusive run mutation lease and the atomic verification race
       gate: a target action arriving after verification begins loses cleanly with
       `RUN_ALREADY_VERIFYING` and leaves no partial snapshot.
 - [ ] T6 — Final observation capture and verification: assertion, trajectory, and

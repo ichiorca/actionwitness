@@ -398,3 +398,79 @@ The counterpart test caught it — `test_an_honest_mutation_moves_the_observed_s
 exists precisely so a bug making every observation fail cannot pass silently,
 and it earned its place on its first run. The comment at the catch now names it,
 so a future reader knows what is holding the breadth safe.
+
+### T5 — the race is one `UPDATE … WHERE status = 'running'`
+
+FR-038's load-bearing word is **atomically**. The precondition check and the
+status change are a single conditional update inside one transaction, so two
+concurrent verify requests cannot both observe `running` and both proceed. A
+check-then-update written as two statements passes every single-client test in
+the file and admits two verifications under load — and two verifications mean
+two final snapshots, which is exactly the "partial final snapshot" the
+requirement's last sentence forbids. Tested with two concurrent requests and
+again with eight, because two can agree by luck.
+
+### T5 — "in flight" is read off the timeline, not from a flag
+
+An invocation is in flight when its start event has no terminal event under the
+same correlation id. A flag would be simpler and would not survive a restart: a
+server that died mid-invocation would come back with the flag cleared and verify
+over the top of a call that never finished. The test writes an orphaned start
+event rather than setting a flag, so it is testing the definition rather than
+the bookkeeping.
+
+### T5 — the checks are ordered for the accurate reason, not the requirement's order
+
+FR-038 lists "at least one terminal event" before "nothing in flight", but in a
+`running` run the first can only fail *because* of the second — the timeline is
+append-only, so a terminal event never disappears. Checking in-flight first
+therefore reports why verification is waiting instead of reporting that nothing
+has happened. The completed-action check remains as a defensive backstop and
+says so.
+
+An `armed` run is refused earlier still, by the core's transition table:
+`armed` leads to `running`, `cancelled`, or `error` and never straight to
+`verifying`, so §16's invalid-transition mapping answers and the gate needs no
+second opinion.
+
+### T5 — `/verify` returns 202, and does only the gate
+
+Capturing the final observation and evaluating the contract belong to the
+verification task; this decides *whether* verification may start. The split is
+what makes "no racing request may capture a partial final snapshot" true by
+construction: the race is settled before any observation is taken, so a loser
+has nothing to capture. 202 rather than 200 because the transition is accepted
+and the run is closed to actions, but no verdict exists yet — 200 would invite a
+client to read a result that has not been produced.
+
+**Note for the verification task:** until it lands, a run that passes the gate
+stays in `verifying`. That is a visible intermediate state, not a stuck one —
+reset returns the workspace to ready (FR-013) — but it is the reason these two
+tasks should not be separated by a release.
+
+### T5 — FR-039's lease has no caller yet, and that is stated rather than hidden
+
+The lease refuses a *direct human mutation of target state* while a run occupies
+any of its four non-terminal states. The harness has no such surface: the human
+store panel is M5's, and the Buggy Store's `/demo` API belongs to the store
+(§15.5), which cannot be told about harness runs without breaking the boundary
+the architecture gate enforces. `require_no_lease` is exported and tested now so
+that the panel is built against a rule that already exists rather than one
+invented beside it. **Queued for the operator:** confirm that FR-039's server-side
+enforcement point is the M5 store panel, or name the surface it belongs to.
+
+The four states are named rather than "any active run" because FR-039 keeps
+reads, reset, and confirmation decisions available, and a lease over every state
+would break the recovery paths it exists alongside.
+
+### T5 — a real gap closed: contract selection during a run
+
+Found while working out where the lease applies. `POST /contracts/{id}/select`
+was unguarded, so a workspace could be pointed at one contract while its run was
+being judged by another — the relabelling FR-012 forbids. Now refused with
+`RUN_IN_PROGRESS` while a run is in flight, and available again after reset.
+
+`RUN_IN_PROGRESS` rather than FR-039's `RUN_MUTATION_LOCKED`: this is a change
+to the harness's own run configuration, not a direct human mutation of target
+state, and conflating the two would tell a caller the wrong thing about what is
+locked and why.

@@ -140,6 +140,12 @@ class ContractService:
         from the request. That is the whole of "no endpoint may combine a
         contract with a different target" — there is no parameter to combine.
         """
+        # FR-012: "Changing any value requires reset and creates a new run."
+        # Selecting a different contract while a run is in flight would leave
+        # the workspace pointing at one contract and the run judged by another,
+        # which is the relabelling that requirement forbids.
+        await _require_no_run_in_flight(self._work, self._workspace_id)
+
         contract = await self.read(contract_id)
         target_id = str(contract["document"].get("target_id", ""))
 
@@ -189,3 +195,25 @@ def _loads(raw: str) -> dict[str, Any]:
     if not isinstance(parsed, dict):  # pragma: no cover - the writer only stores objects
         raise ApiError(ApiErrorCode.HARNESS_ERROR, "A stored contract is not an object.")
     return parsed
+
+
+async def _require_no_run_in_flight(work: UnitOfWork, workspace_id: str) -> None:
+    """Refuse a selection change while a run holds the workspace (FR-012).
+
+    `RUN_IN_PROGRESS` rather than FR-039's `RUN_MUTATION_LOCKED`: this is a
+    change to the *harness's* run configuration, not a direct human mutation of
+    target state, and conflating the two would tell a caller the wrong thing
+    about what is locked and why.
+    """
+    from actionwitness_service.application.workspace_service import NONTERMINAL_RUN_STATES
+
+    placeholders = ",".join("?" for _ in NONTERMINAL_RUN_STATES)
+    row = await work.fetch_one(
+        f"SELECT id FROM runs WHERE workspace_id = ? AND status IN ({placeholders}) LIMIT 1",
+        (workspace_id, *sorted(NONTERMINAL_RUN_STATES)),
+    )
+    if row is not None:
+        raise ApiError(
+            ApiErrorCode.RUN_IN_PROGRESS,
+            "A run is in progress; reset the workspace before selecting a different contract.",
+        )

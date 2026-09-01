@@ -4,10 +4,17 @@
 |--------|---------------------------------------------------|--------|
 | `POST` | `/runs`                                           | 005-T1 |
 | `POST` | `/runs/{run_id}/target-tools/{tool_name}:invoke`   | 005-T3 |
+| `POST` | `/runs/{run_id}/verify`                           | 005-T5 |
 
-The rest of §15.3 — the run read, paged events, confirmation decisions, verify,
-report, and comparison — arrives with the tasks that own it and is deliberately
-absent rather than stubbed.
+The rest of §15.3 — the run read, paged events, confirmation decisions, report,
+and comparison — arrives with the tasks that own it and is deliberately absent
+rather than stubbed.
+
+`POST /runs/{run_id}/verify` currently performs FR-038's **gate** only: it wins
+or loses the race and moves the run to `verifying`. Capturing the final
+observation and evaluating the contract land with the verification task, and the
+split is deliberate — the race is decided before any observation is taken, so a
+losing request cannot capture a partial final snapshot.
 
 `POST /runs` takes no contract identifier. §15.3 describes arming "a contract",
 and FR-024 already made exactly one contract active in the workspace with its
@@ -31,6 +38,7 @@ from actionwitness_service.api.dependencies import (
 )
 from actionwitness_service.application.invocation_service import InvocationService
 from actionwitness_service.application.run_service import RunMode, RunService
+from actionwitness_service.application.verification_gate import VerificationGate
 
 __all__ = ["router"]
 
@@ -138,3 +146,21 @@ async def invoke_target_tool(
         "duration_ms": outcome.duration_ms,
         "next_action": outcome.next_action,
     }
+
+
+@router.post("/{run_id}/verify", status_code=202)
+async def verify_run(
+    run_id: RunId,
+    workspace_id: WorkspaceDependency,
+    database: DatabaseDependency,
+    locks: LocksDependency,
+) -> dict[str, Any]:
+    """FR-038's gate. FastAPI is the sole transition authority.
+
+    202 rather than 200: the transition has been accepted and the run is now
+    closed to target actions, but the verdict does not exist yet. Returning 200
+    would invite a client to read a result that has not been produced.
+    """
+    async with locks.hold(workspace_id), database.transaction() as work:
+        await VerificationGate(work, workspace_id).begin(run_id)
+    return {"run_id": run_id, "status": "verifying"}
