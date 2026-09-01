@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from actionwitness_core.contracts.enums import PolicyType
 from actionwitness_core.contracts.models import OutcomeContract, parse_contract
 from actionwitness_core.contracts.paths import ObservationPath
 from actionwitness_core.engine.assertions import evaluate_assertions
@@ -40,6 +41,8 @@ from actionwitness_core.engine.classification import (
     classify_assertion_failures,
     tool_execution_layer,
 )
+from actionwitness_core.engine.diff import StateChange, changed_paths_of, diff_states
+from actionwitness_core.engine.enums import CheckStatus
 from actionwitness_core.engine.findings import Finding, aggregate, primary_failure
 from actionwitness_core.engine.policies import PolicyEvidence, evaluate_policies
 from actionwitness_core.engine.trajectory import evaluate_expected_tools
@@ -60,7 +63,9 @@ from actionwitness_core.reports.models import (
     OutcomeReport,
     ScenarioReference,
     TargetReference,
+    UndeclaredChangesBlock,
     compose_outcome_report,
+    undeclared_changes_from,
 )
 from actionwitness_core.security.redaction import RedactionPolicy
 
@@ -362,6 +367,11 @@ class Evaluation:
     assertions: tuple[Finding, ...]
     trajectory: Finding
     policies: tuple[Finding, ...]
+    #: FR-157's full-state diff, or `None` when a snapshot was missing and no
+    #: diff could be computed. Carried rather than recomputed at report time,
+    #: because a report derived from a second diff could disagree with the
+    #: finding that judged the first one.
+    changes: tuple[StateChange, ...] | None = None
 
     def all(self) -> tuple[Finding, ...]:
         """Every finding, for the run-level aggregate and for persistence."""
@@ -396,6 +406,13 @@ def _evaluate(
         initial=initial,
     )
 
+    # FR-157: a complete recursive diff of the two canonical snapshots,
+    # independent of which paths the contract names. `None` — not an empty tuple
+    # — when a snapshot is missing: "nothing changed" and "we could not tell"
+    # are different answers, and only the second may leave a policy
+    # `not_evaluated` (§12.2, §16.1).
+    changes = None if initial is None or final is None else diff_states(initial, final)
+
     return Evaluation(
         assertions=assertions,
         trajectory=evaluate_expected_tools(contract.expected_tools, events),
@@ -405,12 +422,10 @@ def _evaluate(
                 events=tuple(events),
                 effect_map=effect_map,
                 contract_paths=_contract_paths(contract),
-                # FR-157's full-state diff is not produced yet, and `None` is
-                # what says so: a policy needing it reports `not_evaluated` with
-                # a reason rather than reading as satisfied (§12.2).
-                changed_paths=None,
+                changed_paths=None if changes is None else changed_paths_of(changes),
             ),
         ),
+        changes=changes,
     )
 
 
@@ -420,6 +435,30 @@ def _effect_map(adapter: Any) -> Mapping[str, tuple[ObservationPath, ...]]:
         tool: tuple(ObservationPath.parse(str(path)) for path in paths)
         for tool, paths in adapter.effect_map().items()
     }
+
+
+def _undeclared_changes_block(evaluation: Evaluation) -> UndeclaredChangesBlock | None:
+    """§23.1's `undeclared_changes`, or `None` when there is nothing to report.
+
+    Two conditions, and both are about not overstating what is known. The policy
+    has to be in the contract at all — a run that never asked about undeclared
+    change should not carry a block implying it did — and the diff has to exist,
+    because a block full of zeros is indistinguishable from "nothing changed"
+    when the truth is that nothing was compared.
+    """
+    if evaluation.changes is None:
+        return None
+    finding = next(
+        (
+            candidate
+            for candidate in evaluation.policies
+            if candidate.check_id == PolicyType.NO_UNDECLARED_CHANGES.value
+        ),
+        None,
+    )
+    if finding is None or finding.status is CheckStatus.NOT_EVALUATED:
+        return None
+    return undeclared_changes_from(finding, changed_paths=len(evaluation.changes))
 
 
 def _contract_paths(contract: OutcomeContract) -> tuple[ObservationPath, ...]:
@@ -535,6 +574,11 @@ def _compose(
         assertion_findings=evaluation.assertions,
         policy_findings=evaluation.policies,
         trajectory_finding=evaluation.trajectory,
+        # §23.1's partition block. Present only when the policy was actually
+        # evaluated: a block reading "0 changed, 0 undeclared" on a run with no
+        # snapshots would say "nothing changed" where the truth is "nothing was
+        # compared", which is the confusion §16.1 exists to prevent.
+        undeclared_changes=_undeclared_changes_block(evaluation),
         # §23.1's execution layer: did the calls themselves work, separately
         # from whether they achieved anything. Derived by the core from the
         # timeline rather than from any status this service holds.
