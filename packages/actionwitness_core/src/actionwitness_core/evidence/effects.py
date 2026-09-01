@@ -35,7 +35,13 @@ from actionwitness_core.ports.models import Observation
 from actionwitness_core.security.limits import MAX_FINDING_VALUE_CHARS
 from actionwitness_core.security.redaction import RedactionPolicy, redact
 
-__all__ = ["TRUNCATION_MARKER", "bounded", "effect_evidence", "redacted_observation"]
+__all__ = [
+    "TRUNCATION_MARKER",
+    "bounded",
+    "effect_context",
+    "effect_evidence",
+    "redacted_observation",
+]
 
 #: §11.4 bounds a displayed value and requires "an explicit truncation marker",
 #: so a reader can tell a shortened value from a short one.
@@ -175,3 +181,61 @@ def redacted_observation(
         # would compare equal but not be identical.
         return observation
     return observation.model_copy(update={"payload": payload})
+
+
+def effect_context(
+    effect_paths: Sequence[str | ObservationPath],
+    context: Mapping[str, JsonValue] | None,
+    *,
+    policy: RedactionPolicy | None = None,
+) -> dict[str, JsonValue] | None:
+    """The post-call observation, pruned to the declared effect paths.
+
+    `RunEvent.post_call_effect_state` is "a namespace-rooted context fragment",
+    because FR-055's false-success test resolves the *assertion's* path against
+    it — so it has to be shaped like an evaluation context, not like the
+    path-keyed audit mapping `effect_evidence` produces. The two are different
+    views of the same reading and both are stored: one is what a person audits,
+    the other is what the classifier resolves against.
+
+    Pruned rather than stored whole, because the alternative is a full copy of
+    the observation on every invocation event. Only the declared subtrees are
+    kept, which is exactly the evidence §13.4 says the adapter vouched for.
+
+    `None` in, `None` out: no observation means no fragment, and FR-055 reads
+    that absence as a reason to fall back rather than to accuse.
+    """
+    if context is None:
+        return None
+
+    fragment: dict[str, JsonValue] = {}
+    for declared in effect_paths:
+        path = (
+            declared if isinstance(declared, ObservationPath) else ObservationPath.parse(declared)
+        )
+        resolution = resolve(path, context)
+        if not resolution.found:
+            continue
+        _graft(fragment, path.segments, redact(resolution.value, policy))
+    return fragment
+
+
+def _graft(target: dict[str, JsonValue], segments: Sequence[str], value: JsonValue) -> None:
+    """Place `value` at `segments` inside `target`, creating intermediate maps.
+
+    A shallower path already grafted wins: if `target.cart` is present, a later
+    `target.cart.total` is already inside it, and overwriting the subtree with a
+    single leaf would lose the rest of what was vouched for.
+    """
+    node = target
+    for segment in segments[:-1]:
+        existing = node.get(segment)
+        if not isinstance(existing, dict):
+            if existing is not None:
+                return
+            existing = {}
+            node[segment] = existing
+        node = existing
+    leaf = segments[-1]
+    if leaf not in node:
+        node[leaf] = value

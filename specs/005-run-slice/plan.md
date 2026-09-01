@@ -474,3 +474,82 @@ being judged by another — the relabelling FR-012 forbids. Now refused with
 to the harness's own run configuration, not a direct human mutation of target
 state, and conflating the two would tell a caller the wrong thing about what is
 locked and why.
+
+### T6 — the milestone's point, now executable
+
+`test_the_pre_fix_journey_fails_on_independent_observation`: the store reports
+the discount applied, the authoritative read says the cart total never moved,
+and the run fails on the observation rather than on the tool's word. Its
+counterpart runs the same contract and the same calls against an honest target
+and passes — without the pair, "fails in pre_fix" could just mean the harness
+fails everything.
+
+### T6 — the core owns the verdict; this task owns the I/O
+
+Every judgement comes from `actionwitness_core.engine`: assertions, the
+trajectory check, policies, and the aggregation into a layer result. Nothing in
+the service decides whether a check passed. That is what makes the verdict
+replayable — the same evidence through the same pure functions gives the same
+answer anywhere, which is what §24 rests on — and it is why the tests assert
+what was *persisted and sealed* rather than recomputing the answer, since a
+test that recomputed would agree with a broken implementation.
+
+Evaluation reads the stored timeline back out of the database and rebuilds the
+core's `RunEvent` models. FR-050 defines policy determinism over "the same
+snapshots and the same recorded event stream", so evaluating against anything
+the timeline does not hold would produce a verdict a replay could not reach.
+
+### T6 — the whole verdict commits together
+
+Snapshot, findings, per-check events, the terminal transition, and the guidance
+handoff are one transaction. A run that recorded findings but never reached a
+terminal state — or reached one without its findings — would be a report that
+disagrees with its own evidence. Tested by failing the last write in the seal
+and asserting that nothing from it survived.
+
+### T6 — verification is synchronous, so a late action meets a sealed timeline
+
+FR-038 says an action after the transition gets `RUN_ALREADY_VERIFYING`. Because
+verification completes inside the same request, the `verifying` window is
+sub-request: an action arriving *during* it does get that code (covered in the
+invocation suite and by the overlap test), while one arriving *after* meets a
+terminal run and gets `RUN_TIMELINE_SEALED`, which is the accurate description.
+A second verify likewise gets the invalid-transition refusal rather than the
+in-flight one.
+
+**Queued for the operator:** confirm this reading. The alternative is to make
+verification asynchronous so `verifying` is an observable state between
+requests, which would keep FR-038's code literal at the cost of a two-call
+client flow and a run that can sit unfinished.
+
+### T6 — one event per check, and the budget reserved to pay for it
+
+§16.1 describes `assertion_evaluated` and `policy_evaluated` as "one contract
+assertion produced a result" — one event each. With 25 assertions and 10
+policies allowed, verification writes up to 38 events, and a run that had spent
+its whole invocation budget would push the total past FR-008's 250 at the exact
+moment it tried to produce a verdict. Truncating verification events is not an
+option: that is dropping evidence.
+
+So `WorkspaceCeilings` gained a `reserved` parameter, and every invocation-start
+check now holds back exactly what this run's contract will need —
+`verification_started`, the final `snapshot_captured`, one event per check, and
+`verification_completed`. The contract is fixed at arming (FR-012), so the
+reservation is exact rather than a margin. This is a correction to 004-T8's
+ceiling arithmetic, made here because this is where the overrun becomes
+reachable.
+
+### T6 — `post_call_effect_state` is stored beside the audit view
+
+`RunEvent.post_call_effect_state` is "a namespace-rooted context fragment"
+because FR-055 resolves an *assertion's* path against it. T4's `effects` mapping
+is keyed by path and shaped for a person to audit. Both are stored: one is read
+by a reader, the other by the classifier, and neither can substitute for the
+other. The fragment is pruned to the declared paths rather than holding the
+whole observation, which would duplicate the snapshot on every invocation row.
+
+### T6 — findings persist `paths` as null when there is one path
+
+§17.1 distinguishes a single-path finding from a multi-path one, which 004-T3's
+repository already handled; this is the first task that exercises it with real
+findings.

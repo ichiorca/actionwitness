@@ -47,7 +47,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Final
 
-from actionwitness_core.evidence.effects import bounded, effect_evidence, redacted_observation
+from actionwitness_core.evidence.effects import (
+    bounded,
+    effect_context,
+    effect_evidence,
+    redacted_observation,
+)
 from actionwitness_core.journeys.enums import (
     EventActor,
     OutcomeEventType,
@@ -78,6 +83,11 @@ __all__ = ["INVOCABLE_RUN_STATES", "InvocationOutcome", "InvocationService"]
 INVOCABLE_RUN_STATES: Final[frozenset[str]] = frozenset(
     {str(RunState.ARMED.value), str(RunState.RUNNING.value)}
 )
+
+#: `verification_started`, the final `snapshot_captured`, and
+#: `verification_completed` — the events verification writes whatever the
+#: contract says (§16.1). Per-check events are counted on top of these.
+_VERIFICATION_FIXED_EVENTS: Final = 3
 
 
 @dataclass(frozen=True)
@@ -132,6 +142,10 @@ class InvocationService:
             # defaults", so the policy is read from the contract this run was
             # armed against rather than from whatever is selected now.
             policy = await self._redaction_policy(work, workspace_id, run)
+            # FR-008 counts every persisted event, and verification will write
+            # one per assertion and per policy. Holding that budget back now is
+            # what keeps the ceiling true without ever truncating a verdict.
+            reservation = await self._verification_reservation(work, run)
         adapter = self._registry.adapter(str(run["target_adapter_id"]))
         spec = _require_published(adapter, tool_name)
 
@@ -158,6 +172,7 @@ class InvocationService:
             before=before,
             policy=policy,
             arguments=checked,
+            verification_reservation=reservation,
         )
 
         # 4 and 5 — dispatch, then observe immediately. Both may fail; every
@@ -263,6 +278,27 @@ class InvocationService:
         paths = ((document.get("redaction") or {}).get("paths")) or []
         return RedactionPolicy.from_paths([str(path) for path in paths])
 
+    async def _verification_reservation(self, work: UnitOfWork, run: Mapping[str, Any]) -> int:
+        """How many events verification will need for this run's contract.
+
+        `verification_started`, the final `snapshot_captured`, one
+        `assertion_evaluated` per assertion, one `policy_evaluated` per policy,
+        and `verification_completed` (§16.1). Exact rather than a margin,
+        because the contract is fixed at arming (FR-012) — a guess would either
+        waste budget or fail to prevent the overrun it exists to prevent.
+        """
+        contract_id = run.get("contract_id")
+        if not contract_id:
+            return _VERIFICATION_FIXED_EVENTS
+        row = await work.fetch_one(
+            "SELECT document_json FROM contracts WHERE id = ?", (str(contract_id),)
+        )
+        if row is None:  # pragma: no cover - the contract is immutable once armed
+            return _VERIFICATION_FIXED_EVENTS
+        document = json.loads(row["document_json"])
+        checks = len(document.get("assertions") or []) + len(document.get("policies") or [])
+        return _VERIFICATION_FIXED_EVENTS + checks
+
     async def _observe(
         self, adapter: Any, workspace_id: str, policy: RedactionPolicy
     ) -> Observation:
@@ -305,6 +341,7 @@ class InvocationService:
         before: Observation,
         policy: RedactionPolicy,
         arguments: Mapping[str, Any],
+        verification_reservation: int,
     ) -> int:
         """Reserve the budget, open the run, and record the start (FR-031, FR-008).
 
@@ -318,7 +355,7 @@ class InvocationService:
         async with self._locks.hold(workspace_id), self._database.transaction() as work:
             run = await self._invocable_run(work, workspace_id, run_id)
             refusal = await WorkspaceCeilings(work, workspace_id).trip_if_event_budget_exhausted(
-                run_id
+                run_id, reserved=verification_reservation
             )
             if refusal is not None:
                 # The transaction still commits: it is carrying the boundary
@@ -397,6 +434,16 @@ class InvocationService:
             # key is what the tool said about itself; nothing under it is
             # evidence of what happened (constitution §4).
             "reported": _reported(result, failure, policy),
+            # The engine's view of the same reading: shaped as an evaluation
+            # context so FR-055 can resolve an assertion's own path against it
+            # (`RunEvent.post_call_effect_state`). Stored alongside the audit
+            # view rather than instead of it — one is read by a person, the
+            # other by the classifier.
+            "post_call_effect_state": effect_context(
+                spec.effect_paths,
+                None if after is None else after.as_context(),
+                policy=policy,
+            ),
             # FR-032's declared target-effect evidence, so idempotency and
             # false-success evidence "do not depend on tool-return text or later
             # actions". An adapter that declares no effect paths gets an empty

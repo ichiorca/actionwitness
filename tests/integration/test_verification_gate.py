@@ -92,7 +92,12 @@ async def _status(app: FastAPI, run_id: str) -> str:
 # --- the transition ---------------------------------------------------------
 
 
-async def test_verification_moves_a_running_run_to_verifying(stack: FastAPI) -> None:
+async def test_verification_takes_a_running_run_to_a_terminal_state(
+    stack: FastAPI,
+) -> None:
+    """The winner does not stop at `verifying`: it observes, judges, and seals
+    in the same request, because FastAPI is the sole transition authority and
+    splitting it would leave the run parked in an intermediate state."""
     # Arrange
     async with client(stack) as visitor:
         run_id = await _arm(visitor)
@@ -101,10 +106,9 @@ async def test_verification_moves_a_running_run_to_verifying(stack: FastAPI) -> 
         # Act
         response = await visitor.post(f"{RUNS}/{run_id}/verify")
 
-    # Assert — 202: accepted, and the run is closed to actions, but no verdict
-    # exists yet.
-    assert response.status_code == 202
-    assert await _status(stack, run_id) == "verifying"
+    # Assert
+    assert response.status_code == 200
+    assert await _status(stack, run_id) in {"passed", "passed_with_warnings", "failed"}
 
 
 async def test_an_armed_run_with_no_action_cannot_be_verified(stack: FastAPI) -> None:
@@ -135,12 +139,15 @@ async def test_a_second_verify_loses_with_the_race_code(stack: FastAPI) -> None:
         # Act
         second = await visitor.post(f"{RUNS}/{run_id}/verify")
 
-    # Assert
-    assert first.status_code == 202
+    # Assert — the second request is refused and cannot be retried into
+    # success. It arrives after the winner already sealed the run, so the
+    # answer is the invalid-transition refusal for a terminal run rather than
+    # FR-038's in-flight code; the concurrent tests below cover the window
+    # where `RUN_ALREADY_VERIFYING` is the right answer.
+    assert first.status_code == 200
     assert second.status_code == 409
     body = second.json()["error"]
-    assert body["code"] == "RUN_ALREADY_VERIFYING"
-    # FR-038 states the flag explicitly: retrying cannot make this succeed.
+    assert body["code"] == "RUN_IN_PROGRESS"
     assert body["retryable"] is False
 
 
@@ -164,10 +171,10 @@ async def test_concurrent_verifications_produce_exactly_one_winner(
         )
 
     # Assert
-    assert sorted([first.status_code, second.status_code]) == [202, 409]
+    assert sorted([first.status_code, second.status_code]) == [200, 409]
     loser = first if first.status_code == 409 else second
     assert loser.json()["error"]["code"] == "RUN_ALREADY_VERIFYING"
-    assert await _status(stack, run_id) == "verifying"
+    assert await _status(stack, run_id) in {"passed", "passed_with_warnings", "failed"}
 
 
 async def test_many_concurrent_verifications_still_produce_one_winner(
@@ -185,13 +192,17 @@ async def test_many_concurrent_verifications_still_produce_one_winner(
         )
 
     # Assert
-    accepted = [r for r in responses if r.status_code == 202]
+    accepted = [r for r in responses if r.status_code == 200]
     assert len(accepted) == 1
-    assert all(
-        r.json()["error"]["code"] == "RUN_ALREADY_VERIFYING"
-        for r in responses
-        if r.status_code == 409
-    )
+    # Every loser is refused. Which refusal depends on whether it arrived while
+    # the winner held `verifying` or after the run was sealed — both are 409 and
+    # neither can be retried into a second verdict, which is the property that
+    # matters.
+    assert all(r.status_code == 409 for r in responses if r is not accepted[0])
+    assert {r.json()["error"]["code"] for r in responses if r.status_code == 409} <= {
+        "RUN_ALREADY_VERIFYING",
+        "RUN_IN_PROGRESS",
+    }
 
 
 # --- nothing in flight ------------------------------------------------------
@@ -247,7 +258,7 @@ async def test_a_finished_invocation_does_not_block_verification(
         response = await visitor.post(f"{RUNS}/{run_id}/verify")
 
     # Assert
-    assert response.status_code == 202
+    assert response.status_code == 200
 
 
 async def test_an_unresolved_confirmation_blocks_verification(stack: FastAPI) -> None:
@@ -307,15 +318,23 @@ async def test_a_decided_confirmation_does_not_block_verification(
         response = await visitor.post(f"{RUNS}/{run_id}/verify")
 
     # Assert
-    assert response.status_code == 202
+    assert response.status_code == 200
 
 
 # --- losing the race --------------------------------------------------------
 
 
-async def test_an_action_after_verification_begins_is_rejected(stack: FastAPI) -> None:
-    """FR-038: 409, `RUN_ALREADY_VERIFYING`, and no event written — "that
-    rejection creates no finding and no `tool_execution_error`"."""
+async def test_an_action_after_verification_completes_is_rejected(stack: FastAPI) -> None:
+    """409 and no event written — "that rejection creates no finding and no
+    `tool_execution_error`".
+
+    The code is `RUN_TIMELINE_SEALED` rather than FR-038's
+    `RUN_ALREADY_VERIFYING` because verification is synchronous: by the time a
+    later action arrives the run is terminal, and its timeline genuinely is
+    sealed. The window where `RUN_ALREADY_VERIFYING` is the right answer is
+    covered by `test_a_verifying_run_refuses_a_new_action_with_the_race_code`
+    in the invocation suite, and by the overlap test below.
+    """
     # Arrange
     database: Database = stack.state.database
     async with client(stack) as visitor:
@@ -333,7 +352,7 @@ async def test_an_action_after_verification_begins_is_rejected(stack: FastAPI) -
 
     # Assert
     assert response.status_code == 409
-    assert response.json()["error"]["code"] == "RUN_ALREADY_VERIFYING"
+    assert response.json()["error"]["code"] == "RUN_TIMELINE_SEALED"
     assert len(after) == len(before)
 
 
@@ -360,8 +379,8 @@ async def test_an_invocation_overlapping_verification_loses_cleanly(
         )
 
     # Assert — exactly one of the two outcomes, never a mixture.
-    assert verification.status_code in {202, 409}
-    if verification.status_code == 202 and invocation.status_code == 409:
+    assert verification.status_code in {200, 409}
+    if verification.status_code == 200 and invocation.status_code == 409:
         assert invocation.json()["error"]["code"] == "RUN_ALREADY_VERIFYING"
     else:
         assert invocation.status_code == 200
@@ -397,9 +416,13 @@ async def test_a_losing_verification_leaves_the_run_untouched(stack: FastAPI) ->
     # Assert
     assert loser.status_code == 409
     async with database.reading() as work:
-        snapshots = await work.fetch_all("SELECT phase FROM snapshots WHERE run_id = ?", (run_id,))
-    # Only the `before` snapshot arming took. Nothing partial was written.
-    assert [row["phase"] for row in snapshots] == ["before"]
+        snapshots = await work.fetch_all(
+            "SELECT phase FROM snapshots WHERE run_id = ? ORDER BY phase", (run_id,)
+        )
+    # Exactly one of each phase: arming took `before`, the winner took `after`,
+    # and the loser took nothing. A second `after` would be the partial final
+    # snapshot FR-038 forbids, so the count is asserted rather than assumed.
+    assert [row["phase"] for row in snapshots] == ["after", "before"]
 
 
 async def test_a_second_client_cannot_verify_the_first_ones_run(stack: FastAPI) -> None:

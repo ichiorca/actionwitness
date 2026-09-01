@@ -4,17 +4,16 @@
 |--------|---------------------------------------------------|--------|
 | `POST` | `/runs`                                           | 005-T1 |
 | `POST` | `/runs/{run_id}/target-tools/{tool_name}:invoke`   | 005-T3 |
-| `POST` | `/runs/{run_id}/verify`                           | 005-T5 |
+| `POST` | `/runs/{run_id}/verify`                           | 005-T6 |
 
 The rest of §15.3 — the run read, paged events, confirmation decisions, report,
 and comparison — arrives with the tasks that own it and is deliberately absent
 rather than stubbed.
 
-`POST /runs/{run_id}/verify` currently performs FR-038's **gate** only: it wins
-or loses the race and moves the run to `verifying`. Capturing the final
-observation and evaluating the contract land with the verification task, and the
-split is deliberate — the race is decided before any observation is taken, so a
-losing request cannot capture a partial final snapshot.
+`POST /runs/{run_id}/verify` wins FR-038's race, captures the final
+observation, evaluates the contract through the core, and seals the run. The
+race is settled before anything is observed, so a losing request cannot capture
+a partial final snapshot.
 
 `POST /runs` takes no contract identifier. §15.3 describes arming "a contract",
 and FR-024 already made exactly one contract active in the workspace with its
@@ -38,7 +37,7 @@ from actionwitness_service.api.dependencies import (
 )
 from actionwitness_service.application.invocation_service import InvocationService
 from actionwitness_service.application.run_service import RunMode, RunService
-from actionwitness_service.application.verification_gate import VerificationGate
+from actionwitness_service.application.verification_service import VerificationService
 
 __all__ = ["router"]
 
@@ -148,19 +147,34 @@ async def invoke_target_tool(
     }
 
 
-@router.post("/{run_id}/verify", status_code=202)
+@router.post("/{run_id}/verify")
 async def verify_run(
     run_id: RunId,
     workspace_id: WorkspaceDependency,
     database: DatabaseDependency,
     locks: LocksDependency,
+    registry: RegistryDependency,
 ) -> dict[str, Any]:
-    """FR-038's gate. FastAPI is the sole transition authority.
+    """Capture final state and evaluate (§15.3).
 
-    202 rather than 200: the transition has been accepted and the run is now
-    closed to target actions, but the verdict does not exist yet. Returning 200
-    would invite a client to read a result that has not been produced.
+    FastAPI is the sole transition authority (FR-038), so winning the race,
+    observing, judging, and sealing all happen here rather than being split
+    across a client's two calls.
+
+    The findings are summarised rather than returned whole: §23 owns the report
+    and returning a second, differently-shaped view of the same verdict would
+    give a client two places to read it from.
     """
-    async with locks.hold(workspace_id), database.transaction() as work:
-        await VerificationGate(work, workspace_id).begin(run_id)
-    return {"run_id": run_id, "status": "verifying"}
+    outcome = await VerificationService(database, registry, locks).verify(workspace_id, run_id)
+    return {
+        "run_id": outcome.run_id,
+        "status": outcome.status,
+        "overall_result": outcome.overall_result,
+        "primary_failure": outcome.primary_failure_check_id,
+        "findings": {
+            "total": len(outcome.findings),
+            "failed": sum(1 for finding in outcome.findings if finding.failed),
+        },
+        "final_snapshot": {"state_version": outcome.final_state_version},
+        "next_action": outcome.next_action,
+    }

@@ -126,11 +126,24 @@ class WorkspaceCeilings:
                 f"artifacts; {stored} are stored and this one adds {byte_size}."
             )
 
-    async def event_budget_remaining(self, run_id: str) -> int:
-        """Ordinary events this run may still append before the ceiling trips."""
-        return ORDINARY_EVENTS_PER_RUN - await EventRepository(self._work).count(run_id)
+    async def event_budget_remaining(self, run_id: str, *, reserved: int = 0) -> int:
+        """Ordinary events this run may still append before the ceiling trips.
 
-    async def trip_if_event_budget_exhausted(self, run_id: str) -> ApiError | None:
+        `reserved` holds back the events a later phase is already committed to
+        writing. Verification emits one `assertion_evaluated` and one
+        `policy_evaluated` per check (§16.1), so a run that spent its whole
+        budget on invocations would push the total past FR-008's 250 at the
+        moment it tried to produce a verdict — with no acceptable way out, since
+        truncating verification events means dropping evidence. The contract is
+        fixed at arming (FR-012), so the reservation is exact rather than a
+        margin.
+        """
+        used = await EventRepository(self._work).count(run_id)
+        return ORDINARY_EVENTS_PER_RUN - reserved - used
+
+    async def trip_if_event_budget_exhausted(
+        self, run_id: str, *, reserved: int = 0
+    ) -> ApiError | None:
         """FR-008's boundary, checked at the moment it names.
 
         "On the next attempted invocation start after 249 ordinary events, the
@@ -152,7 +165,7 @@ class WorkspaceCeilings:
         and the boundary event is appended after the events it explains rather
         than in place of them.
         """
-        if await self.event_budget_remaining(run_id) > 0:
+        if await self.event_budget_remaining(run_id, reserved=reserved) > 0:
             return None
 
         updated = await self._work.execute(
