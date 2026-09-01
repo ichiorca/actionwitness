@@ -2,17 +2,17 @@
 
 Cite the T-ID in every commit that advances it.
 
-- [ ] T1 — Migrations and schema bootstrap for the nine Tier 1 tables of §17.1
+- [x] T1 — Migrations and schema bootstrap for the nine Tier 1 tables of §17.1
       (`workspaces`, `contracts`, `runs`, `events`, `guidance_events`,
       `snapshots`, `findings`, `confirmation_requests`, `artifacts`), with the
       `(run_id, sequence_number)` unique constraint and `workspace_id` as the
       cascade root; ordered runner invoked once at startup, no table creation in
       repository code (ADR-0003). Tier 2 tables stay out.
-- [ ] T2 — Connection configuration and the unit of work: WAL, foreign keys,
+- [x] T2 — Connection configuration and the unit of work: WAL, foreign keys,
       5,000 ms busy timeout, `synchronous=FULL`, `BEGIN IMMEDIATE`, one owner
       per transaction; a lock timeout maps to `WORKSPACE_LOCK_TIMEOUT`,
       `retryable: true`, never a silent retry. Tests assert the pragmas.
-- [ ] T3 — Repository implementations of the core's `ContractRepository`,
+- [x] T3 — Repository implementations of the core's `ContractRepository`,
       `SnapshotRepository`, `EventRepository`, and `FindingRepository`
       protocols, insert-only and append-only with no update or delete path;
       deterministic sequence allocation inside the appending transaction, with

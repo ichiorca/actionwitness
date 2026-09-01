@@ -87,3 +87,99 @@ Cross-cutting:
   buggy_store` and this layer share ADR-0003 and nothing else — the architecture
   gate forbids the store importing anything from here, and this layer reaches
   the store only through `integrations.buggy_store`.
+
+## Deviations and decisions worth an operator's eye
+
+Every judgment call that extends or departs from the spec, anchored to the
+section it answers to. Same convention as 002 and 003.
+
+### T1 — `artifacts.byte_size` is project-allocated (§17.1, FR-008)
+
+§17.1's `artifacts` table lists no size column, but FR-008 caps "10 MiB of
+persisted artifact bytes" per workspace. Enforcing that by stat-ing files inside
+a transaction would be both slow and racy — the file can change between the stat
+and the commit — so the size is recorded on the row that the cap sums over.
+Nothing else reads it.
+
+### T1 — `snapshots` carries `namespace`, `provenance`, and `schema_version` (§17.1, §9.3)
+
+§17.1's `snapshots` table lists `provider` but none of these three. The core's
+`SnapshotRepository.get` returns an `Observation`, and an `Observation` is not
+reconstructible without them: the namespace is what an assertion path resolves
+through (§9.3), so a snapshot restored without it would answer a *different*
+contract than the one it was captured for — silently, and only on the replay
+path. They sit beside the payload rather than inside it, for the same reason
+§9.3 keeps `state_version` out: a key inside the payload would be assertable
+through `target.namespace` and would change the content hash.
+
+### T1 — Tier 2 owner columns on `artifacts` carry no foreign key (§17.1)
+
+`evaluation_case_id`, `evaluation_run_id`, `benchmark_suite_id`, and
+`shopify_pairing_id` are declared because §17.1 declares them, but the tables
+they would reference do not exist until M6/M7 and a foreign key to a missing
+table is an error. The columns keep §17.1's shape; the keys arrive with the
+tables.
+
+### T2 — `Database(busy_timeout_ms=...)` narrows the wait for tests only
+
+ADR-0003 fixes the busy timeout at 5,000 ms, and the default is exactly that.
+The keyword exists so a contention test can observe a refusal in milliseconds
+rather than waiting out five real seconds thirteen times. It narrows the wait,
+never widens the contract, and
+`test_every_connection_applies_the_four_adr_0003_pragmas` asserts the production
+default on a connection built the production way.
+
+### T2 — four project-allocated error codes (§15.8)
+
+§15.8 fixes the envelope but not a code for each of these situations. Each is
+recorded in `tests/unit/test_registry.py`, which fails if the set changes
+without a note:
+
+| Code | HTTP | Why the spec's vocabulary was insufficient |
+|---|---|---|
+| `ORIGIN_NOT_ALLOWED` | 403 | FR-005 requires refusing a mutation from an unconfigured `Origin`; §15.8 names no code for it. |
+| `RESOURCE_NOT_FOUND` | 404 | FR-006's cross-workspace refusal. **Deliberately 404, not 403** — a 403 would confirm that the identifier names something real, which is the fact FR-006 is protecting. |
+| `RATE_LIMIT_EXCEEDED` | 429 | FR-009 fixes the buckets and the status but names no code. The only project code with `retryable: true` besides `WORKSPACE_LOCK_TIMEOUT`. |
+| `HARNESS_ERROR` | 500 | The terminal mapping for an unmapped internal fault, so a failure surfaces as a stable envelope rather than as a leaked message or traceback (§20). |
+
+`retryable` is read from the registry rather than passed by the call site, so a
+handler cannot advertise a rejected intent as safe to repeat.
+
+### T2 — a lock timeout is never retried on the caller's behalf (ADR-0003, constitution §5)
+
+The busy timeout has already elapsed by the time `WORKSPACE_LOCK_TIMEOUT` is
+raised. Retrying inside the server would repeat a mutation whose outcome is
+ambiguous, which constitution §5 forbids; the caller retries under its original
+idempotency key or does not retry at all.
+
+### T3 — `SnapshotIntegrityError` rather than a `None` or a bare payload
+
+A snapshot row whose payload no longer hashes to its stored `content_hash` has
+been altered outside the append-only path. Constitution §5 requires an explicit
+non-pass rather than a degradation to success — and returning `None` would be a
+degradation too, because "absent" and "tampered" are different facts and only
+one of them is recoverable by re-observing.
+
+### T3 — a rolled-back append reuses its sequence number
+
+`MAX(sequence_number) + 1` is computed inside the transaction, so a rejected
+append releases the number it reserved and the next append takes it. The
+timeline therefore has no gaps. A monotonic counter that leaked numbers on
+rollback would leave holes a reader could not distinguish from deleted
+evidence (§16.1).
+
+### T3 — `list_after` applies no page ceiling
+
+The route above it owns §15.3's page size. A repository that silently returned
+fewer rows than asked would make a polling client believe it had reached the end
+of the timeline. FR-008 caps a run at 250 events, so the page is bounded by the
+domain rather than by a number this layer invents.
+
+### Dependency — `aiosqlite` pinned to 0.22.1, service package only
+
+The constitution keeps `actionwitness_core` free of aiosqlite, and the
+architecture lane fails if the core grows an import of it. Chosen over
+hand-rolling a thread-pool wrapper around stdlib `sqlite3` because ADR-0003's
+busy-timeout and `BEGIN IMMEDIATE` semantics require the driver to preserve
+per-connection transaction state across awaits, which a naive executor wrapper
+does not. Small, single-module, no transitive dependencies, actively maintained.
