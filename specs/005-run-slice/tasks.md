@@ -2,7 +2,7 @@
 
 Cite the T-ID in every commit that advances it.
 
-- [ ] T1 — Arm as one transaction: authorize the workspace, validate the
+- [x] T1 — Arm as one transaction: authorize the workspace, validate the
       immutable run configuration (FR-012), capture one authoritative initial
       observation, validate preconditions, and create the run, the `before`
       snapshot, and the arming events together. A run that exists without its

@@ -123,3 +123,73 @@ answers to — the convention 002, 003, and 004 use._
 - **A tampered stored contract returns `HARNESS_ERROR`** (from 004-T12) because
   no evidence-integrity code exists in the registry. Whether M4's evidence-chain
   verification introduces a distinct code is an operator decision.
+
+### T1 — FR-030's "inside the workspace transaction" vs ADR-0003 (**operator decision**)
+
+FR-030 says arming "shall read canonical state once inside the workspace
+transaction, validate preconditions against that exact value, persist it as the
+initial snapshot". ADR-0003, Accepted and binding, says nothing async holds a
+lock or a transaction across a wait. Capturing canonical state is an HTTP call
+to the target, so the two cannot both be satisfied literally.
+
+Implemented as: read **once**, validate against **that exact value**, persist
+**that exact value** — with the transaction opened after the read. Every
+substantive clause of FR-030 holds; only the literal placement of the
+transaction boundary differs.
+
+The reasoning, so an operator can overrule it knowingly:
+
+- Holding the SQLite write lock across an external HTTP call would stall every
+  other workspace in the process and start tripping busy timeouts unrelated to
+  the slow target.
+- It would buy nothing. Canonical state lives in the *target*, not in this
+  database, so a SQLite transaction gives no isolation against it changing. The
+  literal reading protects nothing the implemented reading does not.
+
+What the transaction does own is the genuinely racy part: the configuration is
+re-read inside it and compared against what was read before the capture, and a
+mismatch refuses rather than arming against a selection nobody made. That is
+FR-012 under concurrency, and it has its own test.
+
+**Queued for the operator:** confirm this reading of FR-030, or direct that the
+capture move inside the transaction and accept the serialization cost.
+
+### T1 — arming does not reseed the target
+
+BUILD_ORDER §7/M4 lists "capture one authoritative initial observation" at
+arming; reseeding through the adapter is T10's "scenario switch and reset". So
+arming observes and does not call `prepare()`. A run armed against whatever
+state the target already holds is the honest default — preconditions are what
+decide whether that state is acceptable.
+
+### T1 — `fault_active` is left at its default
+
+§17.1's `runs.fault_active` cannot be derived by the harness: whether a profile
+is active in a given scenario mode is target semantics, and §9.1 forbids the
+harness from interpreting mode names. The selection itself (`scenario_mode`,
+`failure_profile`) is recorded faithfully. The adapter reports activation, so
+the column is populated in T10 where the adapter is consulted.
+
+### T1 — event order is `run_armed` then `snapshot_captured`
+
+FR-030's prose orders the *persistence* (snapshot, then run) but the events
+table hangs off `runs`, so the run row must exist first regardless. In the
+timeline the run's own creation is sequence 1: a `snapshot_captured` at
+sequence 1 would describe a run that, by its own timeline, did not yet exist.
+
+### T1 — `POST /runs` takes no contract identifier
+
+§15.3 describes arming "a contract", and FR-024 already made exactly one
+contract active with its target selected atomically. Accepting an identifier
+here would reintroduce the combination FR-024 forbids, so the run is armed
+against what the workspace has selected — the same thing `GET /workspace`
+reports.
+
+### T1 — proposal mode is declared and refused (**operator decision**)
+
+§15.3's `mode` accepts `verification` or `proposal`. BUILD_ORDER §7/M4 scopes
+this milestone to the verification slice and lists nothing about candidate
+derivation or curation, so `proposal` is refused explicitly rather than silently
+downgraded — the 003 pattern for an unimplemented option. **Queued for the
+operator:** which milestone owns proposal mode? §32's cut order puts it at
+priority 5 and AC-23 marks it `[T1]`, but no BUILD_ORDER milestone lists it.
