@@ -337,3 +337,57 @@ message with no traceback, class name, or exception text, because an unhandled
 failure is exactly the case where the message is most likely to name a table, a
 path, or a value. Tests assert the absence of specific leaked substrings rather
 than merely the status.
+
+### T8 — the event ceiling commits; every other ceiling rolls back
+
+This is the one place where the two rules in the ground rules point in opposite
+directions, and getting it backwards was a real bug caught by a test.
+
+A creation past a cap **must commit nothing** (FR-009: limits "shall never
+partially commit a mutation"), so `guard_new_run` and `guard_new_artifact`
+raise inside the caller's unit of work and the transaction unwinds.
+
+A run that hits the event ceiling **must commit more**. FR-008 requires the
+server to "atomically move the active run to `error`, append that boundary
+event ... and preserve existing evidence" — and raising inside the unit of work
+rolled back the very evidence the requirement exists to create. So
+`trip_if_event_budget_exhausted` *returns* its refusal instead of raising it:
+the caller commits the two boundary writes, then raises what it was handed.
+Both writes still share one transaction, so there is no state where the run is
+stopped but nobody recorded the stop — a test aborts mid-unit-of-work and shows
+neither survives.
+
+### T8 — the ceiling is 249 + 1, not 250
+
+"250 persisted events, with one slot reserved for the terminal
+`resource_limit_exceeded` boundary event" is a reserved slot, not an overflow. A
+run that spent all 250 on ordinary events would have nowhere to record *why* it
+stopped, which is the one event that makes the stop legible.
+
+### T8 — Tier 2 ceilings are declared but not yet enforced
+
+The constants for eval cases, eval runs, benchmark suites, trials per suite, and
+Shopify pairings are transcribed here so FR-008's numbers live in one place, and
+a test asserts each value. They are absent from the enforcement map because
+their tables arrive with M6/M7 and counting a table that does not exist is an
+error rather than a ceiling. `CONCURRENT_EVENT_STREAMS` is likewise declared;
+the stream endpoint is M4's.
+
+### T8 — the artifact byte cap counts the artifact about to be written
+
+A cap that admitted the write which crossed it would be off by one artifact, and
+that artifact could itself be 10 MiB. `stored + byte_size > ceiling` rather than
+`stored >= ceiling`. Also 10 **MiB**, not 10 MB — the two differ by 485,760
+bytes, and a test asserts the mebibyte reading.
+
+### T8 — the boundary event's actor is `harness`
+
+Not `agent`. The event is the server speaking about the run; attributing it to
+the agent would put a sentence in the mouth of the thing under test.
+
+### T8 — tripping the ceiling on another workspace's run yields `RESOURCE_NOT_FOUND`
+
+The `UPDATE` is workspace-scoped, so a stranger's attempt changes nothing. The
+refusal is the same 404 as any other cross-workspace access rather than an
+`EVENT_LIMIT_EXCEEDED`, which would confirm both that the run exists and how
+much of its budget it has spent.

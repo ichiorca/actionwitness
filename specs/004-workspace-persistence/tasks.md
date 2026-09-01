@@ -31,7 +31,7 @@ Cite the T-ID in every commit that advances it.
       core `CoreError` codes acquire an HTTP status here, invalid transitions
       return 409 using `journeys.transitions`, and no internal detail or
       traceback reaches a client.
-- [ ] T8 — FR-008's hard ceilings, exact: 250 events per run with one slot
+- [x] T8 — FR-008's hard ceilings, exact: 250 events per run with one slot
       reserved for the terminal `resource_limit_exceeded` carrying
       `EVENT_LIMIT_EXCEEDED`; 10 outcome runs, 10 eval cases, 20 eval runs,
       three suites of 100 trials, five pairings, 25 artifacts, 10 MiB of
