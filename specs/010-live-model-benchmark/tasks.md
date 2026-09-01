@@ -8,7 +8,7 @@ Cite the T-ID in every commit that advances it.
       behind a pinned `webmcp-evals` configuration, resolved as a module like
       every other. Absent configuration disables the live path and leaves the
       Tier 2 import path fully working (FR-096).
-- [ ] T2 — Credential handling: supplied only through a developer environment
+- [x] T2 — Credential handling: supplied only through a developer environment
       or deployment secret, retained only in the evaluator process
       environment. Never through the browser, a WebMCP argument, a committed
       file, or an uploaded benchmark manifest — one test per prohibited place.

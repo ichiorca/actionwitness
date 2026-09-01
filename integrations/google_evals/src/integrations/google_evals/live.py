@@ -175,6 +175,63 @@ def source_kind_for(settings: object) -> SourceKind:
     return SourceKind.LIVE_MODEL_RUN
 
 
+class CredentialMaterialRejected(ValueError):
+    """An uploaded document carried something that looks like a credential.
+
+    Distinct from `ReportRejected` because the remedy is different: a malformed
+    report needs regenerating, and this one needs a human to find out how a
+    secret reached a file somebody was about to upload — and to rotate it.
+    """
+
+
+def screen_for_credential_material(document: Mapping[str, object], settings: object) -> None:
+    """Refuse an uploaded document that carries credential material (FR-099).
+
+    FR-099 forbids a credential arriving "through ... an uploaded benchmark
+    manifest", and this is the one prohibited channel the harness can actually
+    police: it knows the *name* of the variable the credential lives in, so a
+    document using that name as a key is a credential being carried in.
+
+    Deliberately narrow. It screens for the configured variable name and for a
+    small set of unambiguous credential key spellings, and it does **not** try
+    to recognise secrets by shape — a heuristic that guessed would reject
+    ordinary data and, worse, would teach a reader that anything it passed was
+    safe. The general defence is redaction before persistence (FR-090), which
+    runs regardless; this is the specific one that can name what went wrong.
+
+    Raises rather than redacting, because a credential in a file destined for a
+    repository is an incident: silently removing it would hide the fact that
+    the value existed and needs rotating (constitution §7).
+    """
+    names = {"apikey", "api_key", "secret", "password", "credential", "access_token"}
+    configured = str(getattr(settings, "credential_var", "") or "").strip().lower()
+    if configured:
+        names.add(configured)
+
+    found = _keys_matching(document, names)
+    if found:
+        raise CredentialMaterialRejected(
+            "the uploaded document carries credential material under "
+            f"{sorted(found)}; a credential must reach this process only through "
+            "the evaluator's environment (FR-099). Treat the value as exposed "
+            "and rotate it."
+        )
+
+
+def _keys_matching(value: object, names: set[str]) -> set[str]:
+    """Every key in a nested document whose name is credential-like."""
+    found: set[str] = set()
+    if isinstance(value, Mapping):
+        for key, nested in value.items():
+            if str(key).strip().lower() in names:
+                found.add(str(key))
+            found |= _keys_matching(nested, names)
+    elif isinstance(value, list | tuple):
+        for item in value:
+            found |= _keys_matching(item, names)
+    return found
+
+
 def redacted_summary(configuration: LiveRunConfiguration) -> Mapping[str, str]:
     """What may be shown about a live run, for a UI or a log line.
 

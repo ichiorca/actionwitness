@@ -151,6 +151,10 @@ async def import_evaluator_report(
     hashed and preserved as the immutable source artifact; normalization runs
     last, over a document that has already been validated and redacted.
     """
+    from integrations.google_evals.live import (
+        CredentialMaterialRejected,
+        screen_for_credential_material,
+    )
     from integrations.google_evals.normalize import normalize
     from integrations.google_evals.reader import ImportLimits, ReportRejected, read_report
 
@@ -169,6 +173,16 @@ async def import_evaluator_report(
         )
     except ReportRejected as rejected:
         raise _rejection(rejected) from rejected
+
+    # FR-099: a credential must never arrive through an uploaded manifest.
+    # Screened *before* anything is written, because a secret in a persisted
+    # artifact is an incident rather than a validation failure — and because
+    # refusing the whole import is what makes the value's existence visible
+    # instead of quietly redacted away.
+    try:
+        screen_for_credential_material(imported.document, settings.live_evaluator)
+    except CredentialMaterialRejected as carried:
+        raise ApiError(ApiErrorCode.CONTRACT_VALIDATION_FAILED, str(carried)) from carried
 
     async with locks.hold(workspace_id), database.transaction() as work:
         service = BenchmarkService(work, workspace_id)
