@@ -1,14 +1,300 @@
 /**
- * Workspace shell placeholder. The real Tier 1 layout (spec §8.4) is one
- * desktop-first workspace: capability bar, configuration panel, contract panel,
- * target panel, agent activity timeline, findings panel, confirmation dialog —
- * see src/components/README.md for the required component list.
+ * The Tier 1 workspace (§8.4, AC-01, AC-09, AC-21).
+ *
+ * One desktop-first page: capability bar, guidance banner, and the working
+ * panels beneath it. Everything it shows comes from FastAPI, and everything it
+ * does goes back through the recorded API — so the page is a view of the
+ * harness rather than a second copy of its rules.
+ *
+ * **The whole page works without WebMCP.** Tool registration happens in hooks
+ * whose absence is a safe no-op (AC-09), and no control below is gated on a
+ * tool existing. That is the property that makes "an unsupported browser
+ * completes the manual equivalent" true rather than aspirational: there is no
+ * separate manual path to maintain, because the human path is the only path and
+ * the tools drive the same endpoints.
  */
-export default function App() {
+
+import { useCallback, useEffect, useState } from "react";
+
+import { ApiError, request } from "./api/client";
+import {
+  type FindingsPage,
+  type PendingConfirmation,
+  parseFindings,
+  parseRun,
+} from "./api/workspace";
+import { ConfirmationDialog } from "./components/ConfirmationDialog";
+import { GuidanceBanner } from "./components/GuidanceBanner";
+import {
+  CapabilityBar,
+  ComparisonPanel,
+  ConfigPanel,
+  type ContractTemplate,
+  ContractPanel,
+  FindingsPanel,
+  RunTimeline,
+  TargetPanel,
+} from "./components/panels";
+import { decide, useBuggyStoreTools } from "./integrations/buggyStore/tools";
+import { confirmations } from "./state/confirmations";
+import { useRunTimeline } from "./state/useRunTimeline";
+import { useWorkspace } from "./state/useWorkspace";
+import { useHarnessToolset } from "./tools/harnessTools";
+import { useWorkspaceStatusTool } from "./tools/workspaceStatus";
+import { isWebMcpSupported, useRegisteredToolNames } from "./webmcp/adapter";
+
+const TERMINAL = ["passed", "passed_with_warnings", "failed", "error", "cancelled"];
+
+/** A string field from an untrusted response, or a stated fallback. */
+function asText(value: unknown, fallback: string): string {
+  return typeof value === "string" && value !== "" ? value : fallback;
+}
+
+export default function App(): React.ReactElement {
+  const { status, error, loading, refresh } = useWorkspace();
+  const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [templates, setTemplates] = useState<readonly ContractTemplate[]>([]);
+  const [findings, setFindings] = useState<FindingsPage | null>(null);
+  const [pending, setPending] = useState<PendingConfirmation | null>(null);
+
+  const phase = status?.guidance.phase ?? "";
+  const runId = status?.activeRun?.runId ?? null;
+  const registeredTools = useRegisteredToolNames();
+
+  // Registration is unconditional — the hooks themselves are no-ops without
+  // WebMCP, which keeps the rules of hooks satisfied and AC-09 true.
+  useWorkspaceStatusTool();
+  useHarnessToolset(status, refresh);
+  useBuggyStoreTools(runId, phase, refresh);
+
+  /** One place for "do a thing, then re-read what the server now says". */
+  const act = useCallback(
+    async (work: () => Promise<unknown>) => {
+      setBusy(true);
+      setActionError(null);
+      try {
+        await work();
+        await refresh();
+      } catch (caught: unknown) {
+        setActionError(caught instanceof ApiError ? caught.message : "That did not work.");
+      } finally {
+        setBusy(false);
+      }
+    },
+    [refresh],
+  );
+
+  useEffect(() => {
+    let live = true;
+    const controller = new AbortController();
+    void request("/contracts/templates", {
+      signal: controller.signal,
+      parse: (value): readonly ContractTemplate[] => {
+        const record = value as { templates?: unknown };
+        return Array.isArray(record.templates)
+          ? record.templates.map((entry) => {
+              const template = entry as Record<string, unknown>;
+              return {
+                contractId: String(template["contract_id"]),
+                sourceTemplateId: String(template["source_template_id"]),
+                title: String(template["title"] ?? template["source_template_id"]),
+              };
+            })
+          : [];
+      },
+    }).then(
+      (loaded) => {
+        if (live) {
+          setTemplates(loaded);
+        }
+      },
+      () => undefined,
+    );
+    return () => {
+      live = false;
+      controller.abort();
+    };
+  }, []);
+
+  // The pending confirmation and the findings both follow the run, and both are
+  // read from the server rather than remembered — a page that cached them would
+  // show a dialog for a decision somebody already made in another tab.
+  useEffect(() => {
+    if (runId === null) {
+      setPending(null);
+      setFindings(null);
+      return;
+    }
+    let live = true;
+    const controller = new AbortController();
+
+    void request(`/runs/${runId}`, { parse: parseRun, signal: controller.signal }).then(
+      (run) => {
+        if (live) {
+          setPending(run.pendingConfirmation);
+        }
+      },
+      () => undefined,
+    );
+
+    if (TERMINAL.includes(phase)) {
+      void request(`/runs/${runId}/findings?limit=10`, {
+        parse: parseFindings,
+        signal: controller.signal,
+      }).then(
+        (page) => {
+          if (live) {
+            setFindings(page);
+          }
+        },
+        () => undefined,
+      );
+    }
+
+    return () => {
+      live = false;
+      controller.abort();
+    };
+  }, [runId, phase]);
+
+  const timeline = useRunTimeline(runId);
+
+  const onDecision = useCallback(
+    async (decision: "approve_once" | "deny") => {
+      if (runId === null || pending === null) {
+        return;
+      }
+      await act(async () => {
+        const outcome = await decide(runId, pending.confirmationId, decision);
+        // Release the waiting tool handler (§14.14's correlation map). The
+        // server has already recorded the decision, so this only unblocks the
+        // promise — it never decides anything itself.
+        confirmations.settle(
+          pending.confirmationId,
+          decision === "approve_once"
+            ? { kind: "approved" }
+            : {
+                kind: "refused",
+                // Narrowed rather than coerced: the response is untrusted
+                // input, and `String()` on an unexpected object would put
+                // "[object Object]" in front of a person as the reason their
+                // action was refused.
+                status: asText(outcome["status"], "denied"),
+                detail: asText(outcome["detail"], "The action was refused."),
+              },
+        );
+        setPending(null);
+      });
+    },
+    [act, pending, runId],
+  );
+
   return (
-    <main>
+    <main className="workspace">
       <h1>ActionWitness</h1>
-      <p>Scaffold only — Tier 1 workspace UI not implemented yet (spec v1.9 §8.4).</p>
+
+      <CapabilityBar
+        capabilities={status?.capabilities ?? []}
+        webMcpSupported={isWebMcpSupported()}
+        registeredToolCount={registeredTools.length}
+      />
+
+      <GuidanceBanner guidance={status?.guidance ?? null} loading={loading} />
+
+      {error === null ? null : <p role="alert">{error}</p>}
+      {actionError === null ? null : <p role="alert">{actionError}</p>}
+
+      {status === null ? null : (
+        <div className="workspace__panels">
+          <ConfigPanel
+            status={status}
+            busy={busy}
+            onScenarioMode={(mode) => {
+              void act(async () =>
+                request("/workspace/scenario-mode", {
+                  method: "PUT",
+                  body: { scenario_mode: mode },
+                  parse: (value) => value,
+                }),
+              );
+            }}
+            onFailureProfile={(profile) => {
+              void act(async () =>
+                request("/workspace/failure-profile", {
+                  method: "PUT",
+                  body: { failure_profile: profile },
+                  parse: (value) => value,
+                }),
+              );
+            }}
+            onReset={() => {
+              void act(async () =>
+                request("/workspace/reset", { method: "POST", body: {}, parse: (value) => value }),
+              );
+            }}
+          />
+
+          <ContractPanel
+            templates={templates}
+            selectedContractId={status.selectedContractId}
+            busy={busy}
+            canSelect={status.activeRun === null || TERMINAL.includes(status.activeRun.status)}
+            onSelect={(contractId) => {
+              void act(async () =>
+                request(`/contracts/${contractId}/select`, {
+                  method: "POST",
+                  parse: (value) => value,
+                }),
+              );
+            }}
+          />
+
+          <TargetPanel
+            status={status}
+            busy={busy}
+            canArm={phase === "contract_ready"}
+            canVerify={phase === "running"}
+            onArm={() => {
+              void act(async () =>
+                request("/runs", { method: "POST", body: {}, parse: (value) => value }),
+              );
+            }}
+            onVerify={() => {
+              void act(async () =>
+                request(`/runs/${runId ?? ""}/verify`, { method: "POST", parse: (value) => value }),
+              );
+            }}
+          />
+
+          <RunTimeline
+            events={timeline.events}
+            runStatus={timeline.runStatus}
+            polling={timeline.polling}
+          />
+
+          <FindingsPanel
+            findings={findings?.findings ?? []}
+            total={findings?.total ?? 0}
+            elided={findings?.elided ?? 0}
+            reportPath={findings?.report ?? null}
+            overallResult={findings?.overallResult ?? null}
+          />
+
+          <ComparisonPanel comparable={null} differingFields={[]} resolved={[]} introduced={[]} />
+        </div>
+      )}
+
+      {pending === null ? null : (
+        <ConfirmationDialog
+          pending={pending}
+          // §14.14: only the tab holding the waiting promise offers controls.
+          owned={confirmations.isWaiting(pending.confirmationId)}
+          busy={busy}
+          onApprove={() => void onDecision("approve_once")}
+          onDeny={() => void onDecision("deny")}
+        />
+      )}
     </main>
   );
 }
