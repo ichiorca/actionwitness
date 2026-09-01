@@ -1,11 +1,15 @@
 # Render deployment — one web service, Docker runtime (spec §29.1).
-# Use an always-on paid instance (or verified no-sleep tier) from final video recording
-# through September 21; do not depend on a free-tier cold start during judging.
+# FREE instance by operator decision (2026-09-01): Render is a challenge
+# sponsor, its free tier runs Docker with no card, and 750 free instance
+# hours/month cover one always-on service. The no-cold-start-during-judging
+# rule is met by an external /healthz pinger every 5 minutes (spin-down
+# triggers at 15 idle minutes). Upgrade to starter only if the pinger
+# arrangement is retired before September 21.
 services:
   - type: web
     name: actionwitness
     runtime: docker
-    plan: starter
+    plan: free
     healthCheckPath: /healthz
     envVars:
       - key: HARNESS_PUBLIC_ORIGIN
