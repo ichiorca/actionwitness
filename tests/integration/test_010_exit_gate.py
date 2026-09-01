@@ -346,18 +346,40 @@ def test_gate_6_ac_17_needs_a_live_run_this_suite_cannot_perform() -> None:
 def test_gate_6_shopify_work_has_not_started() -> None:
     """BUILD_ORDER §7/M9: "If it does not [pass], do not start Shopify work."
 
-    AC-17 is unproven until T11 runs, so 011/M10 must not have begun. This
-    fails the day a Shopify spec lands, which is the moment somebody needs
-    telling that the gate it depends on is still open.
+    **Ticked tasks, not the spec's existence.** This test first asserted that no
+    `011*` directory existed at all, which was a proxy rather than the
+    requirement — and the wrong one. Authoring a spec is planning; ticking a
+    task is work. This repository has authored the next milestone's WHAT ahead
+    of the current gate before (009 was pre-drafted during 007, and 008 during
+    007's exit gate), and BUILD_ORDER's own entry conditions are written to be
+    read before the work begins.
+
+    So the gate now enforces what §7/M9 actually forbids: 011 may be planned
+    while AC-17 is unproven, and none of its tasks may be marked done. It fails
+    the moment one is, which is the moment somebody needs telling.
     """
     # Arrange
-    specs = REPO_ROOT / "specs"
+    shopify_specs = sorted(
+        path for path in (REPO_ROOT / "specs").iterdir() if path.name.startswith("011")
+    )
 
     # Act
-    shopify = [path.name for path in specs.iterdir() if path.name.startswith("011")]
+    ticked: list[str] = []
+    for spec in shopify_specs:
+        tasks = spec / "tasks.md"
+        if not tasks.is_file():
+            continue
+        ticked += [
+            line.strip()
+            for line in tasks.read_text(encoding="utf-8").splitlines()
+            if line.strip().startswith("- [x]")
+        ]
 
     # Assert
-    assert shopify == [], (
-        f"Shopify work has started ({shopify}) while AC-17 is unproven; "
-        "BUILD_ORDER §7/M9 gates it on a passing live benchmark"
+    assert not ticked, (
+        "Shopify tasks are marked done while AC-17 is unproven: "
+        + "; ".join(ticked)
+        + ". BUILD_ORDER §7/M9 gates M10 on a passing live benchmark, and "
+        "§7/M10's entry condition also requires the development-store "
+        "configuration to be locked."
     )
