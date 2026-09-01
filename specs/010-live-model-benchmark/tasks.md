@@ -15,7 +15,7 @@ Cite the T-ID in every commit that advances it.
 - [x] T3 — Intent generation: from one canonical contract intent, up to six
       paraphrased, ambiguous, and adversarial variants, with Python
       schema-validating length and character limits.
-- [ ] T4 — Variant screening: reject any variant containing secrets or
+- [x] T4 — Variant screening: reject any variant containing secrets or
       instructions to bypass confirmation, before a human is asked to review.
       A model-authored variant is untrusted text, never an instruction.
 - [ ] T5 — Explicit human approval, recorded, and prior to freezing.
