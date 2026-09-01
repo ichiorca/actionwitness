@@ -51,6 +51,7 @@ __all__ = [
     "EvalReport",
     "EvalSource",
     "EvalTarget",
+    "RecordedDecision",
     "RegressionEvalCase",
     "ReplayConfiguration",
     "SourceFinding",
@@ -238,21 +239,51 @@ class SurfaceEvidence(CoreModel):
         }
 
 
+class RecordedDecision(CoreModel):
+    """One consent decision the source run actually recorded (§24.5, FR-087).
+
+    Carried *in the case* because FR-082 makes a case self-contained: a replay
+    that had to look up the source run's events to learn whether a human
+    approved would depend on the database the case was cut from, which is the
+    dependency portability exists to remove.
+
+    Bound to a tool, because consent is not transferable — a human approving a
+    checkout did not approve every protected action the case might contain.
+    """
+
+    tool: Annotated[str, StringConstraints(min_length=1, max_length=64)]
+    approved: bool
+
+    def canonical_document(self) -> dict[str, JsonValue]:
+        return {"tool": self.tool, "approved": self.approved}
+
+
 class ReplayConfiguration(CoreModel):
     """How the case replays (§24.1 `replay`, §24.5).
 
     `default_environment` is `current` and §24.4 forbids a generated case from
     silently forcing the other — a case that defaulted to `reproduce_source`
     would report a reproduced failure as routine CI success.
+
+    `recorded_decisions` extends §24.1's illustrative `replay` block. The spec
+    names three confirmation strategies and forbids inferring consent, but its
+    example carries no decision for `recorded_approval` to replay — so a case
+    could name the strategy and have nothing to honour it with. Recorded in the
+    007 deviations ledger.
     """
 
     default_environment: EvalEnvironment = EvalEnvironment.CURRENT
     confirmation_strategy: ConfirmationStrategy = ConfirmationStrategy.NO_CONFIRMATION
+    recorded_decisions: tuple[RecordedDecision, ...] = ()
 
     def canonical_document(self) -> dict[str, JsonValue]:
         return {
             "default_environment": self.default_environment.value,
             "confirmation_strategy": self.confirmation_strategy.value,
+            "recorded_decisions": [
+                decision.canonical_document()
+                for decision in sorted(self.recorded_decisions, key=lambda d: d.tool)
+            ],
         }
 
 

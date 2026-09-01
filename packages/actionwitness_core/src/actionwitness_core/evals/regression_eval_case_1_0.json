@@ -617,6 +617,28 @@
       "title": "Precondition",
       "type": "object"
     },
+    "RecordedDecision": {
+      "additionalProperties": false,
+      "description": "One consent decision the source run actually recorded (\u00a724.5, FR-087).\n\nCarried *in the case* because FR-082 makes a case self-contained: a replay\nthat had to look up the source run's events to learn whether a human\napproved would depend on the database the case was cut from, which is the\ndependency portability exists to remove.\n\nBound to a tool, because consent is not transferable \u2014 a human approving a\ncheckout did not approve every protected action the case might contain.",
+      "properties": {
+        "approved": {
+          "title": "Approved",
+          "type": "boolean"
+        },
+        "tool": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Tool",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tool",
+        "approved"
+      ],
+      "title": "RecordedDecision",
+      "type": "object"
+    },
     "RedactionGlob": {
       "description": "Redaction glob pattern (\u00a720.3)",
       "type": "string"
@@ -640,7 +662,7 @@
     },
     "ReplayConfiguration": {
       "additionalProperties": false,
-      "description": "How the case replays (\u00a724.1 `replay`, \u00a724.5).\n\n`default_environment` is `current` and \u00a724.4 forbids a generated case from\nsilently forcing the other \u2014 a case that defaulted to `reproduce_source`\nwould report a reproduced failure as routine CI success.",
+      "description": "How the case replays (\u00a724.1 `replay`, \u00a724.5).\n\n`default_environment` is `current` and \u00a724.4 forbids a generated case from\nsilently forcing the other \u2014 a case that defaulted to `reproduce_source`\nwould report a reproduced failure as routine CI success.\n\n`recorded_decisions` extends \u00a724.1's illustrative `replay` block. The spec\nnames three confirmation strategies and forbids inferring consent, but its\nexample carries no decision for `recorded_approval` to replay \u2014 so a case\ncould name the strategy and have nothing to honour it with. Recorded in the\n007 deviations ledger.",
       "properties": {
         "confirmation_strategy": {
           "$ref": "#/$defs/ConfirmationStrategy",
@@ -649,6 +671,14 @@
         "default_environment": {
           "$ref": "#/$defs/EvalEnvironment",
           "default": "current"
+        },
+        "recorded_decisions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RecordedDecision"
+          },
+          "title": "Recorded Decisions",
+          "type": "array"
         }
       },
       "title": "ReplayConfiguration",

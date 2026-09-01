@@ -31,6 +31,7 @@ from actionwitness_core.evals.models import (
     EvalFixture,
     EvalSource,
     EvalTarget,
+    RecordedDecision,
     RegressionEvalCase,
     ReplayConfiguration,
     SourceFinding,
@@ -92,6 +93,7 @@ def build_case(
     surface: SurfaceEvidence | None = None,
     non_replayable_policies: Sequence[str] = (),
     confirmation_strategy: ConfirmationStrategy = ConfirmationStrategy.NO_CONFIRMATION,
+    recorded_decisions: Sequence[RecordedDecision] = (),
     generator_version: str,
 ) -> RegressionEvalCase:
     """Assemble one case. Same evidence in, byte-identical case out."""
@@ -148,6 +150,7 @@ def build_case(
             # `reproduce_source`. `current` is always the default."
             default_environment=EvalEnvironment.CURRENT,
             confirmation_strategy=confirmation_strategy,
+            recorded_decisions=tuple(recorded_decisions),
         ),
         expected=EvalExpectations(
             # Step 7: the corrected implementation is expected to be clean.

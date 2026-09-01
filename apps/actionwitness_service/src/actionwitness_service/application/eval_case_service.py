@@ -35,6 +35,7 @@ from actionwitness_core.evals.factory import build_case
 from actionwitness_core.evals.minimize import minimize_fixture, prune_trajectory
 from actionwitness_core.evals.models import (
     CASE_SCHEMA_VERSION,
+    RecordedDecision,
     RegressionEvalCase,
     SourceFinding,
 )
@@ -46,7 +47,6 @@ from actionwitness_core.reports.enums import LayerResult
 from actionwitness_service.api.errors import ApiError, ApiErrorCode
 from actionwitness_service.application.authorization import WorkspaceScope
 from actionwitness_service.persistence.database import UnitOfWork
-from actionwitness_service.persistence.repositories import new_id
 
 __all__ = ["EvalCaseService", "GeneratedCase"]
 
@@ -98,6 +98,7 @@ class EvalCaseService:
         fixture_state, fixture_version = await self._initial_fixture(run_id)
         trajectory = await self._trajectory(run_id)
         findings = await self._findings(run_id)
+        decisions = await self._recorded_decisions(run_id)
 
         # §24.2 steps 2-3. Minimization happens here, where the adapter is
         # reachable: which tools are read-only is the adapter's published
@@ -126,7 +127,8 @@ class EvalCaseService:
                 fixture_is_complete=is_complete,
                 trajectory=trajectory,
                 source_findings=findings,
-                confirmation_strategy=_strategy_for(contract),
+                confirmation_strategy=_strategy_for(decisions),
+                recorded_decisions=decisions,
                 generator_version=CASE_SCHEMA_VERSION,
             )
         except CoreError as rejected:
@@ -294,6 +296,32 @@ class EvalCaseService:
             if spec.side_effect is SideEffectClass.READ_ONLY
         )
 
+    async def _recorded_decisions(self, run_id: str) -> tuple[RecordedDecision, ...]:
+        """Consent decisions the source run actually recorded (§24.5, FR-087).
+
+        Carried into the case so a replay never has to consult the database the
+        case was cut from — FR-082's self-containment — and so a decision can
+        only exist here because a human made it there.
+        """
+        rows = await self._work.fetch_all(
+            "SELECT event_type, tool_name FROM events WHERE run_id = ? AND event_type IN (?, ?) "
+            "ORDER BY sequence_number",
+            (
+                run_id,
+                str(OutcomeEventType.CONFIRMATION_APPROVED.value),
+                str(OutcomeEventType.CONFIRMATION_DENIED.value),
+            ),
+        )
+        return tuple(
+            RecordedDecision(
+                tool=str(row["tool_name"]),
+                approved=str(row["event_type"])
+                == str(OutcomeEventType.CONFIRMATION_APPROVED.value),
+            )
+            for row in rows
+            if row["tool_name"]
+        )
+
     # -- persistence ---------------------------------------------------------
 
     async def _persist(
@@ -320,7 +348,11 @@ class EvalCaseService:
             )
 
         stored = case.as_stored_document()
-        row_id = new_id("evc")
+        # The row's primary key IS the case's own id. §24.1 gives a case an
+        # `id` and §17.1 gives the table one; two identifiers for one case
+        # would leave `evaluation_runs.evaluation_case_id` ambiguous about
+        # which it referenced — and the case id is already derived from
+        # FR-080's idempotence key, so it is unique by construction.
         await self._work.execute(
             """
             INSERT INTO evaluation_cases (
@@ -330,7 +362,7 @@ class EvalCaseService:
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                row_id,
+                case.id,
                 self._workspace_id,
                 run_id,
                 contract_hash,
@@ -344,7 +376,7 @@ class EvalCaseService:
                 self._work.now(),
             ),
         )
-        return GeneratedCase(case=case, case_id=row_id, created=True)
+        return GeneratedCase(case=case, case_id=case.id, created=True)
 
     async def get(self, case_id: str) -> tuple[RegressionEvalCase, Mapping[str, Any]]:
         """One case this workspace owns, parsed back from its stored bytes."""
@@ -407,14 +439,20 @@ def _critical(findings: Sequence[SourceFinding]) -> tuple[FailureClassification,
     )
 
 
-def _strategy_for(contract: OutcomeContract) -> ConfirmationStrategy:
-    """Which interaction provider a case defaults to (§24.5).
+def _strategy_for(decisions: Sequence[RecordedDecision]) -> ConfirmationStrategy:
+    """Which interaction provider a case replays with (§24.5), from evidence.
 
-    A contract with no `requires_confirmation` policy has nothing to decide, so
-    `no_confirmation` is both correct and the safe default. A contract that
-    protects a tool keeps the same default deliberately: FR-087 forbids
-    inferring consent, and choosing `recorded_approval` here would be the
-    harness deciding, on the operator's behalf, that a recorded approval
-    existed. T7 reads the recording and sets it from evidence.
+    Read from what the source run recorded, never chosen: FR-087 forbids
+    inferring consent, so a case gets `recorded_approval` only because a human
+    actually approved and that approval is carried in the case.
+
+    No recorded decision means `no_confirmation` — which is not a fallback but
+    the correct reproduction: a run that never obtained consent is reproduced by
+    a replay that does not supply any, and correct behaviour then blocks the
+    mutation (§24.5).
     """
+    if any(decision.approved for decision in decisions):
+        return ConfirmationStrategy.RECORDED_APPROVAL
+    if decisions:
+        return ConfirmationStrategy.RECORDED_DENIAL
     return ConfirmationStrategy.NO_CONFIRMATION

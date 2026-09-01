@@ -18,20 +18,20 @@ Cite the T-ID in every commit that advances it.
       values with deterministic type-valid fixtures, validate against the
       repository's public JSON Schema, and calculate the content hash **last**,
       after every other field is final.
-- [ ] T5 — The isolated eval workspace (§17.1 `kind: eval`) and fixture restore
+- [x] T5 — The isolated eval workspace (§17.1 `kind: eval`) and fixture restore
       through the registered `ManagedTargetAdapter` — never through a second
       path to the target.
-- [ ] T6 — Replay the allowlisted trajectory through that adapter, capturing
+- [x] T6 — Replay the allowlisted trajectory through that adapter, capturing
       state and events under the `eval` actor so a replayed run classifies
       identically to its source.
-- [ ] T7 — The interaction providers: `recorded_approval`, `recorded_denial`,
+- [x] T7 — The interaction providers: `recorded_approval`, `recorded_denial`,
       and `no_confirmation`. No mode may synthesize an approval the case did not
       contain.
-- [ ] T8 — Environment profiles: `current` → `post_fix` with no active fault,
+- [x] T8 — Environment profiles: `current` → `post_fix` with no active fault,
       `reproduce_source` → the immutable source scenario and failure profile.
       The mapping lives in the integration/application layer, never in the core.
       `current` is always the default.
-- [ ] T9 — Expectation matching: compare overall result **and** the exact
+- [x] T9 — Expectation matching: compare overall result **and** the exact
       critical classification set. Eval status is expectation matching, not
       whether the business outcome string is literally `passed`.
 - [ ] T10 — Non-replayable evidence (§24.3a): replay the recorded `surface`
