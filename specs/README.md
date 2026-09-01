@@ -35,3 +35,22 @@ Workflow per spec: `/spec-kit-handoff <id>` → implement citing T-IDs →
   exact source-failure fidelity, recorded evaluator import.
 - `specs/*/spec.md` is operator-owned once approved; sessions edit `plan.md`
   and `tasks.md` only.
+
+## Runway extension — round-2 features (planned 2026-09-01)
+
+Beyond the M0–M11 runway, from `docs/actionwitness-top3-features-round2.md`
+(local planning input). All three complete v1.9 requirements that shipped as
+honest scaffolds; none is an off-spec invention. Drafts staged for operator
+rename per the standing convention.
+
+| Spec | Feature | Completes | Cost | When |
+|---|---|---|---|---|
+| `013-undeclared-change-detection` | the FR-157 diff behind `no_undeclared_changes`, plus the `undeclared_side_effect` injector and third contract template | §9.10, FR-157 | ~0.5 d | The only one plausibly pre-submission — enter after 009-T9/T11 and the demo |
+| `014-tool-surface-witness` | live surface capture/watch behind `stable_tool_surface`; `tool_surface_poisoned` demo profile | §9.5, §16.1 | ~1–1.5 d | post-submission |
+| `015-storefront-witness` | the `external_audit` module, Shopify ten-tool contract pack, merchant-readable report | §12.17, FR-110 | ~1–1.5 d net | post-submission; NOT gated on AC-17 |
+
+Priority preserved from the source: 013 always; 015 over 014 for the
+audience story, 014 over 015 for the research story. Zero-cost item taken
+immediately: the demo leads with the shared human-agent workspace and lands
+the eval/CI story as the payoff, not the opening — this goes in the demo
+script, not a spec.
