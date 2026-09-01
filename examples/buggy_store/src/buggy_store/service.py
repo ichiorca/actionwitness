@@ -36,19 +36,21 @@ from typing import Any, Final
 
 from buggy_store.catalog import (
     CATALOG_BY_PRODUCT_ID,
+    DISCOUNTS,
     MAX_LINE_QUANTITY,
     MAX_SEARCH_RESULTS,
     Product,
     search_catalog,
 )
-from buggy_store.errors import ProductNotFound, ValidationFailed
+from buggy_store.errors import DiscountNotFound, ProductNotFound, ValidationFailed
 from buggy_store.models import CartLine, StoreState, TargetState, build_cart
 from buggy_store.repository import StoreRepository
 
-__all__ = ["UPDATE_CART", "MutationOutcome", "StoreService"]
+__all__ = ["APPLY_DISCOUNT", "UPDATE_CART", "MutationOutcome", "StoreService"]
 
 #: Tool names, used as the idempotency-record scope (§17.1 keys records on it).
 UPDATE_CART: Final = "update_cart"
+APPLY_DISCOUNT: Final = "apply_discount"
 
 #: Appendix D.2 bounds `request_id` at 8..80 characters.
 MIN_REQUEST_ID: Final = 8
@@ -188,6 +190,57 @@ class StoreService:
             return current
         return current.with_target_state(rebuilt)
 
+    # -- discount ------------------------------------------------------------
+
+    async def apply_discount(self, workspace_id: str, code: str) -> MutationOutcome:
+        """Apply one allowlisted discount to the canonical cart (Appendix D.2).
+
+        Carries no `request_id`, and needs none: Appendix D.2's schema omits one
+        because the operation is naturally idempotent. "Reapplying the active
+        code returns `already_applied` and does not change state", so repetition
+        is safe without a stored record, and inventing a key here would add a
+        failure mode (reuse conflicts) the specification does not define.
+
+        The discount is stored as a *code*, and its amount is recomputed whenever
+        the lines move. Freezing the amount at application time would leave a
+        cart claiming 20% off a subtotal it no longer has.
+        """
+        self._require_discount(code)
+
+        async with self._lock_for(workspace_id), self._repository.connect() as connection:
+            await self._repository.ensure_workspace(connection, workspace_id)
+            async with self._repository.transaction(connection):
+                current = await self._repository.read_state(connection, workspace_id)
+                assert current is not None  # ensured above, inside this transaction
+
+                active = current.target_state.cart.discount
+                if active is not None and active.code == code:
+                    # A successful no-op, not a failure and not a fresh mutation.
+                    return MutationOutcome(
+                        _cart_response(current, status="already_applied"),
+                        current,
+                        replayed=False,
+                    )
+
+                rebuilt = TargetState(
+                    cart=build_cart(dict(current.target_state.cart.items), code),
+                    order=current.target_state.order,
+                    preferences=current.target_state.preferences,
+                )
+                next_state = current.with_target_state(rebuilt)
+                await self._repository.write_state(connection, workspace_id, next_state)
+        return MutationOutcome(_cart_response(next_state), next_state, replayed=False)
+
+    def _require_discount(self, code: object) -> str:
+        if not isinstance(code, str):
+            raise ValidationFailed("code must be a string")
+        if code not in DISCOUNTS:
+            raise DiscountNotFound(
+                f"{code!r} is not an allowlisted discount code",
+                details={"code": code},
+            )
+        return code
+
     # -- validation ----------------------------------------------------------
 
     def _require_product(self, product_id: object) -> Product:
@@ -220,7 +273,7 @@ class StoreService:
             )
 
 
-def _cart_response(state: StoreState) -> dict[str, Any]:
+def _cart_response(state: StoreState, *, status: str = "success") -> dict[str, Any]:
     """The bounded body a cart mutation returns.
 
     Canonical cart plus the version, and nothing else. §23.3 keeps evidence
@@ -228,7 +281,7 @@ def _cart_response(state: StoreState) -> dict[str, Any]:
     preference data into every tool result that only asked about a cart.
     """
     return {
-        "status": "success",
+        "status": status,
         "state_version": state.state_version,
         "cart": state.target_state.cart.canonical_document(),
     }
