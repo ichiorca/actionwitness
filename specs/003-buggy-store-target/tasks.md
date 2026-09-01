@@ -2,23 +2,23 @@
 
 Cite the T-ID in every commit that advances it.
 
-- [ ] T1 — Seeded catalog and canonical-state models (§13.1, §13.2): immutable
+- [x] T1 — Seeded catalog and canonical-state models (§13.1, §13.2): immutable
       products, `line_key` as the canonical cart key, decimal-string money,
       `preferences` present; unit tests for decimal arithmetic and the exact
       state shape.
-- [ ] T2 — Standalone per-workspace SQLite repository with monotonic
+- [x] T2 — Standalone per-workspace SQLite repository with monotonic
       `state_version` and idempotency records, following ADR-0003 (WAL, foreign
       keys, busy timeout, `BEGIN IMMEDIATE`); its own async driver declared in
       its own `pyproject.toml`; isolation tests across two workspaces.
-- [ ] T3 — Absolute idempotent cart mutation: identical `(request_id, payload)`
+- [x] T3 — Absolute idempotent cart mutation: identical `(request_id, payload)`
       returns the first persisted result; reuse with a different payload returns
       a non-retryable `IDEMPOTENCY_KEY_REUSED` conflict and mutates nothing.
-- [ ] T4 — Discount application, including the repeated-code no-op reporting
+- [x] T4 — Discount application, including the repeated-code no-op reporting
       `already_applied`; decimal totals asserted against §13.2.
-- [ ] T5 — Confirmation request, decision, and cancel, plus protected checkout
+- [x] T5 — Confirmation request, decision, and cancel, plus protected checkout
       that consumes a valid single-use approval; denial, expiry, and cancel
       create no order.
-- [ ] T6 — The `/demo/api/v1` surface from §15.5 with Pydantic validation and
+- [x] T6 — The `/demo/api/v1` surface from §15.5 with Pydantic validation and
       stable errors; API tests through the real entry point.
 - [ ] T7 — The ordinary human storefront UI, usable with no harness and no
       WebMCP; its own frontend tests and build.
