@@ -21,6 +21,7 @@ from fastapi import Depends, Request
 from actionwitness_service.api.errors import ApiError, ApiErrorCode
 from actionwitness_service.application.adapter_registry import AdapterRegistry
 from actionwitness_service.application.artifacts import ArtifactStore
+from actionwitness_service.config import ServiceSettings
 from actionwitness_service.persistence.database import Database
 from actionwitness_service.persistence.locks import WorkspaceLocks
 
@@ -29,6 +30,7 @@ __all__ = [
     "DatabaseDependency",
     "LocksDependency",
     "RegistryDependency",
+    "SettingsDependency",
     "WorkspaceDependency",
 ]
 
@@ -65,6 +67,16 @@ def _artifacts(request: Request) -> ArtifactStore:
     return request.app.state.artifacts
 
 
+def _settings(request: Request) -> ServiceSettings:
+    """The resolved module configuration.
+
+    Read from app state rather than the environment: 004 resolves settings once
+    at startup, and a handler re-reading `os.environ` could disagree with the
+    module report the same deployment already published.
+    """
+    return request.app.state.settings
+
+
 #: Declared at module scope, not inside a router function. Under
 #: `from __future__ import annotations` every annotation is a string resolved
 #: against module globals, so a locally-defined alias resolves to nothing and
@@ -75,3 +87,4 @@ DatabaseDependency = Annotated[Database, Depends(_database)]
 LocksDependency = Annotated[WorkspaceLocks, Depends(_locks)]
 RegistryDependency = Annotated[AdapterRegistry, Depends(_registry)]
 ArtifactsDependency = Annotated[ArtifactStore, Depends(_artifacts)]
+SettingsDependency = Annotated[ServiceSettings, Depends(_settings)]

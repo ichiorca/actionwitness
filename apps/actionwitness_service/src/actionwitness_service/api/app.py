@@ -38,6 +38,7 @@ from actionwitness_service.api.middleware import (
     WorkspaceCookieMiddleware,
 )
 from actionwitness_service.api.origins import OriginPolicy
+from actionwitness_service.api.routes import benchmarks as benchmark_routes
 from actionwitness_service.api.routes import contracts as contract_routes
 from actionwitness_service.api.routes import evals as eval_routes
 from actionwitness_service.api.routes import runs as run_routes
@@ -269,6 +270,7 @@ def create_app(
     app.include_router(contract_routes.router, prefix=API_PREFIX)
     app.include_router(run_routes.router, prefix=API_PREFIX)
     app.include_router(eval_routes.router, prefix=API_PREFIX)
+    app.include_router(benchmark_routes.router, prefix=API_PREFIX)
 
     # §29.1's one-origin composition, registered after the harness API so that
     # `/api/v1` can never be shadowed by an asset mount. ADR-0006 records why the
