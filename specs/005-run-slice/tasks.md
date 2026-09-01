@@ -35,11 +35,13 @@ Cite the T-ID in every commit that advances it.
       deliberately minimal placeholder rather than sitting beside it.
 - [x] T10 — Scenario switch and reset through the adapter, reseeding managed
       target state where supported (FR-013).
-- [ ] T11 — Matched `pre_fix`/`post_fix` comparison using controlled-input hashes
+- [x] T11 — Matched `pre_fix`/`post_fix` comparison using controlled-input hashes
       and actual trajectory identity. A mismatched rerun stays valid and returns
-      `not_comparable` naming the differing fields.
-- [ ] T12 — Paged events (§15.3, `after_sequence` and `limit`) and the report and
-      comparison endpoints.
+      `not_comparable` naming the differing fields. (Took `GET
+      /runs/{run_id}/comparison` from T12: `not_comparable` is untestable
+      without a surface to return it on — see the plan's ledger.)
+- [ ] T12 — Paged events (§15.3, `after_sequence` and `limit`) and the report
+      endpoint. (The comparison endpoint landed in T11.)
 - [ ] T13 — Verify the full exit gate: Journey A fails with
       `false_success_or_state_mismatch` in `pre_fix` and passes in `post_fix`;
       the report shows trajectory pass, execution pass, business outcome fail,

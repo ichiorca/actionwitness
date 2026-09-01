@@ -780,3 +780,85 @@ their comments now say that is a choice rather than a limitation.
 the target, so a harness with nothing behind it can no longer accept one, and a
 fixture that pretended otherwise would test a system that does not exist in the
 composed deployment.
+
+### T11 — the comparison key excludes `scenario_mode` and `fault_active` by design
+
+§17.1 says the key hashes "every controlled input except scenario mode and
+derived fault activation", which is the whole point: a matched pair must differ
+in exactly the variable under test, so the variable cannot be part of the
+identity that makes them a pair. The eight fields are `target_id`, `adapter_id`,
+`contract_content_hash`, `fixture_content_hash`, `intent_content_hash`,
+`failure_profile`, `implementation_version`, and `build_commit`
+(`COMPARISON_KEY_FIELDS` in `actionwitness_core.reports.comparison`).
+
+`failure_profile` **is** in the key. It names which fault the pair is about, and
+in `post_fix` it stays recorded while the adapter disables it (FR-011) — so two
+runs about different faults are two experiments, not a pair.
+
+### T11 — trajectory is compared, not hashed into the key
+
+FR-019 lists "actual tool trajectory" among the things that must match, but the
+key is stored on the run at arming time, when no tool has been called yet. So
+the trajectory is compared at comparison time and reported as a differing field,
+while the key covers only what is known when the run is armed. Hashing it in
+would mean either a null key until termination on both sides or a key that
+changes mid-run; §17.1's "nullable until the run is terminal" is satisfied
+either way, but a stable armed-time key is what makes `comparison_key_hash`
+useful for finding candidate pairs.
+
+Consequence worth an operator's eye: **two runs can share a
+`comparison_key_hash` and still be `not_comparable`** if the agent called
+different tools. That is correct — the key is a necessary condition, not a
+sufficient one — but anyone querying by key alone will over-collect.
+
+### T11 — a mismatch is `200 comparable: false`, not an error
+
+The exit gate says "a mismatched rerun remains valid but returns
+`not_comparable` with the differing fields". An error envelope would say the
+request was wrong; it was not. It would also nudge somebody toward making the
+pair match by weakening what they meant to test, which inverts the point of the
+harness. Both sides and the differing field list are returned so the reader can
+see *why* it is not a pair.
+
+The one refusal is a run armed with no source at all: 409 `PRECONDITION_FAILED`,
+because there is no pair, and therefore no differing fields to name.
+
+### T11 — source eligibility: own workspace, and terminal
+
+`comparison_source_run_id` is validated at arming (`_require_eligible_source`).
+A source from another workspace resolves to 404 through `WorkspaceScope` and
+writes nothing — the source id is attacker-supplied input, and FR-006's boundary
+is not weakened to make a comparison convenient.
+
+The terminal check is currently **unreachable through the API**: arming already
+refuses while any non-terminal run exists in the workspace, so a live run can
+never also be an available source. Its test therefore calls the guard directly
+and says so. It is kept because it becomes load-bearing the moment a workspace
+may hold more than one run — an eval run alongside an outcome run, say — and
+that is exactly when its absence would be hard to notice.
+
+### T11 — the comparison endpoint moved here from T12
+
+`GET /runs/{run_id}/comparison` was listed under T12. `not_comparable` cannot be
+tested without a surface that returns it, so it landed with the behaviour it
+serves. T12 keeps paged events and the report endpoint.
+
+### T11 — the test suite was writing outcome reports into the checkout
+
+`DEFAULT_ARTIFACT_ROOT` is the relative string `artifacts`, resolved against the
+process working directory. Sixteen test modules compose an app without naming a
+root, so every sealed run wrote a real outcome report into the repository; a
+`git add -A` during this task swept 324 of them into a commit, which was reset
+before anything left the machine.
+
+Fixed at the source rather than by ignoring the directory: a session-scoped
+autouse fixture in `tests/conftest.py` redirects the default to a pytest temp
+directory, so tests not yet written inherit the fix. The clean-environment lanes
+skip it, because neither installs the service.
+
+Left for the operator: `DEFAULT_ARTIFACT_ROOT` itself is still working-directory
+relative, so a service started from the checkout writes evidence into it. That is
+plausibly intended (project-relative storage) but it is the kind of default that
+puts evidence-shaped files where release tooling will find them, and the
+definition of done forbids generated debris in release artifacts. A `/artifacts/`
+line is in the working tree's `.gitignore` but **is not committed** — see below.

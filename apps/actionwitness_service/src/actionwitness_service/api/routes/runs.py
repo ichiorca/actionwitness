@@ -5,10 +5,11 @@
 | `POST` | `/runs`                                           | 005-T1 |
 | `POST` | `/runs/{run_id}/target-tools/{tool_name}:invoke`   | 005-T3 |
 | `POST` | `/runs/{run_id}/verify`                           | 005-T6 |
+| `GET`  | `/runs/{run_id}/comparison`                       | 005-T11 |
 
-The rest of §15.3 — the run read, paged events, confirmation decisions, report,
-and comparison — arrives with the tasks that own it and is deliberately absent
-rather than stubbed.
+The rest of §15.3 — the run read, paged events, confirmation decisions, and the
+report — arrives with the tasks that own it and is deliberately absent rather
+than stubbed.
 
 `POST /runs/{run_id}/verify` wins FR-038's race, captures the final
 observation, evaluates the contract through the core, and seals the run. The
@@ -37,6 +38,7 @@ from actionwitness_service.api.dependencies import (
     RegistryDependency,
     WorkspaceDependency,
 )
+from actionwitness_service.application.comparison_service import ComparisonService
 from actionwitness_service.application.invocation_service import InvocationService
 from actionwitness_service.application.run_service import RunService
 from actionwitness_service.application.verification_service import VerificationService
@@ -52,6 +54,10 @@ class ArmRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     mode: Annotated[str, Field(min_length=1, max_length=32)] = RunMode.VERIFICATION.value
+    #: §15.3: "optionally bind an eligible immutable `comparison_source_run_id`".
+    #: Eligible means this workspace's own terminal run — checked at arming,
+    #: inside the transaction, so a source that moves cannot slip through.
+    comparison_source_run_id: Annotated[str, Field(min_length=1, max_length=128)] | None = None
 
 
 #: A frozen module-level default, so a request with no body shares one immutable
@@ -68,7 +74,11 @@ async def arm_run(
     request: Annotated[ArmRequest, Body()] = _DEFAULT_ARM,
 ) -> dict[str, Any]:
     """FR-030. Returns 201 with the `run_id`, or refuses and writes nothing."""
-    armed = await RunService(database, registry, locks).arm(workspace_id, mode=request.mode)
+    armed = await RunService(database, registry, locks).arm(
+        workspace_id,
+        mode=request.mode,
+        comparison_source_run_id=request.comparison_source_run_id,
+    )
     return {
         "run_id": armed.run_id,
         "status": armed.status,
@@ -189,3 +199,23 @@ async def verify_run(
         "report_content_hash": outcome.report.content_hash(),
         "next_action": outcome.next_action,
     }
+
+
+@router.get("/{run_id}/comparison")
+async def read_comparison(
+    run_id: RunId,
+    workspace_id: WorkspaceDependency,
+    database: DatabaseDependency,
+) -> dict[str, Any]:
+    """§15.3: "a validated matched pre/post comparison or a structured
+    ineligibility reason".
+
+    A mismatched pair is a **200 with `comparable: false`**, not an error. FR-019
+    and §23.7 both say the rerun "remains an ordinary rerun" — it is a perfectly
+    good run that simply cannot be read as the other one's counterpart, and
+    returning a failure would push somebody to make the pair match by weakening
+    what they meant to test.
+    """
+    async with database.reading() as work:
+        result = await ComparisonService(work, workspace_id).compare(run_id)
+    return dict(result.as_document())

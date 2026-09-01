@@ -43,6 +43,7 @@ from actionwitness_core.engine.assertions import evaluate_preconditions
 from actionwitness_core.engine.enums import CheckStatus
 from actionwitness_core.evidence.effects import redacted_observation
 from actionwitness_core.journeys.enums import EventActor, OutcomeEventType, RunState, SnapshotPhase
+from actionwitness_core.journeys.transitions import is_terminal
 from actionwitness_core.ports.models import Observation
 from actionwitness_core.reports.enums import RunMode
 from actionwitness_core.security.canonical import content_hash
@@ -129,7 +130,13 @@ class RunService:
         self._id_source = id_source or (lambda: new_id("run"))
         self._clock = clock
 
-    async def arm(self, workspace_id: str, *, mode: str = RunMode.VERIFICATION.value) -> ArmedRun:
+    async def arm(
+        self,
+        workspace_id: str,
+        *,
+        mode: str = RunMode.VERIFICATION.value,
+        comparison_source_run_id: str | None = None,
+    ) -> ArmedRun:
         """FR-030. Three phases, and the boundaries between them are the design.
 
         1. Read the workspace's selected configuration. No lock, no write.
@@ -160,10 +167,13 @@ class RunService:
                     "selection.",
                 )
             await self._require_no_active_run(work, workspace_id)
+            await self._require_eligible_source(work, workspace_id, comparison_source_run_id)
             await WorkspaceCeilings(work, workspace_id).guard_new_run()
 
             _validate_preconditions(confirmed, observation)
-            return await self._write(work, workspace_id, confirmed, observation)
+            return await self._write(
+                work, workspace_id, confirmed, observation, comparison_source_run_id
+            )
 
     # -- phase 1 and 3: the selected configuration ---------------------------
 
@@ -248,12 +258,38 @@ class RunService:
                 "before arming another.",
             )
 
+    async def _require_eligible_source(
+        self, work: UnitOfWork, workspace_id: str, source_run_id: str | None
+    ) -> None:
+        """§15.3: the bound source must be "eligible" and immutable.
+
+        Eligible means this workspace's own run (FR-006) and terminal — a
+        source still in flight has no outcome to compare against, and binding
+        one would produce a pair whose "before" side changes after the fact.
+
+        Checked inside the arming transaction, so a source that terminates or
+        is purged between the check and the insert cannot slip through.
+        """
+        if source_run_id is None:
+            return
+        source = await WorkspaceScope(work, workspace_id).run(source_run_id)
+        if not is_terminal(RunState(source["status"])):
+            raise ApiError(
+                ApiErrorCode.RUN_IN_PROGRESS,
+                "The comparison source run has not finished, so it has no outcome to "
+                "compare against.",
+                details=[
+                    {"path": "comparison_source_run_id", "message": "source is still in flight"}
+                ],
+            )
+
     async def _write(
         self,
         work: UnitOfWork,
         workspace_id: str,
         selected: WorkspaceConfiguration,
         observation: Observation,
+        comparison_source_run_id: str | None = None,
     ) -> ArmedRun:
         run_id = self._id_source()
         started_at = work.now()
@@ -263,8 +299,9 @@ class RunService:
             INSERT INTO runs (
                 id, workspace_id, contract_id, contract_content_hash,
                 target_id, target_adapter_id, scenario_mode, failure_profile,
-                intent_content_hash, implementation_version, status, started_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                intent_content_hash, implementation_version, status, started_at,
+                comparison_source_run_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 run_id,
@@ -279,6 +316,7 @@ class RunService:
                 IMPLEMENTATION_VERSION,
                 str(RunState.ARMED.value),
                 started_at,
+                comparison_source_run_id,
             ),
         )
         await work.execute(

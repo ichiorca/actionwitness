@@ -67,6 +67,10 @@ from actionwitness_core.security.redaction import RedactionPolicy
 from actionwitness_service.api.errors import ApiError, ApiErrorCode
 from actionwitness_service.application.adapter_registry import AdapterRegistry
 from actionwitness_service.application.artifacts import OUTCOME_REPORT, ArtifactStore
+from actionwitness_service.application.comparison_service import (
+    ComparisonService,
+    comparable_run,
+)
 from actionwitness_service.application.guidance_service import GuidanceRecorder
 from actionwitness_service.application.verification_gate import VerificationGate
 from actionwitness_service.persistence.database import Database, UnitOfWork
@@ -154,7 +158,7 @@ class VerificationService:
 
         # 4 — the whole verdict commits together.
         async with self._locks.hold(workspace_id), self._database.transaction() as work:
-            await self._seal(work, workspace_id, run_id, final, findings, result)
+            await self._seal(work, workspace_id, run_id, run, final, findings, result)
             await self._artifacts.record(
                 work,
                 workspace_id,
@@ -236,6 +240,7 @@ class VerificationService:
         work: UnitOfWork,
         workspace_id: str,
         run_id: str,
+        run: Mapping[str, Any],
         final: Observation,
         findings: Sequence[Finding],
         result: LayerResult,
@@ -291,10 +296,25 @@ class VerificationService:
         await FindingRepository(work).add_all(run_id, [_finding_row(f) for f in findings])
 
         terminal = _TERMINAL_STATE[result]
+        # §17.1: `comparison_key_hash` is "nullable until the run is terminal".
+        # Computed here from the controlled inputs the run copied in at arming,
+        # so two runs configured identically carry the same key and a reader can
+        # recompute it from the stored columns (FR-019).
+        comparison_key = comparable_run(
+            {**dict(run), "status": str(terminal.value)},
+            trajectory=await ComparisonService(work, workspace_id).trajectory(run_id),
+        ).comparison_key()
         await work.execute(
-            "UPDATE runs SET status = ?, overall_result = ?, completed_at = ? "
-            "WHERE id = ? AND workspace_id = ?",
-            (str(terminal.value), str(result.value), work.now(), run_id, workspace_id),
+            "UPDATE runs SET status = ?, overall_result = ?, completed_at = ?, "
+            "comparison_key_hash = ? WHERE id = ? AND workspace_id = ?",
+            (
+                str(terminal.value),
+                str(result.value),
+                work.now(),
+                comparison_key,
+                run_id,
+                workspace_id,
+            ),
         )
         # `active_run_id` is deliberately *not* cleared. §11.5's diagram keeps a
         # workspace in `Passed`/`PassedWarnings`/`Failed` — showing that run's

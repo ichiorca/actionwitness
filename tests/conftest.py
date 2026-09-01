@@ -192,3 +192,41 @@ def workspace_dir(tmp_path: Path) -> Iterator[Path]:
     target = tmp_path / "workspace"
     target.mkdir()
     yield target
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _artifacts_stay_out_of_the_repository(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Iterator[None]:
+    """Redirect the default artifact root away from the working tree.
+
+    `DEFAULT_ARTIFACT_ROOT` is the relative path `artifacts`, which resolves
+    against the process working directory — the repository root when the suite
+    runs. Every test that seals a run therefore wrote an outcome report into the
+    checkout, and a later `git add -A` swept a few hundred of them into a commit.
+
+    Constitutional, not cosmetic: release artifacts carry "no secrets, local
+    paths, private fixtures, generated build debris". Evidence written by a test
+    is debris, and it is also *evidence-shaped* debris, which is worse — a
+    reader cannot tell a committed report from a real one.
+
+    Autouse and session-scoped because the leak belongs to any test that
+    composes an app without naming a root, including tests not yet written. The
+    tests that do name their own root are unaffected.
+    """
+    try:
+        import actionwitness_service.config as config
+    except ImportError:
+        # The core-only and store-only lanes install neither the service nor its
+        # artifact writer, so there is nothing to redirect. Skipping keeps those
+        # environments genuinely minimal instead of pulling the service in to
+        # satisfy a fixture.
+        yield
+        return
+
+    original = config.DEFAULT_ARTIFACT_ROOT
+    config.DEFAULT_ARTIFACT_ROOT = str(tmp_path_factory.mktemp("artifact-root"))
+    try:
+        yield
+    finally:
+        config.DEFAULT_ARTIFACT_ROOT = original

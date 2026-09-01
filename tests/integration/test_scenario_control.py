@@ -25,11 +25,10 @@ from pathlib import Path
 
 import httpx
 import pytest
-from fastapi import FastAPI
-
 from actionwitness_service.api.app import API_PREFIX, create_app
 from actionwitness_service.persistence.database import Database
 from buggy_store.api import create_app as create_store
+from fastapi import FastAPI
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
@@ -344,10 +343,9 @@ async def test_reset_with_the_target_disabled_still_resets_the_workspace(
         environ={"HARNESS_ENV": "local", "BUGGY_STORE_ENABLED": "false"},
         database_path=tmp_path / "harness.sqlite3",
     )
-    async with harness.router.lifespan_context(harness):
-        async with client(harness) as visitor:
-            # Act
-            response = await visitor.post(f"{WORKSPACE}/reset")
+    async with harness.router.lifespan_context(harness), client(harness) as visitor:
+        # Act
+        response = await visitor.post(f"{WORKSPACE}/reset")
 
     # Assert
     assert response.status_code == 200
