@@ -76,7 +76,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "actionwitness-core", editable = "packages/actionwitness_core" },
-    { name = "aiosqlite", specifier = ">=0.20" },
+    { name = "aiosqlite", specifier = "==0.22.1" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "pydantic", specifier = ">=2.9" },
     { name = "uvicorn", specifier = ">=0.30" },

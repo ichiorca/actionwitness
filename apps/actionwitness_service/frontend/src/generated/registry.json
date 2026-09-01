@@ -338,12 +338,26 @@
       "spec_ref": "§15.8",
       "provenance": "spec"
     },
+    "HARNESS_ERROR": {
+      "http_status": 500,
+      "retryable": false,
+      "description": "The harness itself failed. Carries no internal detail: §15.8 forbids exceptions and stack traces reaching a browser tool, so the code is the whole of what a client learns.",
+      "spec_ref": "§22",
+      "provenance": "project"
+    },
     "IDEMPOTENCY_KEY_REUSED": {
       "http_status": 409,
       "retryable": false,
       "description": "A request ID was reused with a different payload. Fails closed: a key identifies one intent, and retrying under a new key could duplicate the mutation.",
       "spec_ref": "Appendix D.2",
       "provenance": "spec"
+    },
+    "ORIGIN_NOT_ALLOWED": {
+      "http_status": 403,
+      "retryable": false,
+      "description": "A mutating request carried an Origin the deployment does not serve. §20.1 requires validating it; the request is refused before any handler runs, so nothing is mutated.",
+      "spec_ref": "§20.1",
+      "provenance": "project"
     },
     "PRECONDITION_FAILED": {
       "http_status": 409,
@@ -365,6 +379,20 @@
       "description": "A proposal-mode run judges no contract and carries no verdict.",
       "spec_ref": "§15.8",
       "provenance": "spec"
+    },
+    "RATE_LIMIT_EXCEEDED": {
+      "http_status": 429,
+      "retryable": true,
+      "description": "A per-IP or workspace-creation token bucket was exhausted. Retryable because the request was refused before doing anything: FR-009 requires a limit response to commit no mutation, so repeating it later cannot duplicate one.",
+      "spec_ref": "FR-009",
+      "provenance": "project"
+    },
+    "RESOURCE_NOT_FOUND": {
+      "http_status": 404,
+      "retryable": false,
+      "description": "The resource does not exist in the calling workspace. Deliberately 404 rather than 403: FR-006 rejects access to another workspace's resource 'even when its identifier is known', and a 403 would confirm that the identifier names something real.",
+      "spec_ref": "FR-006",
+      "provenance": "project"
     },
     "RUN_ALREADY_VERIFYING": {
       "http_status": 409,

@@ -167,7 +167,22 @@ def test_project_allocated_codes_are_visibly_distinguished() -> None:
         for code, entry in API_ERROR_DESCRIPTIONS.items()
         if entry.provenance == "project"
     )
-    assert project_codes == ["WORKSPACE_LOCK_TIMEOUT"], (
+    assert project_codes == [
+        # 004-T2/T7. The catch-all for an internal fault, so an unmapped failure
+        # surfaces as a stable 500 rather than as a leaked message.
+        "HARNESS_ERROR",
+        # 004-T7. §15.8 fixes the envelope but names no code for a request whose
+        # `Origin` is not the configured one; FR-005 requires the refusal.
+        "ORIGIN_NOT_ALLOWED",
+        # 004-T9. FR-009 specifies the buckets and the 429 but not a code.
+        "RATE_LIMIT_EXCEEDED",
+        # 004-T6. FR-006 requires that a known identifier from another workspace
+        # grant nothing; deliberately 404, not 403, because a 403 would confirm
+        # that the identifier names something real.
+        "RESOURCE_NOT_FOUND",
+        # 003. Contention on the per-workspace write lock (ADR-0003).
+        "WORKSPACE_LOCK_TIMEOUT",
+    ], (
         "project-allocated codes changed; each one needs a record explaining why "
         f"the spec's vocabulary was insufficient. Found: {project_codes}"
     )

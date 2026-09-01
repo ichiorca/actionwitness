@@ -19,11 +19,17 @@ An ambiguous transport outcome is never marked retryable (constitution §5).
 Internal exceptions and stack traces never reach a browser tool (spec §15.8).
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
-__all__ = ["API_ERROR_DESCRIPTIONS", "ApiErrorCode", "ApiErrorSpec"]
+__all__ = [
+    "API_ERROR_DESCRIPTIONS",
+    "ApiError",
+    "ApiErrorCode",
+    "ApiErrorSpec",
+    "error_from_core",
+]
 
 
 class ApiErrorCode(StrEnum):
@@ -54,11 +60,17 @@ class ApiErrorCode(StrEnum):
     CONFIRMATION_DENIED = "CONFIRMATION_DENIED"
     CONFIRMATION_EXPIRED = "CONFIRMATION_EXPIRED"
 
+    # Request safety (004): the boundary refusals that precede any handler
+    ORIGIN_NOT_ALLOWED = "ORIGIN_NOT_ALLOWED"
+    RESOURCE_NOT_FOUND = "RESOURCE_NOT_FOUND"
+
     # Capacity and availability
+    RATE_LIMIT_EXCEEDED = "RATE_LIMIT_EXCEEDED"
     EVENT_LIMIT_EXCEEDED = "EVENT_LIMIT_EXCEEDED"
     WORKSPACE_LIMIT_EXCEEDED = "WORKSPACE_LIMIT_EXCEEDED"
     TARGET_UNAVAILABLE = "TARGET_UNAVAILABLE"
     WORKSPACE_LOCK_TIMEOUT = "WORKSPACE_LOCK_TIMEOUT"
+    HARNESS_ERROR = "HARNESS_ERROR"
 
 
 @dataclass(frozen=True, slots=True)
@@ -235,6 +247,41 @@ API_ERROR_DESCRIPTIONS: Mapping[ApiErrorCode, ApiErrorSpec] = {
         spec_ref="FR-065",
         provenance="spec",
     ),
+    ApiErrorCode.ORIGIN_NOT_ALLOWED: ApiErrorSpec(
+        http_status=403,
+        retryable=False,
+        description=(
+            "A mutating request carried an Origin the deployment does not serve. "
+            "§20.1 requires validating it; the request is refused before any "
+            "handler runs, so nothing is mutated."
+        ),
+        spec_ref="§20.1",
+        provenance="project",
+    ),
+    ApiErrorCode.RESOURCE_NOT_FOUND: ApiErrorSpec(
+        http_status=404,
+        retryable=False,
+        description=(
+            "The resource does not exist in the calling workspace. Deliberately "
+            "404 rather than 403: FR-006 rejects access to another workspace's "
+            "resource 'even when its identifier is known', and a 403 would "
+            "confirm that the identifier names something real."
+        ),
+        spec_ref="FR-006",
+        provenance="project",
+    ),
+    ApiErrorCode.RATE_LIMIT_EXCEEDED: ApiErrorSpec(
+        http_status=429,
+        retryable=True,
+        description=(
+            "A per-IP or workspace-creation token bucket was exhausted. Retryable "
+            "because the request was refused before doing anything: FR-009 "
+            "requires a limit response to commit no mutation, so repeating it "
+            "later cannot duplicate one."
+        ),
+        spec_ref="FR-009",
+        provenance="project",
+    ),
     ApiErrorCode.EVENT_LIMIT_EXCEEDED: ApiErrorSpec(
         http_status=409,
         retryable=False,
@@ -266,6 +313,17 @@ API_ERROR_DESCRIPTIONS: Mapping[ApiErrorCode, ApiErrorSpec] = {
         spec_ref="FR-021",
         provenance="spec",
     ),
+    ApiErrorCode.HARNESS_ERROR: ApiErrorSpec(
+        http_status=500,
+        retryable=False,
+        description=(
+            "The harness itself failed. Carries no internal detail: §15.8 forbids "
+            "exceptions and stack traces reaching a browser tool, so the code is "
+            "the whole of what a client learns."
+        ),
+        spec_ref="§22",
+        provenance="project",
+    ),
     ApiErrorCode.WORKSPACE_LOCK_TIMEOUT: ApiErrorSpec(
         http_status=503,
         retryable=True,
@@ -278,3 +336,95 @@ API_ERROR_DESCRIPTIONS: Mapping[ApiErrorCode, ApiErrorSpec] = {
         provenance="project",
     ),
 }
+
+
+class ApiError(Exception):
+    """A deliberate refusal, carrying the stable code a client branches on.
+
+    Raised anywhere in the service and translated once, at the boundary, into
+    §15.8's envelope. Raising rather than returning matters: a handler that has
+    to *remember* to return an error envelope will eventually forget, and the
+    forgotten path becomes a 200 with a half-built body.
+
+    `details` follows §15.8's shape — a list of `{path, message}` objects — so a
+    field-level rejection can name every offending field at once rather than
+    making a caller fix them one round trip at a time.
+    """
+
+    def __init__(
+        self,
+        code: ApiErrorCode,
+        message: str,
+        *,
+        details: Sequence[Mapping[str, str]] = (),
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.details = [dict(detail) for detail in details]
+
+    @property
+    def spec(self) -> ApiErrorSpec:
+        return API_ERROR_DESCRIPTIONS[self.code]
+
+    @property
+    def http_status(self) -> int:
+        return self.spec.http_status
+
+    @property
+    def retryable(self) -> bool:
+        return self.spec.retryable
+
+    def as_envelope(self) -> dict[str, object]:
+        """§15.8's one wire shape.
+
+        `retryable` is read from the registry rather than passed in, so a call
+        site cannot advertise a rejected intent as safe to repeat. The registry
+        test already forbids a 4xx from being retryable; this makes that
+        guarantee reach the wire.
+        """
+        return {
+            "error": {
+                "code": str(self.code),
+                "message": self.message,
+                "retryable": self.retryable,
+                "details": list(self.details),
+            }
+        }
+
+
+def error_from_core(exc: Exception) -> ApiError:
+    """Translate a core `CoreError` into the API's vocabulary.
+
+    The core deliberately carries no HTTP status (it must install alone), so
+    this is where a domain failure acquires one. An unmapped core code becomes
+    `HARNESS_ERROR` rather than leaking its text: an unrecognised failure is the
+    case where an internal detail is most likely to be in the message.
+    """
+    from actionwitness_core.kernel import CoreError, CoreErrorCode
+
+    if not isinstance(exc, CoreError):
+        return ApiError(ApiErrorCode.HARNESS_ERROR, "The harness could not complete the request.")
+
+    mapping = {
+        CoreErrorCode.CONTRACT_VALIDATION_FAILED: ApiErrorCode.CONTRACT_VALIDATION_FAILED,
+        CoreErrorCode.UNSUPPORTED_SCHEMA_VERSION: ApiErrorCode.CONTRACT_VALIDATION_FAILED,
+        CoreErrorCode.INVALID_OBSERVATION_PATH: ApiErrorCode.CONTRACT_VALIDATION_FAILED,
+        CoreErrorCode.INVALID_REDACTION_PATTERN: ApiErrorCode.CONTRACT_VALIDATION_FAILED,
+        CoreErrorCode.EVALUATION_INPUT_INVALID: ApiErrorCode.CONTRACT_VALIDATION_FAILED,
+        CoreErrorCode.NON_FINITE_NUMBER: ApiErrorCode.CONTRACT_VALIDATION_FAILED,
+        CoreErrorCode.NUMBER_NOT_REPRESENTABLE: ApiErrorCode.CONTRACT_VALIDATION_FAILED,
+        CoreErrorCode.UNSUPPORTED_JSON_TYPE: ApiErrorCode.CONTRACT_VALIDATION_FAILED,
+        CoreErrorCode.CANONICALIZATION_FAILED: ApiErrorCode.CONTRACT_VALIDATION_FAILED,
+        CoreErrorCode.RESOURCE_LIMIT_EXCEEDED: ApiErrorCode.WORKSPACE_LIMIT_EXCEEDED,
+        # §16: "invalid non-reset state transitions shall return HTTP 409".
+        CoreErrorCode.INVALID_STATE_TRANSITION: ApiErrorCode.RUN_IN_PROGRESS,
+    }
+    code = mapping.get(exc.code)
+    if code is None:
+        return ApiError(ApiErrorCode.HARNESS_ERROR, "The harness could not complete the request.")
+    return ApiError(
+        code,
+        exc.message,
+        details=[{"path": detail.location, "message": detail.message} for detail in exc.details],
+    )

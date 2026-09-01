@@ -12,7 +12,15 @@ dependencies = [
     "actionwitness-core",
     "fastapi>=0.115",
     "uvicorn>=0.30",
-    "aiosqlite>=0.20",
+    # Pinned exactly (dependency-policy: pin versions, avoid floating ranges).
+    # The only async SQLite driver in the workspace, and it lives in the SERVICE
+    # package alone: the constitution keeps `actionwitness_core` free of aiosqlite,
+    # and `tests/architecture` fails if the core grows an import of it. Chosen over
+    # hand-rolling a thread-pool wrapper around stdlib `sqlite3` because ADR-0003's
+    # busy-timeout and BEGIN IMMEDIATE semantics need the driver to preserve
+    # per-connection state across awaits, which a naive executor wrapper does not.
+    # Small, single-module, no transitive dependencies, actively maintained.
+    "aiosqlite==0.22.1",
     "pydantic>=2.9",
 ]
 
