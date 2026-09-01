@@ -225,13 +225,19 @@ class EvalRunService:
         if outcome.stopped_at is not None:
             return self._error_report(case, environment, outcome.detail)
 
-        actual_result, actual_classifications = self._evaluate(case, outcome, evaluate, effect_map)
+        actual_result, actual_classifications, unevaluated = self._evaluate(
+            case, outcome, evaluate, effect_map
+        )
 
         expectation = case.expected.for_environment(environment)
         # §24.3a: a policy that could not be evaluated is excluded from *both*
         # sides and named in the report, so a passing eval never quietly means
         # "not checked".
-        excluded = frozenset(case.non_replayable_policies)
+        # The case's declared list, plus whatever the engine reported it could
+        # not evaluate on this run. The union is what the report names, because
+        # a policy that became unevaluable after the case was cut is exactly as
+        # unchecked as one that was known to be.
+        excluded = frozenset(case.non_replayable_policies) | frozenset(unevaluated)
         actual = tuple(c for c in actual_classifications if c.value not in excluded)
         expected = tuple(c for c in expectation.required_classifications if c.value not in excluded)
 
@@ -255,7 +261,7 @@ class EvalRunService:
             classification_match=frozenset(actual) == frozenset(expected),
             replayed_trajectory=outcome.steps,
             final_state=dict(outcome.after.payload),
-            non_replayable_policies=case.non_replayable_policies,
+            non_replayable_policies=tuple(sorted(excluded)),
             detail=(
                 "reproduced the recorded outcome"
                 if matched and actual_result is not LayerResult.PASSED
@@ -269,7 +275,7 @@ class EvalRunService:
         outcome: ReplayOutcome,
         evaluate: Callable[..., Any] | None,
         effect_map: Any = None,
-    ) -> tuple[LayerResult, tuple[FailureClassification, ...]]:
+    ) -> tuple[LayerResult, tuple[FailureClassification, ...], tuple[str, ...]]:
         """Ask the engine what the replayed state means.
 
         Injected so a test can drive the comparison without a full engine run;
@@ -278,7 +284,10 @@ class EvalRunService:
         AC-15 requires a replayed run to classify identically to its source.
         """
         if evaluate is not None:
-            return evaluate(case, outcome)
+            supplied = evaluate(case, outcome)
+            # A test may return just the pair; normalise so the caller has one
+            # shape to read rather than two.
+            return supplied if len(supplied) == 3 else (*supplied, ())
 
         # The same entry points 005's verification uses. FR-084 forbids a
         # second implementation of the target's behaviour, and AC-15 requires a
@@ -308,15 +317,38 @@ class EvalRunService:
             effect_map=effect_map,
             initial=outcome.before.as_context(),
         )
-        result = aggregate(findings)
+
+        # §24.3a. Policies are evaluated too, over the replayed event stream —
+        # FR-050 defines policy determinism over "the same snapshots and the
+        # same recorded event stream", which is exactly what a replay produces.
+        # A run that judged only assertions would report a consent regression as
+        # unreproducible while quietly leaving the policy unchecked.
+        from actionwitness_core.engine.policies import PolicyEvidence, evaluate_policies
+
+        policy_findings = evaluate_policies(
+            case.contract.document.policies,
+            PolicyEvidence(events=outcome.events, effect_map=effect_map or {}),
+        )
+
+        result = aggregate((*findings, *policy_findings))
         classifications = tuple(
             {
                 finding.classification
-                for finding in findings
+                for finding in (*findings, *policy_findings)
                 if finding.classification is not None and finding.status is CheckStatus.FAILED
             }
         )
-        return result, classifications
+        # The engine reports a policy it could not evaluate as `not_evaluated`
+        # with a reason, rather than as satisfied. Those are §24.3a's
+        # non-replayable policies, observed rather than assumed: excluded from
+        # both classification sets and named in the report, so a passing eval
+        # never quietly means "not checked".
+        unevaluated = tuple(
+            finding.check_id
+            for finding in policy_findings
+            if finding.status is CheckStatus.NOT_EVALUATED
+        )
+        return result, classifications, unevaluated
 
     # -- persistence ---------------------------------------------------------
 

@@ -339,3 +339,55 @@ async def test_a_generated_case_supplies_no_consent_it_did_not_record(
     # Assert
     assert case.replay.confirmation_strategy is ConfirmationStrategy.NO_CONFIRMATION
     assert case.replay.recorded_decisions == ()
+
+
+# --- §24.3a: a passing eval never hides an unevaluated policy ----------------
+
+
+async def test_the_consent_policy_is_evaluated_during_replay(stack: FastAPI) -> None:
+    """FR-050 defines policy determinism over "the same snapshots and the same
+    recorded event stream", which is exactly what a replay produces.
+
+    A runner that judged only assertions would report a consent regression as
+    unreproducible while leaving the policy quietly unchecked — the failure mode
+    §24.3a exists to prevent.
+    """
+    # Arrange
+    async with client(stack) as visitor:
+        workspace_id, run_id = await _failed_run(visitor)
+    case = await _case(stack, workspace_id, run_id)
+    assert case.contract.document.policies, "this contract carries policies to evaluate"
+
+    # Act
+    outcome = await _service(stack).run(
+        case, owner_workspace_id=workspace_id, environment=EvalEnvironment.CURRENT
+    )
+
+    # Assert — the policies were reached, so none is listed as unevaluable.
+    assert outcome.report.status is EvalStatus.PASSED
+    assert outcome.report.non_replayable_policies == ()
+
+
+async def test_an_unevaluable_policy_is_named_rather_than_assumed_satisfied(
+    stack: FastAPI,
+) -> None:
+    """§24.3a: excluded from both classification sets AND named in the report.
+
+    The engine reports a policy it cannot evaluate as `not_evaluated` with a
+    reason rather than as satisfied; this asserts the report carries that
+    forward, so "passed" never quietly means "not checked".
+    """
+    # Arrange — a case declaring a policy it knows cannot be replayed here.
+    async with client(stack) as visitor:
+        workspace_id, run_id = await _failed_run(visitor)
+    case = await _case(stack, workspace_id, run_id)
+    declared = case.model_copy(update={"non_replayable_policies": ("stable_tool_surface",)})
+
+    # Act
+    outcome = await _service(stack).run(
+        declared, owner_workspace_id=workspace_id, environment=EvalEnvironment.CURRENT
+    )
+
+    # Assert
+    assert "stable_tool_surface" in outcome.report.non_replayable_policies
+    assert outcome.report.status is EvalStatus.PASSED

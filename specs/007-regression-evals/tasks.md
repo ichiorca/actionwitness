@@ -34,7 +34,7 @@ Cite the T-ID in every commit that advances it.
 - [x] T9 — Expectation matching: compare overall result **and** the exact
       critical classification set. Eval status is expectation matching, not
       whether the business outcome string is literally `passed`.
-- [ ] T10 — Non-replayable evidence (§24.3a): replay the recorded `surface`
+- [x] T10 — Non-replayable evidence (§24.3a): replay the recorded `surface`
       baseline and deltas as events, and list any policy that still cannot be
       evaluated in `non_replayable_policies` — excluded from both classification
       sets and named in the report, so a passing eval cannot hide an unevaluated
