@@ -61,21 +61,35 @@ Verified against `GoogleChromeLabs/webmcp-tools` HEAD (2026-09-01):
 
 ## Consequences
 
-- Positive: the fixture path is reproducible against a released version; the
-  importer's refusals are decidable from the pinned types rather than from
-  guesses; 010 inherits the same pin for live execution.
-- Negative: v0.0.5+ may change the report shape at any time — the pin means
-  deliberately NOT following until a superseding record re-verifies; the
-  optional-address finding means some upstream reports may be partially
+### Positive
+
+- The fixture path is reproducible against a released version.
+- The importer's refusals are decidable from the pinned types rather than
+  from guesses.
+- 010 inherits the same pin for live execution.
+
+### Negative
+
+- v0.0.5+ may change the report shape at any time — the pin means
+  deliberately NOT following until a superseding record re-verifies.
+- The optional-address finding means some upstream reports may be partially
   unbindable, which is upstream's limitation surfaced honestly, not ours.
 
 ## Rejected alternatives
 
-- **Pin `d39eae4`** — the studied commit, but untagged; identical schema with
-  worse provenance.
-- **Track HEAD** — forbidden by the constitution's pinning rules and §25.3.
-- **Vendor the reporter types** — needless; the shapes are recorded here and
-  asserted by the importer's own schema validation.
+### Pin the studied commit `d39eae4`
+
+Untagged; identical schema with worse provenance than the released tag.
+
+### Track upstream HEAD
+
+Forbidden by the constitution's pinning rules and §25.3; the schema could
+move under the importer between CI runs.
+
+### Vendor the reporter types
+
+Needless; the shapes are recorded in this ADR and asserted by the importer's
+own schema validation.
 
 ## Follow-up
 
