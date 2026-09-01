@@ -475,6 +475,50 @@ EXIT_GATE_008: dict[str, tuple[str, str]] = {
     ),
 }
 
+#: 010's exit gate, each criterion to its covering test.
+EXIT_GATE_010: dict[str, tuple[str, str]] = {
+    "1a. the suite is labelled `live_model_run` by the application": (
+        "tests/integration/test_010_exit_gate.py",
+        "test_gate_1_a_live_suite_is_labelled_by_the_application",
+    ),
+    "1b. a fixture-backed run is never represented as a live execution": (
+        "tests/integration/test_010_exit_gate.py",
+        "test_gate_1_a_fixture_is_never_represented_as_a_live_execution",
+    ),
+    "2. exported evaluator and model parameters are recorded without invention": (
+        "tests/integration/test_010_exit_gate.py",
+        "test_gate_2_exported_parameters_are_recorded_without_invention",
+    ),
+    "3a. a live report travels the AC-16 pipeline unchanged": (
+        "tests/integration/test_010_exit_gate.py",
+        "test_gate_3_a_live_report_travels_the_ac_16_pipeline_unchanged",
+    ),
+    "3b. each eligible trial binds and the dual-layer matrix holds": (
+        "tests/integration/test_010_exit_gate.py",
+        "test_gate_3_every_eligible_trial_binds_and_the_matrix_holds",
+    ),
+    "4a. the credential stays in the evaluator process environment": (
+        "tests/integration/test_010_exit_gate.py",
+        "test_gate_4_the_credential_stays_in_the_evaluator_environment",
+    ),
+    "4b. a credential cannot arrive through an uploaded manifest": (
+        "tests/integration/test_010_exit_gate.py",
+        "test_gate_4_a_credential_cannot_arrive_through_an_upload",
+    ),
+    "5. the CI fixture path still passes, labelled `recorded_fixture`": (
+        "tests/integration/test_010_exit_gate.py",
+        "test_gate_5_the_ci_fixture_path_passes_with_no_credential",
+    ),
+    "6a. AC-17 needs a live run this suite cannot perform (010-T11 is open)": (
+        "tests/integration/test_010_exit_gate.py",
+        "test_gate_6_ac_17_needs_a_live_run_this_suite_cannot_perform",
+    ),
+    "6b. …and Shopify work has therefore not started": (
+        "tests/integration/test_010_exit_gate.py",
+        "test_gate_6_shopify_work_has_not_started",
+    ),
+}
+
 MAPS = {
     "003": EXIT_GATE_003,
     "004": EXIT_GATE_004,
@@ -483,6 +527,7 @@ MAPS = {
     "007": EXIT_GATE_007,
     "008": EXIT_GATE_008,
     "009": EXIT_GATE_009,
+    "010": EXIT_GATE_010,
 }
 
 
@@ -595,6 +640,7 @@ PUBLISHED_CRITERIA: dict[str, int] = {
     "007": 7,
     "008": 5,
     "009": 6,
+    "010": 6,
 }
 
 

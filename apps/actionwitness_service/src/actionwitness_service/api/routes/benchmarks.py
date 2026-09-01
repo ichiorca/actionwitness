@@ -228,7 +228,17 @@ async def import_evaluator_report(
             workspace_id,
             None,
             written,
-            metadata={"reporter_schema": imported.reporter_schema, "redacted": imported.redacted},
+            # FR-101: the live evaluator report is persisted as an immutable
+            # benchmark *source*. The source kind travels with it so the
+            # artifact can be identified later without consulting the suite —
+            # a suite can be deleted with its workspace, and an artifact that
+            # could not say what kind of run produced it would be unusable
+            # evidence.
+            metadata={
+                "reporter_schema": imported.reporter_schema,
+                "redacted": imported.redacted,
+                "source_kind": str(suite["source_kind"]),
+            },
             benchmark_suite_id=benchmark_id,
         )
         await service.record_import(

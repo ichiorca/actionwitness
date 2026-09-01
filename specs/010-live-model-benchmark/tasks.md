@@ -26,17 +26,17 @@ Cite the T-ID in every commit that advances it.
       needed here is a finding about 008, not a patch.
 - [x] T8 — Parameter capture: persist exported model and evaluator parameters
       exactly; unsupported values remain `null`, never inferred.
-- [ ] T9 — The `live_model_run` artifact: persisted as an immutable benchmark
+- [x] T9 — The `live_model_run` artifact: persisted as an immutable benchmark
       source, finalized and precomputed before the demo is recorded, and never
       interchangeable with a fixture-backed suite.
-- [ ] T10 — Offline fallback: the checked-in fixture keeps the matrix UI and
+- [x] T10 — Offline fallback: the checked-in fixture keeps the matrix UI and
       deterministic verification reproducible with no credential, quota, or
       network, and stays labeled `recorded_fixture` — including on the demo
       path where a live run has just failed.
 - [ ] T11 — (operator gate) Execute the live run against the configured
       backend with a real credential, review and approve the variants, and
       retain the resulting artifact.
-- [ ] T12 — The exit gate: the suite is labeled `live_model_run`; exported
+- [x] T12 — The exit gate: the suite is labeled `live_model_run`; exported
       parameters are recorded without invention; each eligible trial binds
       exactly and produces the dual-layer matrix and silent-outcome-defect
       evidence; the credential is confined to the evaluator process; the CI
