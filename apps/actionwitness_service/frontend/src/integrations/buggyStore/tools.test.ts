@@ -175,6 +175,58 @@ describe("checkout waits for a human", () => {
     expect(seen).toBe(2);
   });
 
+  it("still settles when the phase moves to awaiting_confirmation mid-call", async () => {
+    // **The Tier 1 gate's actual failure, as a test.** The corrected premise
+    // above asserts the tools are registered *at* `awaiting_confirmation`,
+    // which is static. What broke in the browser was the transition: the app
+    // refreshes after the pause, the phase moves, the hook re-renders, and the
+    // old code tore the registration down while its own invocation was still
+    // waiting. The pinned build never settles an `executeTool` promise whose
+    // registration vanished — the server completed and the agent waited
+    // forever.
+    //
+    // Invoked the way that build really does, with no context argument, so
+    // this exercises the same path the crash came from rather than the
+    // double's more generous one.
+    const coordinator = new ConfirmationCoordinator();
+    let seen = 0;
+    respond((url) => {
+      if (url.includes(":invoke")) {
+        seen += 1;
+        return seen === 1
+          ? json({ status: "awaiting_confirmation", confirmation: { confirmation_id: "cnf_1" } })
+          : json({ status: "completed", reported: { status: "success" } });
+      }
+      return json({});
+    });
+
+    const rendered = renderHook(
+      ({ phase }: { phase: string }) =>
+        useBuggyStoreTools("run_1", phase, noop, coordinator),
+      { initialProps: { phase: "running" } },
+    );
+    await waitFor(() =>
+      expect(rendered.result.current.states[PROCEED_TO_CHECKOUT]?.phase).toBe("registered"),
+    );
+
+    const pending = installed?.modelContext.invokeAsPinnedBuild(PROCEED_TO_CHECKOUT, {
+      request_id: "req_checkoutone",
+    });
+    await waitFor(() => expect(coordinator.isWaiting("cnf_1")).toBe(true));
+
+    // The workspace moves, exactly as `refresh()` makes it.
+    rendered.rerender({ phase: "awaiting_confirmation" });
+    await waitFor(() =>
+      expect(installed?.modelContext.toolNames).toContain(PROCEED_TO_CHECKOUT),
+    );
+
+    coordinator.settle("cnf_1", { kind: "approved" });
+
+    // The caller hears the answer. Before the fix this promise never settled.
+    expect(JSON.stringify(await pending)).toContain("completed");
+    expect(seen).toBe(2);
+  });
+
   it("cancels its own request when the agent walks away", async () => {
     const coordinator = new ConfirmationCoordinator();
     respond((url) => {

@@ -366,3 +366,19 @@ carries a qualification and one queued operator decision:
 Criterion 1 + criterion 2 attested; AC-01 deferred to M8 by the checklist's
 own design. The Tier 1 gate is closed to the extent the checklist allows
 before deployment.
+
+### Follow-up — the registration-lifetime rule now has its consequence tested
+
+The gate run's third fix was covered by a corrected premise asserting the
+bridge tools are registered *at* `awaiting_confirmation`. That is the rule, and
+it is static: every checkout test held the phase fixed at `running`, so nothing
+exercised the transition that actually broke — the app refreshing after the
+pause, the phase moving, the hook re-rendering, and the registration being torn
+down while its own invocation waited.
+
+`still settles when the phase moves to awaiting_confirmation mid-call` drives
+that transition and invokes through `invokeAsPinnedBuild`, so it runs the same
+no-context path the crash came from. Verified by reverting `REGISTERED_PHASES`:
+both it and the corrected premise fail, the new one at the moment the tool
+disappears. Without it, a change that kept the phase list but broke settling
+some other way would leave the caller orphaned again with a green suite.
