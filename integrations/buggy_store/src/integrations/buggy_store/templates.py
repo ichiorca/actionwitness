@@ -199,6 +199,77 @@ _CONFIRMED_CHECKOUT_ONLY: Final[Mapping[str, Any]] = {
 }
 
 
+#: The blast-radius contract (§9.10, FR-159; 013-T5).
+#:
+#: Every assertion here is about the cart, and under `undeclared_side_effect`
+#: every one of them passes: the mutation is correct. What fails is
+#: `no_undeclared_changes`, because the same journey also rewrote
+#: `preferences.delivery_note` — a path this contract never mentions and no
+#: executed tool declares an effect on (§13.4 gives `update_cart` only
+#: `target.cart.*`).
+#:
+#: That is the argument the whole feature exists to make. A reviewer reading the
+#: assertion list would call this run clean. The contract is safe by default
+#: instead: it constrains what the journey may touch rather than enumerating
+#: every value that must hold, and it catches the path nobody thought to name.
+#:
+#: `allow_paths` is deliberately empty. A waiver here would be the obvious way to
+#: make the demonstration pass, and it would delete the demonstration.
+_NO_SIDE_EFFECTS: Final[Mapping[str, Any]] = {
+    "schema_version": "1.0",
+    "name": "one-mug-no-side-effects",
+    "description": "Add one mug and change nothing the contract does not name.",
+    "target_id": TARGET_ID,
+    "intent": (
+        "Add exactly one ceramic mug to the cart, and leave every other part of "
+        "the shopper's saved state alone."
+    ),
+    # Only the cart. `target.preferences` is deliberately absent from every term
+    # in this contract — precondition and assertion alike — because §9.10(a)
+    # makes a precondition path *declared*. Naming the preference here to
+    # document the intent would exempt the exact path the demonstration depends
+    # on, and the run would pass.
+    "preconditions": [
+        {"path": "target.cart.items", "operator": "count_equals", "value": 0},
+    ],
+    "expected_tools": {"ordered": False, "calls": ["update_cart"]},
+    "assertions": [
+        {
+            "id": "mug-quantity",
+            "path": "target.cart.items.mug.quantity",
+            "operator": "equals",
+            "value": 1,
+            "severity": "critical",
+        },
+        {
+            "id": "cart-has-one-line",
+            "path": "target.cart.items",
+            "operator": "count_equals",
+            "value": 1,
+            "severity": "critical",
+        },
+        {
+            "id": "cart-total-is-list-price",
+            "path": "target.cart.total",
+            "operator": "equals",
+            "value": "25.00",
+            "severity": "critical",
+        },
+        {
+            "id": "order-not-created",
+            "path": "target.order.created",
+            "operator": "equals",
+            "value": False,
+            "severity": "critical",
+        },
+    ],
+    "policies": [
+        {"type": "idempotent_by_request_id", "tool": "update_cart"},
+        {"type": "no_undeclared_changes"},
+    ],
+    "redaction": {"paths": ["**.email", "**.payment_token"]},
+}
+
 TEMPLATES: Final[tuple[ContractTemplate, ...]] = (
     ContractTemplate(
         template_id="one_mug_save20_no_checkout",
@@ -226,6 +297,18 @@ TEMPLATES: Final[tuple[ContractTemplate, ...]] = (
         summary="An order may exist only behind an approved, single-use confirmation.",
         demonstrates="none",
         document=_CONFIRMED_CHECKOUT_ONLY,
+    ),
+    ContractTemplate(
+        template_id="one_mug_no_side_effects",
+        title="One mug, and nothing else touched",
+        summary=(
+            "Every cart assertion passes and the run still fails: the same journey "
+            "rewrote a saved preference no contract term names. Demonstrates that a "
+            "contract is safe by default rather than only as complete as its "
+            "author's imagination."
+        ),
+        demonstrates="undeclared_side_effect",
+        document=_NO_SIDE_EFFECTS,
     ),
 )
 

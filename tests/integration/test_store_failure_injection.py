@@ -13,10 +13,14 @@ the contradiction the harness exists to detect, and Appendix B's worked example
 is transcribed here as the expectation: expected `"20.00"`, actual `"25.00"`, and
 an unchanged `state_version` either side of the call.
 
-The other four profiles are recognised and refused. A store that quietly ran the
-honest path while a report claimed a fault was active would be lying about the
-one thing it exists to demonstrate, so `FAULT_PROFILE_UNAVAILABLE` is a distinct
-code from an unknown value.
+013-T5 adds the second injector, `undeclared_side_effect`, whose whole point is
+the opposite shape: the cart comes out *exactly right* and a path no contract
+names moves alongside it. Its section is at the end of this file.
+
+The remaining three profiles are recognised and refused. A store that quietly ran
+the honest path while a report claimed a fault was active would be lying about
+the one thing it exists to demonstrate, so `FAULT_PROFILE_UNAVAILABLE` is a
+distinct code from an unknown value.
 """
 
 from __future__ import annotations
@@ -100,9 +104,17 @@ def test_every_profile_is_described_so_a_report_can_label_it() -> None:
 
 
 @pytest.mark.integration
-def test_this_build_implements_the_honest_path_and_the_discount_fault() -> None:
-    """BUILD_ORDER §7/M2 ships one injector; the rest arrive with their own tests."""
-    assert frozenset({FaultProfile.NONE, DISCOUNT_FAULT}) == IMPLEMENTED_PROFILES
+def test_this_build_implements_the_honest_path_and_two_faults() -> None:
+    """Extended, never widened: each injector arrives with its own tests.
+
+    003 shipped the honest path and the discount fault; 013-T5 adds
+    `undeclared_side_effect`. Pinned as set equality rather than a count, so a
+    profile that gained an entry here without gaining an injector fails.
+    """
+    assert (
+        frozenset({FaultProfile.NONE, DISCOUNT_FAULT, FaultProfile.UNDECLARED_SIDE_EFFECT})
+        == IMPLEMENTED_PROFILES
+    )
 
 
 @pytest.mark.integration
@@ -178,7 +190,6 @@ async def test_a_selection_is_scoped_to_its_workspace(service: StoreService) -> 
     [
         FaultProfile.DUPLICATE_ON_RETRY,
         FaultProfile.CHECKOUT_WITHOUT_CONFIRMATION,
-        FaultProfile.UNDECLARED_SIDE_EFFECT,
         FaultProfile.TOOL_SURFACE_POISONED,
     ],
 )
@@ -373,7 +384,11 @@ async def test_the_scenario_endpoint_publishes_what_the_panel_needs(
     body = (await client.get(f"{API_PREFIX}/store/scenario")).json()
     assert body["supported_scenario_modes"] == ["pre_fix", "post_fix"]
     assert body["recognized_fault_profiles"] == [profile.value for profile in FaultProfile]
-    assert body["implemented_fault_profiles"] == ["discount_reported_but_not_applied", "none"]
+    assert body["implemented_fault_profiles"] == [
+        "discount_reported_but_not_applied",
+        "none",
+        "undeclared_side_effect",
+    ]
     assert body["description"] == PROFILE_DESCRIPTIONS[FaultProfile.NONE]
 
 
@@ -388,3 +403,114 @@ async def test_an_unimplemented_profile_is_refused_over_http(
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "FAULT_PROFILE_UNAVAILABLE"
     assert response.json()["error"]["details"]["description"]
+
+
+# --- undeclared_side_effect (§13.3; 013-T5) ---------------------------------
+#
+# §13.3 fixes the shape of this profile precisely: "a cart mutation additionally
+# rewrites a state path no contract term mentions... Every declared assertion
+# still passes; only `no_undeclared_changes` fails."
+#
+# Both halves have to hold, and the first is the one that is easy to lose. An
+# injector that also got the cart wrong would fail an ordinary assertion, the run
+# would go red for the usual reason, and the demonstration — that a contract can
+# be green everywhere it looks and still be wrong — would be gone.
+
+
+@pytest.mark.integration
+async def test_the_side_effect_leaves_the_cart_exactly_correct(service: StoreService) -> None:
+    """The half that makes the demonstration mean anything."""
+    await service.select_scenario("ws-1", "pre_fix", FaultProfile.UNDECLARED_SIDE_EFFECT)
+
+    outcome = await service.update_cart("ws-1", MUG, 1, "req_addonemug")
+
+    cart = outcome.state.target_state.cart
+    assert outcome.response["status"] == "success"
+    assert cart.items["mug"].quantity == 1
+    assert str(cart.total) == "25.00"
+    assert len(cart.items) == 1
+
+
+@pytest.mark.integration
+async def test_the_side_effect_rewrites_a_path_no_cart_contract_names(
+    service: StoreService,
+) -> None:
+    """§13.2 carries `preferences` precisely so this is observable."""
+    await service.select_scenario("ws-1", "pre_fix", FaultProfile.UNDECLARED_SIDE_EFFECT)
+    before = await service.read_state("ws-1")
+    assert before.target_state.preferences.delivery_note == ""
+
+    outcome = await service.update_cart("ws-1", MUG, 1, "req_addonemug")
+
+    assert outcome.state.target_state.preferences.delivery_note == "leave with the neighbour"
+
+
+@pytest.mark.integration
+async def test_the_side_effect_does_not_fire_in_post_fix(service: StoreService) -> None:
+    """FR-011: recorded in both modes, active in one.
+
+    Without this the matched pre/post comparison of FR-019 would be meaningless —
+    a store that misbehaved in both modes proves nothing about either.
+    """
+    await service.select_scenario("ws-1", "post_fix", FaultProfile.UNDECLARED_SIDE_EFFECT)
+
+    outcome = await service.update_cart("ws-1", MUG, 1, "req_addonemug")
+
+    assert outcome.state.target_state.cart.items["mug"].quantity == 1
+    assert outcome.state.target_state.preferences.delivery_note == ""
+
+
+@pytest.mark.integration
+async def test_one_mutation_moves_the_state_version_exactly_once(
+    service: StoreService,
+) -> None:
+    """The side effect rides along; it is not a second write.
+
+    §13.2's counter is evidence the harness reads, and FR-032 treats a version
+    change as proof that state moved. A profile that bumped it twice for one call
+    would inject a defect this demo did not mean to inject, and the idempotency
+    policy would be looking at the wrong number.
+    """
+    await service.select_scenario("ws-1", "pre_fix", FaultProfile.UNDECLARED_SIDE_EFFECT)
+    before = await service.read_state("ws-1")
+
+    outcome = await service.update_cart("ws-1", MUG, 1, "req_addonemug")
+
+    assert outcome.state.state_version == before.state_version + 1
+
+
+@pytest.mark.integration
+async def test_the_side_effect_is_deterministic_across_runs(tmp_path: Path) -> None:
+    """§24 compares a replayed run against a recorded one by canonical document.
+
+    A generated note — a timestamp, a request ID — would differ between two
+    otherwise identical runs and make that comparison fail for a reason that has
+    nothing to do with the defect.
+    """
+    notes = []
+    for index in range(2):
+        repository = StoreRepository(tmp_path / f"store-{index}.sqlite3", clock=lambda: EPOCH)
+        await repository.initialize()
+        store = StoreService(repository, clock=lambda: EPOCH)
+        await store.select_scenario("ws-1", "pre_fix", FaultProfile.UNDECLARED_SIDE_EFFECT)
+        outcome = await store.update_cart("ws-1", MUG, 1, "req_addonemug")
+        notes.append(outcome.state.target_state.canonical_document())
+
+    assert notes[0] == notes[1]
+
+
+@pytest.mark.integration
+async def test_a_retried_mutation_does_not_reapply_the_side_effect(
+    service: StoreService,
+) -> None:
+    """Appendix D.2's replay path returns the first persisted result.
+
+    The injector lives inside that path, so a retry must not write again — the
+    idempotency guarantee covers the whole mutation, side effect included.
+    """
+    await service.select_scenario("ws-1", "pre_fix", FaultProfile.UNDECLARED_SIDE_EFFECT)
+    first = await service.update_cart("ws-1", MUG, 1, "req_addonemug")
+    repeat = await service.update_cart("ws-1", MUG, 1, "req_addonemug")
+
+    assert repeat.replayed is True
+    assert repeat.state.state_version == first.state.state_version

@@ -91,7 +91,16 @@ PROFILE_DESCRIPTIONS: Final[Mapping[FaultProfile, str]] = {
 
 #: Shipped in this build. The rest are recognised, described, and refused.
 IMPLEMENTED_PROFILES: Final[frozenset[FaultProfile]] = frozenset(
-    {FaultProfile.NONE, FaultProfile.DISCOUNT_REPORTED_BUT_NOT_APPLIED}
+    {
+        FaultProfile.NONE,
+        FaultProfile.DISCOUNT_REPORTED_BUT_NOT_APPLIED,
+        # 013-T5. `update_cart` performs a correct mutation and additionally
+        # rewrites `preferences.delivery_note` — a path no built-in contract
+        # asserts. Every declared assertion still passes and only
+        # `no_undeclared_changes` fails, which is the demonstration §13.3 asks
+        # this profile to make.
+        FaultProfile.UNDECLARED_SIDE_EFFECT,
+    }
 )
 
 #: FR-011 requires every non-`none` profile to be labelled as injected unsafe

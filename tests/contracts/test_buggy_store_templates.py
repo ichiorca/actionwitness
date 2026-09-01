@@ -39,6 +39,9 @@ def test_at_least_three_templates_are_published() -> None:
         "one_mug_save20_no_checkout",
         "retry_safe_cart_update",
         "confirmed_checkout_only",
+        # 013-T5. Appended rather than inserted: template order is publication
+        # order and a reordering would change what a UI lists first for no reason.
+        "one_mug_no_side_effects",
     )
 
 

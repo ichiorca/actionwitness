@@ -66,7 +66,14 @@ from buggy_store.failure_injection import (
     ScenarioConfiguration,
     ScenarioMode,
 )
-from buggy_store.models import CartLine, Order, StoreState, TargetState, build_cart
+from buggy_store.models import (
+    CartLine,
+    Order,
+    Preferences,
+    StoreState,
+    TargetState,
+    build_cart,
+)
 from buggy_store.repository import StoreRepository
 
 __all__ = [
@@ -91,6 +98,13 @@ MAX_EXPIRY_SECONDS: Final = 300
 #: Appendix D.2 bounds `request_id` at 8..80 characters.
 MIN_REQUEST_ID: Final = 8
 MAX_REQUEST_ID: Final = 80
+
+#: What `undeclared_side_effect` writes to `preferences.delivery_note` (§13.3).
+#:
+#: Fixed rather than generated. A value that varied per run would change the
+#: canonical document between two otherwise identical runs, and §24 compares a
+#: replayed run against a recorded one by exactly that document.
+UNDECLARED_SIDE_EFFECT_NOTE: Final = "leave with the neighbour"
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,7 +214,10 @@ class StoreService:
                     # mutate again.
                     return MutationOutcome(replayed.response, current, replayed=True)
 
-                next_state = self._apply_quantity(current, product, quantity)
+                scenario = (
+                    await self._repository.read_scenario(connection, workspace_id)
+                ) or ScenarioConfiguration()
+                next_state = self._apply_quantity(current, product, quantity, scenario)
                 if next_state is not current:
                     await self._repository.write_state(connection, workspace_id, next_state)
 
@@ -216,8 +233,22 @@ class StoreService:
                 )
         return MutationOutcome(response, next_state, replayed=False)
 
-    def _apply_quantity(self, current: StoreState, product: Product, quantity: int) -> StoreState:
-        """Absolute assignment, returning `current` unchanged when nothing moved."""
+    def _apply_quantity(
+        self,
+        current: StoreState,
+        product: Product,
+        quantity: int,
+        scenario: ScenarioConfiguration,
+    ) -> StoreState:
+        """Absolute assignment, returning `current` unchanged when nothing moved.
+
+        The scenario is taken here rather than applied by the caller afterwards so
+        that one tool call produces exactly one state version. Injecting the side
+        effect as a second `with_target_state` would bump the version twice for a
+        single `update_cart`, and §13.2's monotonic counter is evidence the
+        harness reads — a mutation that moved it by two would be a defect this
+        demo did not mean to inject.
+        """
         items = dict(current.target_state.cart.items)
         if quantity == 0:
             items.pop(product.line_key, None)
@@ -230,13 +261,41 @@ class StoreService:
         rebuilt = TargetState(
             cart=build_cart(items, existing_discount.code if existing_discount else None),
             order=current.target_state.order,
-            preferences=current.target_state.preferences,
+            preferences=self._preferences_after(current, scenario),
         )
         if rebuilt.canonical_document() == current.target_state.canonical_document():
             # A no-op must not manufacture the state change the harness reads as
             # evidence that a mutation happened.
             return current
         return current.with_target_state(rebuilt)
+
+    def _preferences_after(
+        self, current: StoreState, scenario: ScenarioConfiguration
+    ) -> Preferences:
+        """§13.3's `undeclared_side_effect`, injected onto a *correct* mutation.
+
+        The defect this profile demonstrates is not a wrong cart. The cart is
+        exactly right, every declared assertion passes, and the journey also
+        rewrites a saved preference no contract term mentions — which is why
+        §13.2 carries `preferences` at all: "so that a journey can change
+        canonical state outside the paths a cart contract asserts".
+
+        That shape is the whole argument for undeclared-change detection. A
+        reviewer reading a green assertion list would conclude the run was clean;
+        only the blast-radius check disagrees, and it disagrees without anybody
+        having predicted *which* path would move.
+
+        The note is a fixed string, not a generated one: a value that varied per
+        run would change the canonical document between two otherwise identical
+        runs and make the §24 replay comparison non-deterministic.
+        """
+        preferences = current.target_state.preferences
+        if not scenario.injects(FaultProfile.UNDECLARED_SIDE_EFFECT):
+            return preferences
+        return Preferences(
+            delivery_note=UNDECLARED_SIDE_EFFECT_NOTE,
+            gift_wrap=preferences.gift_wrap,
+        )
 
     # -- discount ------------------------------------------------------------
 
