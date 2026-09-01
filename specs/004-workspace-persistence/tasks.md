@@ -47,7 +47,7 @@ Cite the T-ID in every commit that advances it.
       produces a bounded unavailable state, the service starts with Buggy Store
       disabled and reports the adapter unavailable, and one failed integration
       never disables the others (§21.1).
-- [ ] T11 — `/api/v1/workspace` routes from §15.1: status, reset with optional
+- [x] T11 — `/api/v1/workspace` routes from §15.1: status, reset with optional
       `purge_completed`, failure-profile selection, and scenario-mode selection
       before arming. Reset cancels nonterminal work and unresolved confirmations
       while retaining terminal artifacts and the selected contract.

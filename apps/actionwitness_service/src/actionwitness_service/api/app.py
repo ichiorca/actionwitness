@@ -32,6 +32,7 @@ from actionwitness_service.api.middleware import (
     WorkspaceCookieMiddleware,
 )
 from actionwitness_service.api.origins import OriginPolicy
+from actionwitness_service.api.routes import workspace as workspace_routes
 from actionwitness_service.application.adapter_registry import AdapterRegistry
 from actionwitness_service.application.cleanup import WorkspaceCleaner
 from actionwitness_service.application.rate_limits import RateLimiter
@@ -40,7 +41,10 @@ from actionwitness_service.config import ServiceSettings
 from actionwitness_service.persistence.database import Database
 from actionwitness_service.persistence.locks import WorkspaceLocks
 
-__all__ = ["create_app"]
+__all__ = ["API_PREFIX", "create_app"]
+
+#: §15: every harness route lives under one versioned prefix.
+API_PREFIX = "/api/v1"
 
 
 def create_app(
@@ -165,8 +169,9 @@ def create_app(
     async def healthz() -> dict[str, str]:  # spec §29.1
         return {"status": "ok"}
 
-    # TODO(004-T11/T12): include routers from actionwitness_service.api.routes (§15.1–15.2)
-    # TODO(004-T7): Origin validation and the §15.8 error envelope
-    # TODO(004-T9): per-peer rate limiting and stale-workspace cleanup (§29.1)
+    app.include_router(workspace_routes.router, prefix=API_PREFIX)
+
+    # TODO(004-T12): contract template, read, and select routes (§15.2)
+    # TODO(M4): runs, events, and invocation routes (§15.3)
     # TODO(M4): mount compiled frontend assets; /demo composition per §29.1
     return app

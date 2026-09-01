@@ -131,6 +131,40 @@ class AdapterRegistry:
             for slot in self._slots.values()
         }
 
+    def resolve(self, identifier: str | None) -> AdapterSlot | None:
+        """Find a slot by module name **or** by the target id it advertises.
+
+        Two vocabularies meet here and it is worth naming both. The registry is
+        keyed by *module* (`buggy_store`, matching `ServiceSettings`), while a
+        workspace and a contract name a *target* (`buggy-store`, from the
+        adapter's descriptor). Accepting either is what lets FR-024 select a
+        target from a contract's `target_id` without the caller having to know
+        which of the two names it is holding.
+        """
+        if identifier is None:
+            return None
+        if identifier in self._slots:
+            return self._slots[identifier]
+        for slot in self._slots.values():
+            if slot.factory is not None and slot.factory().descriptor.target_id == identifier:
+                return slot
+        return None
+
+    def supported_scenario_modes(self, identifier: str | None) -> tuple[str, ...]:
+        """What the named target advertises (§9.1).
+
+        Read from the adapter's own descriptor rather than from a constant here,
+        because the harness "validates the selected value against
+        `TargetDescriptor.supported_scenario_modes` but neither interprets mode
+        names nor implements a fault". An unavailable or unselected target
+        advertises nothing, which makes every mode invalid rather than letting
+        the check pass by default.
+        """
+        slot = self.resolve(identifier)
+        if slot is None or slot.factory is None:
+            return ()
+        return tuple(slot.factory().descriptor.supported_scenario_modes)
+
     # -- registration --------------------------------------------------------
 
     def _register_all(self) -> None:

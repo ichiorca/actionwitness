@@ -19,10 +19,16 @@ from typing import Annotated
 from fastapi import Depends, Request
 
 from actionwitness_service.api.errors import ApiError, ApiErrorCode
+from actionwitness_service.application.adapter_registry import AdapterRegistry
 from actionwitness_service.persistence.database import Database
 from actionwitness_service.persistence.locks import WorkspaceLocks
 
-__all__ = ["DatabaseDependency", "LocksDependency", "WorkspaceDependency"]
+__all__ = [
+    "DatabaseDependency",
+    "LocksDependency",
+    "RegistryDependency",
+    "WorkspaceDependency",
+]
 
 
 def _workspace_id(request: Request) -> str:
@@ -49,6 +55,10 @@ def _locks(request: Request) -> WorkspaceLocks:
     return request.app.state.locks
 
 
+def _registry(request: Request) -> AdapterRegistry:
+    return request.app.state.adapters
+
+
 #: Declared at module scope, not inside a router function. Under
 #: `from __future__ import annotations` every annotation is a string resolved
 #: against module globals, so a locally-defined alias resolves to nothing and
@@ -57,3 +67,4 @@ def _locks(request: Request) -> WorkspaceLocks:
 WorkspaceDependency = Annotated[str, Depends(_workspace_id)]
 DatabaseDependency = Annotated[Database, Depends(_database)]
 LocksDependency = Annotated[WorkspaceLocks, Depends(_locks)]
+RegistryDependency = Annotated[AdapterRegistry, Depends(_registry)]

@@ -506,3 +506,68 @@ a client as §15.8's envelope rather than as a 500 whose body is a stack trace.
 A client per request loses connection reuse; a module-level one outlives the
 loop it was created on. A test that supplies its own keeps ownership of it —
 closing somebody else's client is not the lifespan's business.
+
+### T11 — reset's retention half has its own tests
+
+FR-013 has two halves and only one is obvious. "Cancel nonterminal runs ... and
+unresolved confirmations" is the half anyone would implement; "preserve
+completed artifacts and the selected contract so the workspace returns to
+`ContractReady`" is the half a plausible implementation drops, because clearing
+everything is simpler. So retention is tested directly: a terminal run and its
+artifact survive a reset, and the selected contract survives it too — the
+workspace cannot return to `ContractReady` if reset removed what made it ready.
+
+Reset also leaves a **decided** confirmation alone. A cancelled-because-pending
+confirmation is housekeeping; rewriting an approved or denied one would revoke
+consent a person actually gave (constitution §5).
+
+### T11 — the cancellation event is appended before the status changes
+
+The append reads the run's current event count. A run already relabelled
+`cancelled` would be recording the cancellation of something that, by its own
+status, was never running.
+
+### T11 — no route takes a workspace identifier
+
+There is no path parameter, query parameter, or body field naming a workspace on
+any of §15.1's four routes. That is the point: the cookie is the only input, so
+a second client has nothing to aim at. The AC-11 test for reset shows the
+intruder resetting *its own* empty workspace as hard as it can — `purge_completed`
+included — while the first client's running run is untouched.
+
+### T11 — §15.1's table contains backslash typos
+
+The published table reads `\workspace\reset` and `\runs\{run_id}\events`. These
+are markdown-escaping artifacts, not paths; the routes are mounted with forward
+slashes under `/api/v1`. Flagged rather than reproduced.
+
+### T11 — `next_action` is a small honest projection, not guidance
+
+§15.1 asks for "authoritative guidance, and one safe `next_action`". §18's
+guidance system — the `guidance_events` stream with its copy versions, actors,
+and recovery actions — is M4's. Inventing a partial version here would create a
+second source of truth for what the user should do next, so `next_action` is
+derived from the workspace's own columns only and no `guidance` field is
+fabricated. **Operator decision worth flagging:** the guidance half of
+`GET /workspace` is deferred to M4 rather than stubbed.
+
+### T11 — the failure-profile token is not validated against a list
+
+FR-011 names the Tier 1 profiles, but `TargetDescriptor` has no
+`supported_fault_profiles` field to validate against — it carries
+`supported_scenario_modes` only. Adding one is a change to a public core
+protocol, which the escalation contract reserves for the operator. So the route
+validates the token's *shape* and stores it opaquely, and the adapter remains
+the authority when the run is armed (M4). **Queued for an operator decision:**
+either add `supported_fault_profiles` to the descriptor, or accept that an
+unsupported profile is caught at arming rather than at selection.
+
+Scenario mode, by contrast, *is* validated against the descriptor, because
+§9.1 gives it a field to validate against.
+
+### T11 — selection is refused while a run is in flight
+
+FR-011 says the option "must be chosen before arming" and FR-012 says an armed
+run's configuration is immutable and "completed evidence is never relabeled".
+A terminal run does not block, though — a finished run must not lock a
+workspace forever.
