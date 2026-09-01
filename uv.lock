@@ -162,6 +162,7 @@ name = "buggy-store"
 version = "0.1.0"
 source = { editable = "examples/buggy_store" }
 dependencies = [
+    { name = "aiosqlite" },
     { name = "fastapi" },
     { name = "pydantic" },
     { name = "uvicorn" },
@@ -169,6 +170,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiosqlite", specifier = ">=0.20" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "pydantic", specifier = ">=2.9" },
     { name = "uvicorn", specifier = ">=0.30" },

@@ -11,6 +11,11 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn>=0.30",
     "pydantic>=2.9",
+    # The store's own async SQLite driver (BUILD_ORDER §7/M2: "add its own async
+    # SQLite dependency without introducing an assurance dependency"). Declared
+    # here rather than inherited from the workspace, because §26.7 requires this
+    # distribution to install and run on its own.
+    "aiosqlite>=0.20",
 ]
 
 [project.scripts]
