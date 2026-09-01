@@ -31,12 +31,12 @@ from typing import Any, Final
 
 import aiosqlite
 
+from buggy_store.errors import IdempotencyConflict
 from buggy_store.migrations import apply_migrations
 from buggy_store.models import StoreState, empty_state
 
 __all__ = [
     "BUSY_TIMEOUT_MS",
-    "IdempotencyConflict",
     "IdempotencyRecord",
     "StoreRepository",
     "request_hash",
@@ -44,23 +44,6 @@ __all__ = [
 
 #: Spec §17 and ADR-0003. Bounds lock contention instead of failing instantly.
 BUSY_TIMEOUT_MS: Final = 5_000
-
-
-class IdempotencyConflict(RuntimeError):
-    """A request ID was reused with a different payload (Appendix D.2).
-
-    Deliberately not a retry and not a success. §D.2: reuse with a different
-    payload "returns `IDEMPOTENCY_KEY_REUSED`, `retryable: false`" - the caller
-    asked for two different things under one key, and guessing which one they
-    meant is how a duplicate mutation happens.
-    """
-
-    def __init__(self, tool_name: str, request_id: str) -> None:
-        super().__init__(
-            f"request_id {request_id!r} was already used for {tool_name!r} with a different payload"
-        )
-        self.tool_name = tool_name
-        self.request_id = request_id
 
 
 @dataclass(frozen=True, slots=True)
