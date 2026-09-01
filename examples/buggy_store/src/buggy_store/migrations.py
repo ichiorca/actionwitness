@@ -77,6 +77,36 @@ MIGRATIONS: Final[tuple[Migration, ...]] = (
             """,
         ),
     ),
+    Migration(
+        version=2,
+        name="confirmation requests for protected checkout",
+        statements=(
+            # Mirrors §17.1's `confirmation_requests` columns for the store's own
+            # protected operation. The store binds to workspace, state and
+            # expiry; run and invocation are the harness's bindings and are
+            # deliberately absent, because the store does not know what a run is.
+            """
+            CREATE TABLE buggy_store_confirmations (
+                confirmation_id     TEXT    NOT NULL PRIMARY KEY,
+                workspace_id        TEXT    NOT NULL,
+                status              TEXT    NOT NULL,
+                state_binding_hash  TEXT    NOT NULL,
+                consequence_json    TEXT    NOT NULL,
+                expires_at          TEXT    NOT NULL,
+                decided_at          TEXT,
+                consumed_at         TEXT,
+                created_at          TEXT    NOT NULL,
+                FOREIGN KEY (workspace_id)
+                    REFERENCES buggy_store_state (workspace_id)
+                    ON DELETE CASCADE
+            )
+            """,
+            """
+            CREATE INDEX buggy_store_confirmations_by_workspace
+                ON buggy_store_confirmations (workspace_id, status)
+            """,
+        ),
+    ),
 )
 
 

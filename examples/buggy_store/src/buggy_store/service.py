@@ -30,8 +30,12 @@ run is.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping, Sequence
+import json
+import uuid
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 from typing import Any, Final
 
 from buggy_store.catalog import (
@@ -42,15 +46,39 @@ from buggy_store.catalog import (
     Product,
     search_catalog,
 )
-from buggy_store.errors import DiscountNotFound, ProductNotFound, ValidationFailed
-from buggy_store.models import CartLine, StoreState, TargetState, build_cart
+from buggy_store.confirmations import (
+    AUTHORIZING_STATUS,
+    Confirmation,
+    ConfirmationStatus,
+)
+from buggy_store.errors import (
+    ConfirmationRequired,
+    DiscountNotFound,
+    ProductNotFound,
+    StoreError,
+    ValidationFailed,
+)
+from buggy_store.models import CartLine, Order, StoreState, TargetState, build_cart
 from buggy_store.repository import StoreRepository
 
-__all__ = ["APPLY_DISCOUNT", "UPDATE_CART", "MutationOutcome", "StoreService"]
+__all__ = [
+    "APPLY_DISCOUNT",
+    "DEFAULT_EXPIRY_SECONDS",
+    "PROCEED_TO_CHECKOUT",
+    "UPDATE_CART",
+    "MutationOutcome",
+    "StoreService",
+]
 
 #: Tool names, used as the idempotency-record scope (§17.1 keys records on it).
 UPDATE_CART: Final = "update_cart"
 APPLY_DISCOUNT: Final = "apply_discount"
+PROCEED_TO_CHECKOUT: Final = "proceed_to_checkout"
+
+#: FR-062 fixes the range at 10..300 seconds and the default at 60.
+DEFAULT_EXPIRY_SECONDS: Final = 60
+MIN_EXPIRY_SECONDS: Final = 10
+MAX_EXPIRY_SECONDS: Final = 300
 
 #: Appendix D.2 bounds `request_id` at 8..80 characters.
 MIN_REQUEST_ID: Final = 8
@@ -81,9 +109,21 @@ class StoreService:
     the busy timeout.
     """
 
-    def __init__(self, repository: StoreRepository) -> None:
+    def __init__(
+        self,
+        repository: StoreRepository,
+        *,
+        clock: Callable[[], datetime] | None = None,
+        id_source: Callable[[str], str] | None = None,
+    ) -> None:
         self._repository = repository
         self._locks: dict[str, asyncio.Lock] = {}
+        #: One clock for the whole store, so a confirmation's expiry and the
+        #: instant a decision is dated by cannot disagree.
+        self._clock = clock or repository.clock
+        #: Injected so a recorded journey replays to the same identifiers
+        #: (constitution §1). `uuid4` only when nobody supplied one.
+        self._id_source = id_source or (lambda prefix: f"{prefix}_{uuid.uuid4().hex}")
 
     def _lock_for(self, workspace_id: str) -> asyncio.Lock:
         lock = self._locks.get(workspace_id)
@@ -241,6 +281,234 @@ class StoreService:
             )
         return code
 
+    # -- confirmation lifecycle (§14, §15.5, FR-066) --------------------------
+
+    async def request_confirmation(
+        self, workspace_id: str, *, expires_in_seconds: int = DEFAULT_EXPIRY_SECONDS
+    ) -> Confirmation:
+        """Create a pending confirmation bound to the cart as it stands now (§14).
+
+        The binding hash is the point. Nothing is held across the human's
+        decision (ADR-0003), so the cart can move while the modal is open;
+        recording what was shown lets checkout refuse to act on an approval of a
+        different cart.
+        """
+        self._validate_expiry(expires_in_seconds)
+        now = self._now()
+
+        async with self._lock_for(workspace_id), self._repository.connect() as connection:
+            state = await self._repository.ensure_workspace(connection, workspace_id)
+            confirmation = Confirmation(
+                confirmation_id=self._id_source("confirmation"),
+                workspace_id=workspace_id,
+                status=ConfirmationStatus.PENDING,
+                state_binding_hash=_state_binding_hash(state),
+                # §14.1: "the Buggy Store summary includes cart version and exact
+                # total". Bounded to what a human needs in order to decide.
+                consequence={
+                    "action": PROCEED_TO_CHECKOUT,
+                    "state_version": state.state_version,
+                    "cart_total": state.target_state.cart.canonical_document()["total"],
+                    "item_count": state.target_state.cart.item_count,
+                },
+                expires_at=now + timedelta(seconds=expires_in_seconds),
+                created_at=now,
+            )
+            async with self._repository.transaction(connection):
+                await self._repository.insert_confirmation(connection, confirmation)
+        return confirmation
+
+    async def decide_confirmation(
+        self, workspace_id: str, confirmation_id: str, *, approved: bool
+    ) -> Confirmation:
+        """Record a human's decision (§14 step 6: before any order mutation).
+
+        A decision on a lapsed request is refused rather than honoured. §14 lists
+        approve, deny, expire and cancel as four outcomes, and letting a late
+        approval land would collapse expiry into approval.
+        """
+        target = ConfirmationStatus.APPROVED if approved else ConfirmationStatus.DENIED
+        return await self._transition(
+            workspace_id,
+            confirmation_id,
+            target,
+            allowed_from=ConfirmationStatus.PENDING,
+        )
+
+    async def cancel_confirmation(self, workspace_id: str, confirmation_id: str) -> Confirmation:
+        """Cancel a pending request (§14 step 9), creating no order."""
+        return await self._transition(
+            workspace_id,
+            confirmation_id,
+            ConfirmationStatus.CANCELLED,
+            allowed_from=ConfirmationStatus.PENDING,
+        )
+
+    async def read_confirmation(self, workspace_id: str, confirmation_id: str) -> Confirmation:
+        """One confirmation, scoped to its workspace."""
+        async with self._repository.connect() as connection:
+            return await self._require_confirmation(connection, workspace_id, confirmation_id)
+
+    async def _transition(
+        self,
+        workspace_id: str,
+        confirmation_id: str,
+        target: ConfirmationStatus,
+        *,
+        allowed_from: ConfirmationStatus,
+    ) -> Confirmation:
+        async with (
+            self._lock_for(workspace_id),
+            self._repository.connect() as connection,
+            self._repository.transaction(connection),
+        ):
+            confirmation = await self._require_confirmation(
+                connection, workspace_id, confirmation_id
+            )
+            effective = confirmation.effective_status(self._now())
+            if effective is not allowed_from:
+                raise StoreError(
+                    f"confirmation {confirmation_id!r} is {effective}, not {allowed_from}",
+                    details={"status": str(effective)},
+                )
+            moved = await self._repository.set_confirmation_status(
+                connection, workspace_id, confirmation_id, target, expected=allowed_from
+            )
+            if not moved:
+                # Another decision won the race between the read and the update.
+                # Refusing is correct: two humans cannot both decide one request.
+                raise StoreError(
+                    f"confirmation {confirmation_id!r} was already decided",
+                    details={"confirmation_id": confirmation_id},
+                )
+            return await self._require_confirmation(connection, workspace_id, confirmation_id)
+
+    # -- protected checkout (§14 step 7, FR-066, App. D.2) --------------------
+
+    async def checkout(
+        self, workspace_id: str, *, confirmation_id: str, request_id: str
+    ) -> MutationOutcome:
+        """Create one simulated order, consuming a valid approval exactly once.
+
+        Revalidation is mandatory rather than defensive: ADR-0003 holds nothing
+        between the request and the decision, so the approval is checked against
+        *current* state at the moment it is spent. The consume and the order
+        creation share one transaction, so an order cannot exist without the
+        approval having been spent, nor the approval be spent without an order.
+
+        App. D.2: "repeating a completed checkout request returns its original
+        simulated order result and never creates another confirmation or order."
+        """
+        self._validate_request_id(request_id)
+        payload = {"confirmation_id": confirmation_id}
+
+        async with self._lock_for(workspace_id), self._repository.connect() as connection:
+            await self._repository.ensure_workspace(connection, workspace_id)
+            async with self._repository.transaction(connection):
+                replayed = await self._repository.replay_or_claim(
+                    connection, workspace_id, PROCEED_TO_CHECKOUT, request_id, payload
+                )
+                current = await self._repository.read_state(connection, workspace_id)
+                assert current is not None  # ensured above, inside this transaction
+                if replayed is not None:
+                    return MutationOutcome(replayed.response, current, replayed=True)
+
+                confirmation = await self._require_confirmation(
+                    connection, workspace_id, confirmation_id
+                )
+                self._require_authorization(confirmation, current)
+
+                consumed = await self._repository.set_confirmation_status(
+                    connection,
+                    workspace_id,
+                    confirmation_id,
+                    ConfirmationStatus.CONSUMED,
+                    expected=ConfirmationStatus.APPROVED,
+                    consumed=True,
+                )
+                if not consumed:
+                    # Single use: a concurrent checkout already spent it.
+                    raise ConfirmationRequired(
+                        f"confirmation {confirmation_id!r} has already been used",
+                        details={"confirmation_id": confirmation_id},
+                    )
+
+                rebuilt = TargetState(
+                    cart=current.target_state.cart,
+                    order=Order(created=True, order_id=self._id_source("order")),
+                    preferences=current.target_state.preferences,
+                )
+                next_state = current.with_target_state(rebuilt)
+                await self._repository.write_state(connection, workspace_id, next_state)
+
+                response = {
+                    "status": "success",
+                    "state_version": next_state.state_version,
+                    "order_id": next_state.target_state.order.order_id,
+                    "cart": next_state.target_state.cart.canonical_document(),
+                }
+                await self._repository.record_result(
+                    connection,
+                    workspace_id,
+                    PROCEED_TO_CHECKOUT,
+                    request_id,
+                    payload,
+                    response,
+                    next_state.state_version,
+                )
+        return MutationOutcome(response, next_state, replayed=False)
+
+    def _require_authorization(self, confirmation: Confirmation, state: StoreState) -> None:
+        """FR-066's refusals, each with its own reason.
+
+        "Stale, expired, reused, mismatched, denied, or cancelled confirmations
+        shall never authorize a mutation." They stay separate rather than merged
+        into one boolean so a human reading the failure learns which happened.
+        """
+        effective = confirmation.effective_status(self._now())
+        if effective not in AUTHORIZING_STATUS:
+            raise ConfirmationRequired(
+                f"confirmation {confirmation.confirmation_id!r} is {effective} and cannot "
+                "authorize a checkout",
+                details={"status": str(effective)},
+            )
+        if confirmation.state_binding_hash != _state_binding_hash(state):
+            raise ConfirmationRequired(
+                "the cart changed after this confirmation was approved, so the approval "
+                "no longer describes what would be ordered",
+                details={"confirmation_id": confirmation.confirmation_id},
+            )
+
+    async def _require_confirmation(
+        self, connection, workspace_id: str, confirmation_id: str
+    ) -> Confirmation:
+        if not isinstance(confirmation_id, str) or not confirmation_id:
+            raise ValidationFailed("confirmation_id must be a non-empty string")
+        confirmation = await self._repository.find_confirmation(
+            connection, workspace_id, confirmation_id
+        )
+        if confirmation is None:
+            raise StoreError(
+                f"confirmation {confirmation_id!r} does not exist in this workspace",
+                details={"confirmation_id": confirmation_id},
+            )
+        return confirmation
+
+    def _validate_expiry(self, seconds: object) -> None:
+        if not isinstance(seconds, int) or isinstance(seconds, bool):
+            raise ValidationFailed("expires_in_seconds must be an integer")
+        if not MIN_EXPIRY_SECONDS <= seconds <= MAX_EXPIRY_SECONDS:
+            raise ValidationFailed(
+                f"expires_in_seconds must be between {MIN_EXPIRY_SECONDS} and {MAX_EXPIRY_SECONDS}",
+                details={"expires_in_seconds": seconds},
+            )
+
+    def _now(self) -> datetime:
+        instant = self._clock()
+        if instant.tzinfo is None:
+            raise ValueError("a persisted instant must be timezone-aware")
+        return instant.astimezone(UTC)
+
     # -- validation ----------------------------------------------------------
 
     def _require_product(self, product_id: object) -> Product:
@@ -271,6 +539,19 @@ class StoreService:
                 f"request_id must be between {MIN_REQUEST_ID} and {MAX_REQUEST_ID} characters",
                 details={"length": len(request_id)},
             )
+
+
+def _state_binding_hash(state: StoreState) -> str:
+    """What a confirmation is bound to: the cart a human was shown (§14).
+
+    The cart alone, not the whole target state. Binding to `preferences` would
+    invalidate an approval because someone toggled gift wrap in another tab,
+    which is a refusal with no safety value behind it.
+    """
+    document = json.dumps(
+        state.target_state.cart.canonical_document(), sort_keys=True, separators=(",", ":")
+    )
+    return sha256(document.encode("utf-8")).hexdigest()
 
 
 def _cart_response(state: StoreState, *, status: str = "success") -> dict[str, Any]:

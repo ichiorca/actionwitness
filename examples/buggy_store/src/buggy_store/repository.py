@@ -31,6 +31,7 @@ from typing import Any, Final
 
 import aiosqlite
 
+from buggy_store.confirmations import Confirmation, ConfirmationStatus
 from buggy_store.errors import IdempotencyConflict
 from buggy_store.migrations import apply_migrations
 from buggy_store.models import StoreState, empty_state
@@ -279,6 +280,122 @@ class StoreRepository:
             ),
         )
 
+    # -- confirmations -------------------------------------------------------
+
+    async def insert_confirmation(
+        self, connection: aiosqlite.Connection, confirmation: Confirmation
+    ) -> None:
+        """Record a pending confirmation. Insert-only; decisions update in place."""
+        await connection.execute(
+            """
+            INSERT INTO buggy_store_confirmations (
+                confirmation_id, workspace_id, status, state_binding_hash,
+                consequence_json, expires_at, decided_at, consumed_at, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?)
+            """,
+            (
+                confirmation.confirmation_id,
+                confirmation.workspace_id,
+                str(confirmation.status),
+                confirmation.state_binding_hash,
+                json.dumps(dict(confirmation.consequence), sort_keys=True),
+                _iso(confirmation.expires_at),
+                _iso(confirmation.created_at),
+            ),
+        )
+
+    async def find_confirmation(
+        self, connection: aiosqlite.Connection, workspace_id: str, confirmation_id: str
+    ) -> Confirmation | None:
+        """One confirmation, scoped to its workspace.
+
+        The workspace is part of the lookup rather than checked afterwards: §20.1
+        makes the identifier not an authorization mechanism, so a confirmation ID
+        alone must not select a row belonging to someone else.
+        """
+        async with connection.execute(
+            """
+            SELECT confirmation_id, workspace_id, status, state_binding_hash,
+                   consequence_json, expires_at, decided_at, consumed_at, created_at
+              FROM buggy_store_confirmations
+             WHERE workspace_id = ? AND confirmation_id = ?
+            """,
+            (workspace_id, confirmation_id),
+        ) as cursor:
+            row = await cursor.fetchone()
+        if row is None:
+            return None
+        return Confirmation(
+            confirmation_id=row["confirmation_id"],
+            workspace_id=row["workspace_id"],
+            status=ConfirmationStatus(row["status"]),
+            state_binding_hash=row["state_binding_hash"],
+            consequence=json.loads(row["consequence_json"]),
+            expires_at=_parse(row["expires_at"]),
+            created_at=_parse(row["created_at"]),
+            decided_at=_parse(row["decided_at"]) if row["decided_at"] else None,
+            consumed_at=_parse(row["consumed_at"]) if row["consumed_at"] else None,
+        )
+
+    async def set_confirmation_status(
+        self,
+        connection: aiosqlite.Connection,
+        workspace_id: str,
+        confirmation_id: str,
+        status: ConfirmationStatus,
+        *,
+        expected: ConfirmationStatus,
+        consumed: bool = False,
+    ) -> bool:
+        """Move a confirmation, but only from the status the caller expected.
+
+        The `expected` guard is what makes single use single: two concurrent
+        checkouts both read `approved`, both try to consume, and exactly one
+        `UPDATE` matches. The loser sees zero rows changed and refuses rather
+        than creating a second order. A blind update would let both through.
+        """
+        cursor = await connection.execute(
+            """
+            UPDATE buggy_store_confirmations
+               SET status = ?, decided_at = COALESCE(decided_at, ?), consumed_at = ?
+             WHERE workspace_id = ? AND confirmation_id = ? AND status = ?
+            """,
+            (
+                str(status),
+                self._now(),
+                self._now() if consumed else None,
+                workspace_id,
+                confirmation_id,
+                str(expected),
+            ),
+        )
+        return cursor.rowcount == 1
+
+    async def expire_pending_confirmations(
+        self, connection: aiosqlite.Connection, workspace_id: str, now_iso: str
+    ) -> int:
+        """Mark lapsed pending confirmations expired.
+
+        Housekeeping, not the safety mechanism: `Confirmation.effective_status`
+        already treats a lapsed pending record as expired, so a confirmation
+        cannot authorize anything merely because this has not run yet.
+        """
+        cursor = await connection.execute(
+            """
+            UPDATE buggy_store_confirmations
+               SET status = ?, decided_at = COALESCE(decided_at, ?)
+             WHERE workspace_id = ? AND status = ? AND expires_at <= ?
+            """,
+            (
+                str(ConfirmationStatus.EXPIRED),
+                now_iso,
+                workspace_id,
+                str(ConfirmationStatus.PENDING),
+                now_iso,
+            ),
+        )
+        return cursor.rowcount
+
     # -- reset ---------------------------------------------------------------
 
     async def reset_workspace(self, connection: aiosqlite.Connection, workspace_id: str) -> None:
@@ -295,6 +412,10 @@ class StoreRepository:
                 (workspace_id,),
             )
             await connection.execute(
+                "DELETE FROM buggy_store_confirmations WHERE workspace_id = ?",
+                (workspace_id,),
+            )
+            await connection.execute(
                 """
                 UPDATE buggy_store_state
                    SET state_version = ?, state_json = ?, updated_at = ?
@@ -308,11 +429,23 @@ class StoreRepository:
                 ),
             )
 
+    @property
+    def clock(self):
+        """The injected clock, so the service dates decisions from one source."""
+        return self._clock
+
     def _now(self) -> str:
-        instant = self._clock()
-        if instant.tzinfo is None:
-            raise ValueError("a persisted instant must be timezone-aware")
-        return instant.astimezone(UTC).isoformat().replace("+00:00", "Z")
+        return _iso(self._clock())
+
+
+def _iso(value: datetime) -> str:
+    if value.tzinfo is None:
+        raise ValueError("a persisted instant must be timezone-aware")
+    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _parse(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
 def _state_from_document(document: Mapping[str, Any]) -> StoreState:
