@@ -60,7 +60,99 @@ Risks:
 
 ## Deviations and decisions worth an operator's eye
 
-_To be recorded per task, anchored to spec sections — the 002–007 convention._
+_Recorded per task, anchored to spec sections — the 002–007 convention._
+
+### Raised by this milestone
+
+- **T2 — `actionwitness_service` declared neither `httpx` nor `starlette`, and
+  imports both.** `api/app.py` owns the lifespan HTTPX client (ADR-0001) and
+  `api/middleware.py` subclasses Starlette's `BaseHTTPMiddleware`; both resolved
+  only because some *other* distribution pulled them in. Invisible in the dev venv,
+  fatal in the image, where §29.1 installs the distributions separately. Both are
+  now declared and `uv.lock` regenerated. No architecture gate covers declared-vs-
+  imported dependencies — worth one, and not added here because it belongs with the
+  import-boundary gates rather than with release hardening.
+
+- **T3 — only `/demo/api/v1/**` is proxied; `/demo` and `/demo/assets/**` are
+  static.** tasks.md said "reverse-proxies `/demo` + `/demo/api/v1`". The store
+  process has no frontend, so a blanket `/demo/**` proxy would forward storefront
+  asset requests to a process with no assets. The split follows §29.1 step 4, which
+  copies each application's assets into the image rather than into the store.
+  Recorded in ADR-0006.
+
+- **T3 — the storefront takes no harness workspace cookie.** `/demo/**` is now
+  exempt from `WorkspaceCookieMiddleware`; it carries its own `X-Workspace-Id`
+  (§15.5). Rate limiting is deliberately *not* waived. This also fixed a live bug:
+  a storefront-only visitor was spending the workspace-**creation** bucket on every
+  request without a workspace ever being created, so ordinary demo use could
+  exhaust the hourly allowance for real harness visitors.
+
+- **T4 — a 500 previously produced no structured log line at all.** The `Exception`
+  handler is installed on Starlette's `ServerErrorMiddleware`, outside every
+  application middleware, so the logging layer saw the raised exception and never a
+  response. The one request an operator most needs a line for was the only one that
+  produced none. Now logged with the status and code the handler is about to send,
+  pinned to the real response by a test.
+
+- **T4 — `scope["route"].path` is unusable for a log field.** FastAPI 0.141 keeps an
+  included router nested rather than flattening it, so the route object carries a
+  prefix-relative path (`/workspace`, not `/api/v1/workspace`) and `root_path` is
+  empty. Templates are derived by reducing the real path's identifier segments
+  instead. An **unmatched** path is logged as `<unmatched>` rather than raw: every
+  segment of it is caller-chosen, and there is no template to reduce it to.
+
+- **T5 — no `Content-Security-Policy` header.** §20.1 does not require one, and the
+  bundle has no inline script, but a CSP that nothing asserts is a header that
+  breaks the page on a Friday. Named in the README's known limitations. **Open for
+  an operator decision** if the deployment is expected to outlive the submission.
+
+- **T5 — no CORS middleware at all.** §20.1 permits cross-origin access only for the
+  Shopify bridge routes, which are not mounted. Asserted as an absence
+  (`test_no_cors_headers_are_offered_to_a_cross_origin_caller`) because adding
+  `CORSMiddleware` "so the frontend works" is a one-line change that would hand
+  every origin read access to a workspace's evidence.
+
+- **T12 — the capability surface reported only *targets*, so a cut module was
+  invisible rather than visibly disabled.** `config.MODULE_NAMES` has always
+  described itself as "every optional module, in the order the capability bar
+  reports them", but `capability_report()` covers registered target adapters only —
+  a judge could not tell whether Shopify was switched off or had never been built.
+  Added `module_report()` and a `modules` block on `GET /api/v1/workspace`,
+  additive alongside `capabilities`. **Which** Tier 3 features are cut remains an
+  operator decision; the gate asserts only that a module reported unavailable is
+  unavailable everywhere.
+
+- **T6 — the store frontend's lint gap is closed.** ESLint added, mirroring the
+  harness config, pinned to the same exact versions. It found two real
+  `no-base-to-string` defects in `App.test.tsx` (`String(init?.body)` over a
+  `BodyInit`); fixed by narrowing rather than by relaxing the rule. The 006 gate's
+  deferral note is now closed rather than left describing a gap that no longer
+  exists.
+
+- **T7 — the secret scanner uses inline acknowledgement, not path exclusion.**
+  Excluding `tests/` wholesale would mean a real credential pasted into a fixture is
+  never found, and fixtures are where credentials get pasted. A line may instead
+  carry a marker such as `not-a-real-credential`, which is a claim visible in the
+  diff.
+
+- **T6 — CI actions are pinned to major tags, not commit SHAs.** Only first-party
+  `actions/*` are used and `uv` is installed from PyPI at an exact version, so no
+  third-party action runs. SHA-pinning the four GitHub-owned actions is still the
+  stricter posture. **Open for an operator decision.**
+
+### Not done in this milestone — operator gates
+
+- **T9 (deploy) and T11 (deployed manual acceptance) are unstarted.** Both need a
+  Render account, a real deploy, a rehearsed rollback, and a human with a browser.
+  `docs/release-checklist.md` is the attestation surface, and
+  `test_exit_gate_traceability.py` names it as the coverage for exit-gate criteria
+  2, 3 and 4, so deleting it fails the gate.
+- **Screenshots and the demo video** are captured against the deployed URL and are
+  therefore part of T11, not of T8. The README says so rather than shipping empty
+  image links.
+- **The `docker build` was authored but not executed here**: the local Docker daemon
+  was not running. The CI `image` job builds it, runs it, and greps the built
+  filesystem; until that job runs green the image is unverified.
 
 ### Carried forward, still open
 

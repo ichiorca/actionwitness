@@ -337,12 +337,87 @@ EXIT_GATE_007: dict[str, tuple[str, str]] = {
     ),
 }
 
+#: 009's exit gate, in the spec's own words.
+#:
+#: Two of its six criteria are operator gates and cannot be discharged from a
+#: terminal: criterion 2 needs a Render account, a real deploy, and a rehearsed
+#: rollback; criteria 3 and 4 need a human driving a browser against the deployed
+#: URL. They follow 006's precedent — operator-attested against a checklist whose
+#: existence is asserted, so a deleted checklist leaves them covered by nothing
+#: rather than leaving this map still looking complete.
+#:
+#: Everything that *can* be automated is. In particular criterion 6 is not an
+#: inspection of the built image (the Python lane has no Docker daemon) but a set
+#: of gates over the `Dockerfile` and `.dockerignore` that decide what the image
+#: can contain; the CI `image` job greps the built filesystem for the same things.
+EXIT_GATE_009: dict[str, tuple[str, str]] = {
+    "1. a fresh checkout follows the README successfully (AC-10)": (
+        "tests/architecture/test_readme_commands.py",
+        "test_every_documented_npm_script_is_declared_by_a_frontend",
+    ),
+    "1b. …and every documented Python command and test path exists": (
+        "tests/architecture/test_readme_commands.py",
+        "test_every_documented_python_script_exists",
+    ),
+    "2. the image tested in staging is the image deployed; rollback rehearsed and "
+    "the previous deploy retained (OPERATOR-ATTESTED: docs/release-checklist.md)": (
+        "tests/architecture/test_exit_gate_traceability.py",
+        "test_the_release_checklist_covers_the_operator_criteria",
+    ),
+    "3. the live URL loads without credentials and reports WebMCP support status "
+    "(AC-01) (OPERATOR-ATTESTED: docs/release-checklist.md)": (
+        "tests/architecture/test_exit_gate_traceability.py",
+        "test_the_release_checklist_covers_the_operator_criteria",
+    ),
+    "3b. …the credential-free path is what the code does, not only what the checklist claims": (
+        "tests/integration/test_cut_feature_hygiene.py",
+        "test_the_module_surface_publishes_no_credential",
+    ),
+    "4. the live URL passes Tier 1 and Tier 2 manual acceptance with no "
+    "third-party credential (OPERATOR-ATTESTED: docs/release-checklist.md)": (
+        "tests/architecture/test_exit_gate_traceability.py",
+        "test_the_release_checklist_covers_the_operator_criteria",
+    ),
+    "5a. health and readiness signals are visible": (
+        "tests/integration/test_production_security_posture.py",
+        "test_health_reports_the_configured_origin_and_no_secret",
+    ),
+    "5b. database changes are forward-compatible — a redeploy against existing data is a no-op": (
+        "tests/integration/test_harness_migrations.py",
+        "test_applying_migrations_twice_is_a_no_op",
+    ),
+    "6a. release artifacts contain no secrets": (
+        "tests/architecture/test_release_artifact_hygiene.py",
+        "test_the_build_context_excludes_what_must_never_ship",
+    ),
+    "6b. …no local paths or private fixtures — the build context is filtered at all": (
+        "tests/architecture/test_release_artifact_hygiene.py",
+        "test_the_build_context_is_filtered_at_all",
+    ),
+    "6c. …and no build debris: the spike page is not shipped": (
+        "tests/architecture/test_release_artifact_hygiene.py",
+        "test_the_spike_page_is_not_shipped",
+    ),
+    "6d. …and no undeclared dependencies: the image resolves from the lockfile": (
+        "tests/architecture/test_release_artifact_hygiene.py",
+        "test_the_image_resolves_from_the_lockfile_rather_than_re_resolving",
+    ),
+    # §29.1's composition constraint is not a numbered criterion, but the gate
+    # depends on it: "process co-location shall not bypass the versioned target
+    # API or adapter boundary". Named here so deleting its test breaks this map.
+    "6e. …and the artifact preserves the §25.11 boundary (ADR-0006)": (
+        "tests/integration/test_one_origin_composition.py",
+        "test_a_storefront_call_reaches_the_store_over_its_versioned_http_api",
+    ),
+}
+
 MAPS = {
     "003": EXIT_GATE_003,
     "004": EXIT_GATE_004,
     "005": EXIT_GATE_005,
     "006": EXIT_GATE_006,
     "007": EXIT_GATE_007,
+    "009": EXIT_GATE_009,
 }
 
 
@@ -370,6 +445,7 @@ def _defines(path: Path, function: str) -> bool:
 
 
 CHECKLIST = REPO_ROOT / "docs" / "tier-1-gate-checklist.md"
+RELEASE_CHECKLIST = REPO_ROOT / "docs" / "release-checklist.md"
 
 
 @pytest.mark.architecture
@@ -385,6 +461,48 @@ def test_the_operator_checklist_covers_the_browser_criteria() -> None:
     text = CHECKLIST.read_text(encoding="utf-8")
     for required in ("Journeys A and B", "unsupported browser", "Attested by:", "no order"):
         assert required in text, f"the checklist no longer covers {required!r}"
+
+
+@pytest.mark.architecture
+def test_the_release_checklist_covers_the_operator_criteria() -> None:
+    """009's criteria 2, 3 and 4 need a Render account and a human with a browser.
+
+    Same precedent as 006's browser criteria: the checklist *is* the coverage, so
+    it is named as their covering "test" and its content is asserted. A map should
+    point at something that fails when the coverage disappears, and this does.
+
+    The phrases below are the load-bearing ones rather than a transcript. Each
+    marks a step that is easy to quietly drop and expensive to have dropped:
+    promoting one built artifact rather than rebuilding, rehearsing the rollback
+    rather than assuming it, and proving the live URL needs no credential.
+    """
+    assert RELEASE_CHECKLIST.is_file(), "the 009 operator release checklist is missing"
+    text = RELEASE_CHECKLIST.read_text(encoding="utf-8")
+    required = (
+        "Image digest",
+        "Rollback rehearsed",
+        "previous deploy is retained",
+        "credential-free",
+        "HARNESS_PUBLIC_ORIGIN",
+        "Attested by:",
+    )
+    missing = [phrase for phrase in required if phrase not in text]
+    assert missing == [], f"the release checklist no longer covers {missing}"
+
+
+@pytest.mark.architecture
+def test_the_deferred_ac_01_row_names_where_it_is_discharged() -> None:
+    """006 deferred AC-01 to M8. A deferral that names no destination is a drop.
+
+    This is the link between the two checklists: 006 says "recheck once 009
+    lands", and 009's checklist is where that recheck happens. If the release
+    checklist is ever renamed, this fails rather than leaving AC-01 pointing at
+    nothing.
+    """
+    tier_one = CHECKLIST.read_text(encoding="utf-8")
+    assert "AC-01" in tier_one
+    assert "009" in tier_one, "the deferred AC-01 row no longer names the milestone that closes it"
+    assert RELEASE_CHECKLIST.is_file()
 
 
 @pytest.mark.architecture
@@ -404,7 +522,7 @@ def test_every_exit_gate_criterion_names_a_covering_test(milestone: str) -> None
 #: criterion in its own right, and 007 lists seven. A shared constant would have
 #: to be loosened to admit each of them, and loosening it is exactly how a
 #: dropped criterion gets through.
-PUBLISHED_CRITERIA: dict[str, int] = {"003": 5, "004": 5, "005": 5, "006": 6, "007": 7}
+PUBLISHED_CRITERIA: dict[str, int] = {"003": 5, "004": 5, "005": 5, "006": 6, "007": 7, "009": 6}
 
 
 @pytest.mark.architecture
