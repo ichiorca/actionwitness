@@ -307,6 +307,78 @@ export function FindingsPanel({
   );
 }
 
+export interface UndeclaredChangesPanelProps {
+  readonly findings: readonly Finding[];
+}
+
+/**
+ * §9.10's partition, rendered from the server's own finding (013-T6).
+ *
+ * Server-driven like every other panel here: the paths, the waivers and the
+ * verdict are all read off the finding the engine produced. Nothing is computed
+ * in the browser, because a second implementation of the partition would
+ * eventually disagree with the one that decided the run — and the UI is not
+ * where that argument should be settled.
+ *
+ * The panel renders only when the policy actually produced a finding. A run that
+ * never carried `no_undeclared_changes` shows nothing rather than an empty
+ * "changed outside contract" heading, which would read as a clean result for a
+ * check that never ran.
+ */
+export function UndeclaredChangesPanel({
+  findings,
+}: UndeclaredChangesPanelProps): React.ReactElement | null {
+  const finding = findings.find((entry) => entry.checkId === "no_undeclared_changes");
+  if (finding === undefined) {
+    return null;
+  }
+
+  // `not_evaluated` is a distinct outcome from "nothing changed" and has to look
+  // like one: §16.1 exists so an unevaluated policy never reads as a satisfied
+  // one, and this is the surface where that would be easiest to blur.
+  if (finding.status === "not_evaluated") {
+    return (
+      <section className="panel" aria-label="Changed outside contract">
+        <h3>Changed outside contract</h3>
+        <p>Not evaluated — no full-state comparison was available for this run.</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="panel" aria-label="Changed outside contract">
+      <h3>Changed outside contract</h3>
+      {finding.paths.length === 0 ? (
+        <p>Nothing changed outside what this contract declared.</p>
+      ) : (
+        <>
+          {/* Stated in words, never by colour alone. */}
+          <p>
+            <span className="panel__label">Result:</span> <strong>{finding.status}</strong> —{" "}
+            {finding.paths.length} path{finding.paths.length === 1 ? "" : "s"} changed that no
+            assertion, precondition, or executed tool&rsquo;s declared effect covered.
+          </p>
+          <ul>
+            {finding.paths.map((path) => (
+              <li key={path} className="finding__path">
+                {path}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      {finding.appliedExemptions.length > 0 ? (
+        // §9.5: "each exemption is recorded in the report so the waiver is
+        // visible". A waiver nobody can see is a waiver nobody reviews, so it is
+        // shown even on a passing run — especially on a passing run.
+        <p>
+          Waived by <code>allow_paths</code>: {finding.appliedExemptions.join(", ")}
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
 export interface ComparisonPanelProps {
   readonly comparable: boolean | null;
   readonly differingFields: readonly string[];

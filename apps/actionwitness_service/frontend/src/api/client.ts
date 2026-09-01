@@ -169,6 +169,22 @@ export function optionalString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
+/**
+ * A list of strings from an untrusted payload, tolerating absence.
+ *
+ * Absent and empty are treated alike on purpose: both mean "this finding covers
+ * no extra paths", and a caller that had to distinguish them would be relying on
+ * whether the server chose to emit an empty array. Non-string members are
+ * dropped rather than thrown on — one malformed entry in a list of paths should
+ * not take down the panel that renders the rest.
+ */
+export function stringList(value: unknown): readonly string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((entry): entry is string => typeof entry === "string");
+}
+
 export function requireArray(value: unknown, what: string): readonly unknown[] {
   if (!Array.isArray(value)) {
     throw new Error(`${what} was not an array`);

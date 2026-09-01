@@ -20,6 +20,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
+import type { Finding } from "../api/workspace";
 import { parseGuidance, parseWorkspace } from "../api/workspace";
 import { ConfirmationDialog } from "./ConfirmationDialog";
 import { GuidanceBanner } from "./GuidanceBanner";
@@ -28,6 +29,7 @@ import {
   ComparisonPanel,
   ConfigPanel,
   EvalPanel,
+  UndeclaredChangesPanel,
   FindingsPanel,
 } from "./panels";
 
@@ -206,6 +208,8 @@ describe("FindingsPanel", () => {
             severity: "critical",
             classification: "false_success_or_state_mismatch",
             path: "target.cart.total",
+            paths: [],
+            appliedExemptions: [],
             expected: "20.00",
             actual: "25.00",
           },
@@ -436,5 +440,93 @@ describe("EvalPanel (§24.3)", () => {
     expect(
       screen.getByRole("button", { name: /create a regression eval/i }).getAttribute("disabled"),
     ).not.toBeNull();
+  });
+});
+
+
+/**
+ * 013-T6 — the "changed outside contract" panel.
+ *
+ * The panel is a projection of one server finding, and the tests below are
+ * about the three states that are easy to render as each other: a clean run, a
+ * run nobody checked, and a run whose waiver made it clean.
+ */
+describe("UndeclaredChangesPanel", () => {
+  const finding = (over: Partial<Finding> = {}): Finding => ({
+    checkId: "no_undeclared_changes",
+    checkType: "policy",
+    status: "failed",
+    severity: "critical",
+    classification: "undeclared_state_change",
+    path: null,
+    paths: ["target.preferences.delivery_note"],
+    appliedExemptions: [],
+    expected: null,
+    actual: null,
+    ...over,
+  });
+
+  it("lists every path the server said was undeclared", () => {
+    render(<UndeclaredChangesPanel findings={[finding({ paths: ["target.a", "target.b"] })]} />);
+
+    expect(screen.getByText("target.a")).toBeDefined();
+    expect(screen.getByText("target.b")).toBeDefined();
+  });
+
+  it("states the outcome in words rather than by colour alone", () => {
+    render(<UndeclaredChangesPanel findings={[finding()]} />);
+
+    expect(screen.getByText("failed")).toBeDefined();
+  });
+
+  it("renders nothing when the contract carried no such policy", () => {
+    // An empty "changed outside contract" heading would read as a clean result
+    // for a check that never ran.
+    const { container } = render(
+      <UndeclaredChangesPanel findings={[finding({ checkId: "idempotent_by_request_id" })]} />,
+    );
+
+    expect(container.querySelector("section")).toBeNull();
+  });
+
+  it("distinguishes not-evaluated from nothing-changed", () => {
+    // §16.1: an unevaluated policy must never read as a satisfied one, and this
+    // is the surface where blurring the two would be easiest.
+    render(
+      <UndeclaredChangesPanel
+        findings={[finding({ status: "not_evaluated", classification: null, paths: [] })]}
+      />,
+    );
+
+    expect(screen.getByText(/Not evaluated/)).toBeDefined();
+  });
+
+  it("says nothing changed when the policy passed with no paths", () => {
+    render(
+      <UndeclaredChangesPanel
+        findings={[finding({ status: "passed", classification: null, paths: [] })]}
+      />,
+    );
+
+    expect(screen.getByText(/Nothing changed outside/)).toBeDefined();
+  });
+
+  it("shows an applied waiver even on a passing run", () => {
+    // §9.5: "each exemption is recorded so the waiver is visible". A waiver is
+    // most worth seeing precisely when it is the reason the run went green.
+    render(
+      <UndeclaredChangesPanel
+        findings={[
+          finding({
+            status: "passed",
+            classification: null,
+            paths: [],
+            appliedExemptions: ["target.cart.updated_at"],
+          }),
+        ]}
+      />,
+    );
+
+    expect(screen.getByText(/target.cart.updated_at/)).toBeDefined();
   });
 });

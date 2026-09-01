@@ -114,17 +114,31 @@ def _projected(row: Mapping[str, Any]) -> dict[str, Any]:
         "severity": str(row["severity"]),
         "classification": row["classification"],
         "path": row["path"] or _first_path(row["paths_json"]),
+        # §17.1: a finding covering more than one path carries them all.
+        # `undeclared_state_change` is emitted once per run listing every
+        # undeclared path, so `path` alone would show one path out of however
+        # many changed and read as the whole answer (013-T6).
+        "paths": _paths(row["paths_json"]),
+        # §9.5: "each exemption is recorded in the report so the waiver is
+        # visible". A waiver a reader cannot see is a waiver nobody reviews.
+        "applied_exemptions": _paths(row["applied_exemptions_json"]),
         "expected": _value(row["expected_json"]),
         "actual": _value(row["actual_json"]),
     }
 
 
+def _paths(paths_json: Any) -> list[str]:
+    """The stored path list, or an empty list for a single-path finding."""
+    if not paths_json:
+        return []
+    parsed = json.loads(paths_json)
+    return [str(path) for path in parsed] if isinstance(parsed, Sequence) else []
+
+
 def _first_path(paths_json: Any) -> str | None:
     """§17.1 stores either one `path` or many; a tool result shows the first."""
-    if not paths_json:
-        return None
-    paths = json.loads(paths_json)
-    return str(paths[0]) if isinstance(paths, Sequence) and paths else None
+    paths = _paths(paths_json)
+    return paths[0] if paths else None
 
 
 def _value(stored: Any) -> Any:

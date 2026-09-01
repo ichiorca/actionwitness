@@ -32,6 +32,7 @@ import {
   type ContractTemplate,
   ContractPanel,
   FindingsPanel,
+  UndeclaredChangesPanel,
   RunTimeline,
   TargetPanel,
 } from "./components/panels";
@@ -310,6 +311,10 @@ export default function App(): React.ReactElement {
             reportPath={findings?.report ?? null}
             overallResult={findings?.overallResult ?? null}
           />
+
+          {/* §9.10's partition, beside the findings it is drawn from. Renders
+              nothing when the run's contract carried no such policy. */}
+          <UndeclaredChangesPanel findings={findings?.findings ?? []} />
 
           <ComparisonPanel
             comparable={comparison.comparable}

@@ -13,7 +13,14 @@
  * turn it is and no way to tell which the user was looking at.
  */
 
-import { isRecord, optionalString, requireArray, requireRecord, requireString } from "./client";
+import {
+  isRecord,
+  optionalString,
+  requireArray,
+  requireRecord,
+  requireString,
+  stringList,
+} from "./client";
 
 /** §11.5's phases and FR-121's compact action, exactly as the server sends them. */
 export interface Guidance {
@@ -215,6 +222,17 @@ export interface Finding {
   readonly severity: string;
   readonly classification: string | null;
   readonly path: string | null;
+  /**
+   * Every path this finding covers (§17.1). Empty for a single-path finding,
+   * which carries `path` instead.
+   *
+   * `undeclared_state_change` is emitted once per run listing every undeclared
+   * path, so rendering `path` alone would show one of them and read as the
+   * whole answer.
+   */
+  readonly paths: readonly string[];
+  /** Every `allow_paths` waiver applied to this finding (§9.5). */
+  readonly appliedExemptions: readonly string[];
   readonly expected: unknown;
   readonly actual: unknown;
 }
@@ -244,6 +262,8 @@ export function parseFindings(value: unknown): FindingsPage {
         severity: requireString(finding["severity"], "severity"),
         classification: optionalString(finding["classification"]),
         path: optionalString(finding["path"]),
+        paths: stringList(finding["paths"]),
+        appliedExemptions: stringList(finding["applied_exemptions"]),
         expected: finding["expected"],
         actual: finding["actual"],
       };
