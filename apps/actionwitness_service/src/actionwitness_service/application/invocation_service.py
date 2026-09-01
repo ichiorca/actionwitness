@@ -53,7 +53,12 @@ from actionwitness_core.evidence.effects import (
     effect_evidence,
     redacted_observation,
 )
-from actionwitness_core.journeys.enums import EventActor, OutcomeEventType, RunState
+from actionwitness_core.journeys.enums import (
+    ConfirmationStatus,
+    EventActor,
+    OutcomeEventType,
+    RunState,
+)
 from actionwitness_core.journeys.transitions import validate_run_transition
 from actionwitness_core.ports.models import Observation, TargetToolSpec, ToolExecutionResult
 from actionwitness_core.ports.schemas import validate_arguments
@@ -63,6 +68,15 @@ from actionwitness_core.security.redaction import RedactionPolicy, redact
 from actionwitness_service.api.errors import ApiError, ApiErrorCode
 from actionwitness_service.application.adapter_registry import AdapterRegistry
 from actionwitness_service.application.authorization import WorkspaceScope, not_found
+from actionwitness_service.application.confirmation_service import (
+    CONFIRMATION_EVENT_RESERVATION,
+    ConfirmationRequirement,
+    ConfirmationService,
+    binding_hash,
+    confirmation_requirement,
+    consequence_summary,
+    expiry_from,
+)
 from actionwitness_service.application.guidance_service import GuidanceRecorder, current_guidance
 from actionwitness_service.application.limits import WorkspaceCeilings
 from actionwitness_service.persistence.database import Database, UnitOfWork
@@ -90,7 +104,11 @@ class InvocationOutcome:
 
     invocation_id: str
     sequence_number: int
-    terminal_event: str
+    #: `None` while a protected action waits on a human: §14 keeps the tool's
+    #: promise pending, and an invocation that has not finished has no terminal
+    #: event to name. The one-terminal-event rule is preserved, not relaxed —
+    #: the terminal event is written when the decision resolves the invocation.
+    terminal_event: str | None
     reported_status: str | None
     reported_summary: str
     error_code: str | None
@@ -100,6 +118,13 @@ class InvocationOutcome:
     observed_state_version: str | None
     observed_state_changed: bool
     next_action: Mapping[str, object]
+    #: Set only when the invocation paused for consent. The caller renders the
+    #: dialog from this and keeps its tool promise pending.
+    confirmation: Mapping[str, object] | None = None
+
+    @property
+    def awaiting_confirmation(self) -> bool:
+        return self.confirmation is not None
 
 
 class InvocationService:
@@ -135,11 +160,22 @@ class InvocationService:
             # §20.3: the contract's own paths are applied "in addition to
             # defaults", so the policy is read from the contract this run was
             # armed against rather than from whatever is selected now.
-            policy = await self._redaction_policy(work, workspace_id, run)
+            document = await self._contract_document(work, run)
+            policy = _redaction_policy_of(document)
+            # §14: which actions need a human is a statement about the journey
+            # being judged, so it is read from the armed contract rather than
+            # from a list of tool names the harness keeps.
+            requirement = confirmation_requirement(document, tool_name)
             # FR-008 counts every persisted event, and verification will write
             # one per assertion and per policy. Holding that budget back now is
             # what keeps the ceiling true without ever truncating a verdict.
             reservation = await self._verification_reservation(work, run)
+        if requirement is not None:
+            # The request and the decision still have to fit inside FR-008's
+            # ceiling. A run that could not record the decision it is waiting
+            # for would be stranded awaiting a confirmation it can never
+            # resolve, which is worse than refusing the action outright.
+            reservation += CONFIRMATION_EVENT_RESERVATION
         adapter = self._registry.adapter(str(run["target_adapter_id"]))
         spec = _require_published(adapter, tool_name)
 
@@ -155,7 +191,7 @@ class InvocationService:
         before = await self._observe(adapter, workspace_id, policy)
 
         # 3 — reserve, transition, and record the start (FR-031, FR-008).
-        started_sequence = await self._start_or_trip(
+        started_sequence, pending = await self._start_or_trip(
             workspace_id,
             run_id,
             spec,
@@ -167,7 +203,22 @@ class InvocationService:
             policy=policy,
             arguments=checked,
             verification_reservation=reservation,
+            requirement=requirement,
         )
+
+        # A protected action stops here. Nothing is dispatched, so no mutation
+        # can precede the consent that authorizes it — which is the property
+        # AC-06 checks and the reason this returns before the adapter is
+        # touched rather than after.
+        if pending is not None:
+            return await self._paused(
+                workspace_id,
+                run_id,
+                invocation_id=invocation_id,
+                started_sequence=started_sequence,
+                before=before,
+                pending=pending,
+            )
 
         # 4 and 5 — dispatch, then observe immediately. Both may fail; every
         # path below converges on exactly one terminal event.
@@ -209,21 +260,23 @@ class InvocationService:
 
     # -- steps ---------------------------------------------------------------
 
-    async def _start_or_trip(self, *args: Any, **kwargs: Any) -> int:
+    async def _start_or_trip(
+        self, *args: Any, **kwargs: Any
+    ) -> tuple[int, Mapping[str, Any] | None]:
         """`_start`, with FR-008's ceiling refusal raised after its commit.
 
         Split out so the raise happens outside the `async with`: raising inside
         would roll back the boundary event that explains the stop, which is the
         bug 004-T8 caught and this must not reintroduce.
         """
-        sequence = await self._start(*args, **kwargs)
+        sequence, pending = await self._start(*args, **kwargs)
         if sequence == 0:
             raise ApiError(
                 ApiErrorCode.EVENT_LIMIT_EXCEEDED,
                 "This run reached its event ceiling. It has been moved to error and its "
                 "evidence is preserved.",
             )
-        return sequence
+        return sequence, pending
 
     async def _invocable_run(
         self, work: UnitOfWork, workspace_id: str, run_id: str
@@ -246,31 +299,27 @@ class InvocationService:
             f"This run is {status} and accepts no further target actions.",
         )
 
-    async def _redaction_policy(
-        self, work: UnitOfWork, workspace_id: str, run: Mapping[str, Any]
-    ) -> RedactionPolicy:
-        """The run's redaction policy: defaults plus the contract's own paths.
+    async def _contract_document(
+        self, work: UnitOfWork, run: Mapping[str, Any]
+    ) -> dict[str, Any] | None:
+        """The contract this run was *armed against*, or `None`.
 
-        Read from the contract the run was *armed against*, not from whatever
-        the workspace has selected now — FR-025 locks the armed contract, and a
-        policy that drifted would redact this run's evidence by a rule it was
-        never run under.
-
-        A run without a contract still gets the defaults. §20.3 applies
-        contract paths "in addition to defaults", so there is no configuration
-        that turns redaction off.
+        Not whatever the workspace has selected now: FR-025 locks the armed
+        contract, and reading the current one would judge this run's evidence
+        by a rule it was never run under — and, since §14's confirmation
+        requirement is read from the same document, would let a contract
+        swapped mid-run remove a consent gate.
         """
         contract_id = run.get("contract_id")
         if not contract_id:
-            return RedactionPolicy()
+            return None
         row = await work.fetch_one(
             "SELECT document_json FROM contracts WHERE id = ?", (str(contract_id),)
         )
         if row is None:  # pragma: no cover - the contract is immutable once armed
-            return RedactionPolicy()
-        document = json.loads(row["document_json"])
-        paths = ((document.get("redaction") or {}).get("paths")) or []
-        return RedactionPolicy.from_paths([str(path) for path in paths])
+            return None
+        document: dict[str, Any] = json.loads(row["document_json"])
+        return document
 
     async def _verification_reservation(self, work: UnitOfWork, run: Mapping[str, Any]) -> int:
         """How many events verification will need for this run's contract.
@@ -336,7 +385,8 @@ class InvocationService:
         policy: RedactionPolicy,
         arguments: Mapping[str, Any],
         verification_reservation: int,
-    ) -> int:
+        requirement: ConfirmationRequirement | None = None,
+    ) -> tuple[int, Mapping[str, Any] | None]:
         """Reserve the budget, open the run, and record the start (FR-031, FR-008).
 
         The event-budget refusal is *returned* by the ceiling rather than raised,
@@ -354,7 +404,7 @@ class InvocationService:
             if refusal is not None:
                 # The transaction still commits: it is carrying the boundary
                 # event that explains why this run stopped.
-                return 0
+                return 0, None
 
             if str(run["status"]) == str(RunState.ARMED.value):
                 # §11.5: "Armed --> Running: first target action". Validated
@@ -369,7 +419,7 @@ class InvocationService:
                     await current_guidance(work, workspace_id), run_id=run_id
                 )
 
-            return await EventRepository(work).append(
+            started = await EventRepository(work).append(
                 run_id,
                 {
                     "event_type": str(OutcomeEventType.TOOL_INVOCATION_STARTED.value),
@@ -395,6 +445,115 @@ class InvocationService:
                     },
                 },
             )
+
+            if requirement is None:
+                return started, None
+
+            # §14.1: the request is created here, in the *same* transaction as
+            # the start event it belongs to. A confirmation without its start
+            # event would be consent for an action the timeline never records
+            # being attempted; a start event without its confirmation would be
+            # an invocation nothing can ever resolve.
+            confirmations = ConfirmationService(work, workspace_id)
+            expires_at = expiry_from(self._clock(), requirement)
+            consequence = consequence_summary(
+                tool_name=spec.name,
+                arguments=redact(dict(arguments), policy),
+                observed=before,
+                effect_paths=[str(path) for path in spec.effect_paths],
+                policy=policy,
+            )
+            confirmation_id = await confirmations.open(
+                run_id=run_id,
+                correlation_id=correlation_id,
+                tool_name=spec.name,
+                # Bound to what was independently observed, never to what a
+                # tool said: an approval is consent about the world as it is.
+                state_binding_hash=binding_hash(before),
+                consequence=consequence,
+                expires_at=expires_at,
+            )
+
+            # §11.5: `Running --> AwaitingConfirmation`. Through the core's
+            # table, so the one authority on transitions approves it.
+            validate_run_transition(RunState.RUNNING, RunState.AWAITING_CONFIRMATION)
+            await work.execute(
+                "UPDATE runs SET status = ? WHERE id = ? AND workspace_id = ?",
+                (str(RunState.AWAITING_CONFIRMATION.value), run_id, workspace_id),
+            )
+
+            await EventRepository(work).append(
+                run_id,
+                {
+                    "event_type": str(OutcomeEventType.CONFIRMATION_REQUESTED.value),
+                    # The *agent* asked; the human decides. Recording the
+                    # requester as the human would make the timeline say
+                    # somebody consented to being asked.
+                    "actor": str(EventActor.AGENT.value),
+                    "tool_name": spec.name,
+                    "correlation_id": correlation_id,
+                    "request_id": request_id,
+                    "status": str(ConfirmationStatus.PENDING.value),
+                    "state_version_before": before.state_version,
+                    "state_hash_before": before.content_hash(),
+                    "redacted_payload": {
+                        "confirmation_id": confirmation_id,
+                        "expires_at": expires_at.isoformat(),
+                        "timeout_seconds": requirement.timeout_seconds,
+                        "consequence": consequence,
+                    },
+                },
+            )
+
+            # FR-120: the active actor is now the human approver, and the
+            # banner, the tool result, and the action history all read this one
+            # projection rather than each deciding for themselves.
+            await GuidanceRecorder(work, workspace_id).transition(
+                await current_guidance(work, workspace_id), run_id=run_id
+            )
+
+            return started, {
+                "confirmation_id": confirmation_id,
+                "expires_at": expires_at.isoformat(),
+                "consequence": consequence,
+                "correlation_id": correlation_id,
+                "tool_name": spec.name,
+            }
+
+    async def _paused(
+        self,
+        workspace_id: str,
+        run_id: str,
+        *,
+        invocation_id: str,
+        started_sequence: int,
+        before: Observation,
+        pending: Mapping[str, Any],
+    ) -> InvocationOutcome:
+        """What the agent is told while a human decides.
+
+        Deliberately *not* an error. The action has not failed and has not
+        succeeded; it is waiting, and §14.3 keeps the caller's tool promise
+        pending. Reporting a failure here would teach an agent to retry, which
+        is exactly the behaviour a consent gate exists to prevent.
+        """
+        async with self._database.reading() as work:
+            guidance = await current_guidance(work, workspace_id)
+        return InvocationOutcome(
+            invocation_id=invocation_id,
+            sequence_number=started_sequence,
+            terminal_event=None,
+            reported_status=None,
+            reported_summary=(
+                f"{pending['tool_name']} is paused for a human decision. No change has been made."
+            ),
+            error_code=None,
+            duration_ms=0,
+            observed_state_version=before.state_version,
+            observed_state_changed=False,
+            next_action=guidance.next_action(),
+            confirmation=dict(pending),
+        )
 
     async def _terminate(
         self,
@@ -539,6 +698,19 @@ def _reported(
         # that was observed. A disagreement between them is evidence.
         "state_version_after": result.state_version_after,
     }
+
+
+def _redaction_policy_of(document: Mapping[str, Any] | None) -> RedactionPolicy:
+    """The run's redaction policy: defaults plus the contract's own paths.
+
+    A run without a contract still gets the defaults. §20.3 applies contract
+    paths "in addition to defaults", so there is no configuration that turns
+    redaction off.
+    """
+    if not document:
+        return RedactionPolicy()
+    paths = ((document.get("redaction") or {}).get("paths")) or []
+    return RedactionPolicy.from_paths([str(path) for path in paths])
 
 
 def _require_published(adapter: Any, tool_name: str) -> TargetToolSpec:

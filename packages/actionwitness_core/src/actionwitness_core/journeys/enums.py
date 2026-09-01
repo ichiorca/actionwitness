@@ -28,16 +28,21 @@ from collections.abc import Mapping
 from enum import StrEnum
 
 __all__ = [
+    "AUTHORIZING_CONFIRMATION_STATUS",
     "ENUM_REGISTRATIONS",
+    "TERMINAL_CONFIRMATION_STATUSES",
     "BenchmarkSuiteState",
+    "ConfirmationStatus",
     "EvalRunState",
     "EvaluationEventType",
     "EventActor",
+    "GuidanceActionCode",
     "GuidanceActor",
     "OutcomeEventType",
     "RunState",
     "SnapshotPhase",
     "WorkspaceKind",
+    "WorkspacePhase",
 ]
 
 
@@ -430,6 +435,55 @@ WORKSPACE_KIND_DESCRIPTIONS: Mapping[WorkspaceKind, str] = {
 }
 
 
+class ConfirmationStatus(StrEnum):
+    """§17.1's `confirmation_requests.status` vocabulary.
+
+    Six statuses rather than a boolean, because FR-066 distinguishes outcomes a
+    reader must be able to tell apart: an approval that was never spent is not
+    an approval that was, and a request that lapsed is not one a human refused.
+    """
+
+    PENDING = "pending"
+    APPROVED = "approved"
+    DENIED = "denied"
+    EXPIRED = "expired"
+    CANCELLED = "cancelled"
+    CONSUMED = "consumed"
+
+
+CONFIRMATION_STATUS_DESCRIPTIONS: Mapping[ConfirmationStatus, str] = {
+    ConfirmationStatus.PENDING: "Awaiting a human decision; no mutation has been authorized.",
+    ConfirmationStatus.APPROVED: (
+        "A human approved once. The approval is not yet spent and authorizes exactly "
+        "the bound invocation and state."
+    ),
+    ConfirmationStatus.DENIED: "A human refused; the invocation is safely blocked.",
+    ConfirmationStatus.EXPIRED: "The request passed its expiry with no decision.",
+    ConfirmationStatus.CANCELLED: (
+        "The invocation, tab, or workspace went away before a decision was made."
+    ),
+    ConfirmationStatus.CONSUMED: (
+        "The approval was spent by the mutation it authorized and can never authorize another."
+    ),
+}
+
+#: The one status that can authorize a protected mutation. Written as the
+#: complement of FR-066's five refusing statuses so the rule reads as a rule.
+AUTHORIZING_CONFIRMATION_STATUS: frozenset[ConfirmationStatus] = frozenset(
+    {ConfirmationStatus.APPROVED}
+)
+
+#: Statuses no further decision can move.
+TERMINAL_CONFIRMATION_STATUSES: frozenset[ConfirmationStatus] = frozenset(
+    {
+        ConfirmationStatus.DENIED,
+        ConfirmationStatus.EXPIRED,
+        ConfirmationStatus.CANCELLED,
+        ConfirmationStatus.CONSUMED,
+    }
+)
+
+
 #: Every lifecycle enum this module publishes, paired with its spec reference and
 #: description map, in a stable order. `actionwitness_core.registry` concatenates
 #: this with the other vocabulary modules; an enum missing from here is invisible
@@ -450,6 +504,12 @@ ENUM_REGISTRATIONS: tuple[tuple[str, str, type[StrEnum], Mapping[StrEnum, str]],
     ("guidance_actor", "spec §17.1 / FR-120", GuidanceActor, GUIDANCE_ACTOR_DESCRIPTIONS),
     ("snapshot_phase", "spec §17.1", SnapshotPhase, SNAPSHOT_PHASE_DESCRIPTIONS),
     ("workspace_kind", "spec §17.1", WorkspaceKind, WORKSPACE_KIND_DESCRIPTIONS),
+    (
+        "confirmation_status",
+        "spec §17.1 / FR-066",
+        ConfirmationStatus,
+        CONFIRMATION_STATUS_DESCRIPTIONS,
+    ),
     ("workspace_phase", "spec §11.5", WorkspacePhase, WORKSPACE_PHASE_DESCRIPTIONS),
     (
         "guidance_action_code",

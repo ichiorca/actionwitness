@@ -126,6 +126,17 @@
         "eval": "A server-created isolated workspace for replay; its mutable state is removed after its report is persisted."
       }
     },
+    "confirmation_status": {
+      "spec_ref": "spec §17.1 / FR-066",
+      "members": {
+        "pending": "Awaiting a human decision; no mutation has been authorized.",
+        "approved": "A human approved once. The approval is not yet spent and authorizes exactly the bound invocation and state.",
+        "denied": "A human refused; the invocation is safely blocked.",
+        "expired": "The request passed its expiry with no decision.",
+        "cancelled": "The invocation, tab, or workspace went away before a decision was made.",
+        "consumed": "The approval was spent by the mutation it authorized and can never authorize another."
+      }
+    },
     "workspace_phase": {
       "spec_ref": "spec §11.5",
       "members": {

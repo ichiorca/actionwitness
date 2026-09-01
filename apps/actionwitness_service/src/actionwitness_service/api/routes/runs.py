@@ -148,7 +148,24 @@ async def invoke_target_tool(
         request.arguments,
         tool_identity_hash=request.tool_identity_hash,
     )
+    if outcome.awaiting_confirmation:
+        # 202: accepted, not completed. A 200 would say the action finished,
+        # and this one has deliberately not started — §14.3 keeps the caller's
+        # tool promise pending until a human decides.
+        return {
+            "status": "awaiting_confirmation",
+            "invocation_id": outcome.invocation_id,
+            "sequence_number": outcome.sequence_number,
+            "confirmation": outcome.confirmation,
+            "reported": {"status": None, "summary": outcome.reported_summary},
+            "observed": {
+                "state_version": outcome.observed_state_version,
+                "state_changed": False,
+            },
+            "next_action": outcome.next_action,
+        }
     return {
+        "status": "completed",
         "invocation_id": outcome.invocation_id,
         "sequence_number": outcome.sequence_number,
         "terminal_event": outcome.terminal_event,
