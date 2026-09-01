@@ -144,7 +144,17 @@ def test_nothing_binds_a_trial_without_being_told_to() -> None:
     surface = {name for name in dir(BenchmarkService) if not name.startswith("_")}
 
     # Assert
-    assert surface == {"create", "record_import", "bind", "seal", "get", "trials"}
+    assert surface == {
+        "create",
+        "record_import",
+        "bind",
+        "seal",
+        "get",
+        "trials",
+        # 008-T7. Reads the stored trials and reports FR-092's numbers; it
+        # decides no binding and creates none.
+        "summarize",
+    }
 
 
 # --- the happy path ----------------------------------------------------------

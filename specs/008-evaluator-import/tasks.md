@@ -20,7 +20,7 @@ Cite the T-ID in every commit that advances it.
 - [x] T6 — Isolated imported-trajectory replay through the registered adapter
       and a deterministic confirmation provider, reusing 007's eval-workspace
       and interaction machinery rather than forking it.
-- [ ] T7 — Calculate coverage, exclusions, the 2x2 matrix, zero-denominator
+- [x] T7 — Calculate coverage, exclusions, the 2x2 matrix, zero-denominator
       behavior, four-decimal presentation strings, per-scenario/profile
       breakdowns, and the five required metrics from integer counts.
 - [ ] T8 — Atomically finalize one immutable benchmark artifact that references,

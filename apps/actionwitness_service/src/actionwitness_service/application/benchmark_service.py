@@ -46,6 +46,7 @@ from actionwitness_core.benchmarks.states import require_transition
 from actionwitness_core.security.canonical import canonical_text
 
 from actionwitness_service.api.errors import ApiError, ApiErrorCode
+from actionwitness_service.application.benchmark_metrics import BenchmarkSummary, summarize
 from actionwitness_service.persistence.database import UnitOfWork
 from actionwitness_service.persistence.repositories import new_id
 
@@ -325,6 +326,16 @@ class BenchmarkService:
         if suite is None:
             raise ApiError(ApiErrorCode.RESOURCE_NOT_FOUND, f"no benchmark {benchmark_id!r} here")
         return suite
+
+    async def summarize(self, benchmark_id: str) -> BenchmarkSummary:
+        """FR-092's counts, metrics, and breakdowns for this suite.
+
+        Read from the stored trials every time rather than cached on the suite:
+        until finalization the numbers are a *view*, and a cached copy would go
+        stale the moment a replay landed. FR-094 makes the finalized artifact
+        the immutable one; this is what it is computed from.
+        """
+        return summarize(await self.trials(benchmark_id))
 
     async def trials(self, benchmark_id: str) -> tuple[Mapping[str, Any], ...]:
         await self.get(benchmark_id)
