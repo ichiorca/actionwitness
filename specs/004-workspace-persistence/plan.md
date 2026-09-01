@@ -201,3 +201,52 @@ entirely would make the service slower and noisier with
 `WORKSPACE_LOCK_TIMEOUT`, never wrong — the transaction is the serialization
 boundary. `release_idle()` is kept for a periodic cleanup pass and returns a
 count so a test can show the map is bounded rather than merely believed to be.
+
+### T5 — a presented workspace identifier is never adopted (FR-005, FR-006)
+
+A cookie naming a workspace that does not exist mints a *fresh* one and discards
+the presented value. Adopting it would let a client choose its own workspace
+identifier, and a client that can choose its own can choose somebody else's —
+which is precisely what FR-006 exists to prevent. It also keeps FR-009's cleanup
+from stranding a returning visitor: a stale cookie starts a new workspace rather
+than failing.
+
+### T5 — `HARNESS_ENV`, `DeploymentEnvironment`, `HarnessSettings` (project-allocated, FR-005)
+
+FR-005 makes `Secure` conditional — "documented local HTTP development may omit
+only the `Secure` attribute" — so something must say which case applies. A
+two-value enum rather than a boolean, because `HARNESS_SECURE_COOKIES=false` in
+production is a one-typo downgrade whereas naming the environment is auditable.
+**The default is `production`**, and an unrecognised value also resolves to
+`production`: an operator who forgets gets a stricter cookie and a broken local
+session, which is the failure that gets noticed. Unlike every other resolver in
+`config.py` this one cannot report `misconfigured`, because there is no module
+to switch off — there is no service without it.
+
+`HARNESS_DATABASE_PATH` is project-allocated alongside it; §29.1 documents the
+startup commands but not where the file lives.
+
+### T5 — cookie name, width, and lifetime are project-allocated (§20.1)
+
+§20.1 requires "a cryptographically random anonymous workspace cookie" and fixes
+its attributes but neither its name, its width, nor its lifetime.
+`actionwitness_workspace`, 256 bits via `secrets.token_urlsafe`, seven days. The
+`__Host-` prefix is deliberately **not** used: it mandates `Secure`, which FR-005
+explicitly permits omitting for documented local HTTP, so the prefix would make
+the local path impossible rather than merely unattested.
+
+### T5 — health checks and static assets get no workspace
+
+FR-009 excludes them from rate limiting; they are excluded from workspace
+creation for the same reason. A liveness probe that minted a workspace every few
+seconds would fill the table with rows no human ever visits, and FR-009's
+staleness scan would then be cleaning up after the monitoring system.
+
+### T5 — `create_app` takes an injected environment, database path, and clock
+
+So a test constructs the real application rather than a lookalike, and so
+`last_seen_at` advancing is a fact about the application's clock seam
+(constitution §1) rather than about how fast the test machine is. Windows wall
+clock resolution is coarse enough that two adjacent requests can otherwise share
+a timestamp. Passing none of them reads `os.environ` once, in the composition
+root and nowhere else.

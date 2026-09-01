@@ -21,7 +21,7 @@ Cite the T-ID in every commit that advances it.
       concurrent mutations in one workspace serialize, mutations in different
       workspaces proceed concurrently (FR-007), and nothing is held across a
       wait.
-- [ ] T5 — Anonymous workspace middleware: cryptographically random ID, opaque
+- [x] T5 — Anonymous workspace middleware: cryptographically random ID, opaque
       `HttpOnly`, `SameSite=Strict` cookie, `Secure` in production only
       (FR-005); first access creates a workspace, and `last_seen_at` advances.
 - [ ] T6 — Workspace authorization on every stateful endpoint resolved from the

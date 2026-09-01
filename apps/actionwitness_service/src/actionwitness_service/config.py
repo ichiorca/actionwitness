@@ -20,6 +20,8 @@ Environment variables, with provenance:
 
 | Variable | Module | Provenance |
 |---|---|---|
+| `HARNESS_ENV` | harness | project (FR-005) |
+| `HARNESS_DATABASE_PATH` | harness | project |
 | `HARNESS_PUBLIC_ORIGIN` | shopify | spec §29.1 |
 | `SHOPIFY_STORE_ORIGIN` | shopify | spec §29.1 |
 | `SHOPIFY_TEST_VARIANT_ID` | shopify | spec §29.1 |
@@ -40,6 +42,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from enum import StrEnum
+from typing import Any
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict
@@ -48,8 +51,10 @@ __all__ = [
     "MODULE_NAMES",
     "SERVICE_CLOSED_ENUMS",
     "BuggyStoreSettings",
+    "DeploymentEnvironment",
     "EvaluatorImportSettings",
     "ExternalAuditSettings",
+    "HarnessSettings",
     "LiveEvaluatorSettings",
     "ModuleState",
     "ModuleStatus",
@@ -58,9 +63,40 @@ __all__ = [
 ]
 
 DEFAULT_BUGGY_STORE_BASE_URL = "http://127.0.0.1:8001"
+DEFAULT_DATABASE_PATH = "actionwitness.sqlite3"
 _CURRENCY = re.compile(r"^[A-Z]{3}$")
 _TRUE = {"1", "true", "yes", "on"}
 _FALSE = {"0", "false", "no", "off", ""}
+
+
+class DeploymentEnvironment(StrEnum):
+    """Where this process is running. Project-allocated (FR-005).
+
+    FR-005 makes the cookie's `Secure` attribute conditional — "documented local
+    HTTP development may omit only the `Secure` attribute" — so something has to
+    say which case applies. It is a two-value enum rather than a boolean flag
+    because `HARNESS_SECURE_COOKIES=false` in production would be a one-typo
+    downgrade, whereas naming the environment makes the claim auditable.
+
+    The default is `production`. An operator who forgets to set it gets the
+    stricter cookie and a broken local login, which is the failure that gets
+    noticed; the reverse is the failure that does not.
+    """
+
+    LOCAL = "local"
+    PRODUCTION = "production"
+
+
+DEPLOYMENT_ENVIRONMENT_DESCRIPTIONS: Mapping[DeploymentEnvironment, str] = {
+    DeploymentEnvironment.LOCAL: (
+        "Documented local HTTP development. The workspace cookie omits `Secure` "
+        "and nothing else about it changes (FR-005)."
+    ),
+    DeploymentEnvironment.PRODUCTION: (
+        "Any non-local deployment. The workspace cookie is `Secure`, `HttpOnly`, "
+        "and `SameSite=Strict` (§20.1)."
+    ),
+}
 
 
 class ModuleStatus(StrEnum):
@@ -86,8 +122,9 @@ MODULE_STATUS_DESCRIPTIONS: Mapping[ModuleStatus, str] = {
 }
 
 #: Registered for the shared name registry alongside the core's domain enums.
-SERVICE_CLOSED_ENUMS: tuple[tuple[str, str, Mapping[ModuleStatus, str]], ...] = (
+SERVICE_CLOSED_ENUMS: tuple[tuple[str, str, Mapping[Any, str]], ...] = (
     ("module_status", "spec §29.1", MODULE_STATUS_DESCRIPTIONS),
+    ("deployment_environment", "project (FR-005)", DEPLOYMENT_ENVIRONMENT_DESCRIPTIONS),
 )
 
 #: Every optional module, in the order the capability bar reports them.
@@ -102,6 +139,22 @@ MODULE_NAMES: tuple[str, ...] = (
 
 class _Frozen(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
+
+
+class HarnessSettings(_Frozen):
+    """The harness's own deployment settings, distinct from optional modules.
+
+    Not a `ModuleState`: an optional integration may fail closed and leave the
+    service running, but there is no service without these.
+    """
+
+    environment: DeploymentEnvironment = DeploymentEnvironment.PRODUCTION
+    database_path: str = DEFAULT_DATABASE_PATH
+
+    @property
+    def secure_cookies(self) -> bool:
+        """FR-005: `Secure` everywhere except documented local HTTP."""
+        return self.environment is DeploymentEnvironment.PRODUCTION
 
 
 class ModuleState(_Frozen):
@@ -216,6 +269,24 @@ def _enabled(name: str, reason: str) -> ModuleState:
 
 
 # --- per-module resolution --------------------------------------------------
+
+
+def _resolve_harness(environ: Mapping[str, str]) -> HarnessSettings:
+    """Never raises: an unrecognised environment falls back to the strict one.
+
+    Every other resolver here may report `misconfigured` and switch its module
+    off, because an optional integration that fails closed leaves a working
+    service. This one has nothing to switch off, so a bad value resolves to
+    `production` — the choice that makes the cookie stricter, not looser.
+    """
+    raw = environ.get("HARNESS_ENV", "").strip().lower()
+    environment = (
+        DeploymentEnvironment.LOCAL
+        if raw == DeploymentEnvironment.LOCAL
+        else DeploymentEnvironment.PRODUCTION
+    )
+    database_path = environ.get("HARNESS_DATABASE_PATH", "").strip() or DEFAULT_DATABASE_PATH
+    return HarnessSettings(environment=environment, database_path=database_path)
 
 
 def _resolve_buggy_store(
@@ -366,6 +437,7 @@ class ServiceSettings(_Frozen):
     `modules`; nothing else is affected.
     """
 
+    harness: HarnessSettings = HarnessSettings()
     buggy_store: BuggyStoreSettings | None = None
     evaluator_import: EvaluatorImportSettings | None = None
     live_evaluator: LiveEvaluatorSettings | None = None
@@ -375,12 +447,14 @@ class ServiceSettings(_Frozen):
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str]) -> ServiceSettings:
+        harness = _resolve_harness(environ)
         buggy_store, buggy_store_state = _resolve_buggy_store(environ)
         evaluator_import, evaluator_import_state = _resolve_evaluator_import(environ)
         live_evaluator, live_evaluator_state = _resolve_live_evaluator(environ)
         shopify, shopify_state = _resolve_shopify(environ)
         external_audit, external_audit_state = _resolve_external_audit(environ)
         return cls(
+            harness=harness,
             buggy_store=buggy_store,
             evaluator_import=evaluator_import,
             live_evaluator=live_evaluator,

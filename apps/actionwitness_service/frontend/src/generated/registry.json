@@ -279,6 +279,13 @@
         "disabled": "Not configured, or explicitly switched off. Not an error.",
         "misconfigured": "Configuration was supplied but rejected. The module is off and the reason is shown as setup guidance; it never degrades into a partial enablement."
       }
+    },
+    "deployment_environment": {
+      "spec_ref": "project (FR-005)",
+      "members": {
+        "local": "Documented local HTTP development. The workspace cookie omits `Secure` and nothing else about it changes (FR-005).",
+        "production": "Any non-local deployment. The workspace cookie is `Secure`, `HttpOnly`, and `SameSite=Strict` (§20.1)."
+      }
     }
   },
   "error_codes": {
