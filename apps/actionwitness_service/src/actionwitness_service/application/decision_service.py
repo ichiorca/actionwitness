@@ -327,13 +327,22 @@ class DecisionService:
             # Back to `running`: the agent acts again, and §11.5 has no state
             # for "approved but not yet dispatched".
             await self._release(work, workspace_id, run_id)
+            await GuidanceRecorder(work, workspace_id).transition(
+                await current_guidance(work, workspace_id), run_id=run_id
+            )
+            # Read *after* the release, so the caller is told where the
+            # workspace now is rather than where it was. AC-21 requires this
+            # response, the banner, and the enabled controls to name one action
+            # code at every transition — and a handoff back to the agent is
+            # exactly a transition.
+            guidance = await current_guidance(work, workspace_id)
 
         return DecisionOutcome(
             confirmation_id=confirmation_id,
             status=str(ConfirmationStatus.APPROVED.value),
             mutated=False,
             run_status=str(RunState.RUNNING.value),
-            next_action={},
+            next_action=guidance.next_action(),
             detail="Approved. The agent may now perform the action once.",
         )
 
