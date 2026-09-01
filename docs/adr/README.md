@@ -24,7 +24,7 @@ closed.
 | [ADR-0003](0003-sqlite-transaction-and-lock-model.md) | SQLite transaction and lock model | Accepted | M3 repositories |
 | [ADR-0004](0004-rfc-8785-canonicalization.md) | RFC 8785 canonicalization implementation | Accepted | M1 immutable records |
 | [ADR-0005](0005-external-evaluator-binding.md) | External evaluator version and binding | Accepted | M7 — pin: `webmcp-evals@0.0.4` (`fe33c1b`); explicit binding, fail-closed on weak addressing |
-| ADR-0006 | Deployment composition | Not started | M8 |
+| [ADR-0006](0006-deployment-composition.md) | Deployment composition | Accepted | M8 — two processes, two virtualenvs, one origin; `/demo/api/v1` proxied, never imported |
 
 ADR-0001 through ADR-0004 are the M0 preflight set (`specs/001-preflight-baseline`).
 ADR-0005 and ADR-0006 belong to later milestones and are listed so the docket is

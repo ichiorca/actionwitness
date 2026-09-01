@@ -23,6 +23,7 @@ Environment variables, with provenance:
 | `HARNESS_ENV` | harness | project (FR-005) |
 | `HARNESS_DATABASE_PATH` | harness | project |
 | `HARNESS_ARTIFACT_ROOT` | harness | project |
+| `HARNESS_STATIC_ROOT` | harness | project (§29.1 step 4) |
 | `HARNESS_TRUSTED_PROXIES` | harness | project (§20.1) |
 | `HARNESS_PUBLIC_ORIGIN` | shopify | spec §29.1 |
 | `SHOPIFY_STORE_ORIGIN` | shopify | spec §29.1 |
@@ -159,6 +160,11 @@ class HarnessSettings(_Frozen):
     #: legitimate page's `Origin` equals what it is posting to.
     public_origin: str | None = None
     artifact_root: str = DEFAULT_ARTIFACT_ROOT
+    #: Where the composed image put the two built frontends (§29.1 step 4).
+    #: `None` in a source checkout, where Vite serves both UIs and proxies both
+    #: APIs itself — a service that required a build directory could not be
+    #: started with `uvicorn` during development.
+    static_root: str | None = None
     #: Peers whose forwarding header may be believed (§20.1: "explicitly trusted
     #: platform proxy metadata; never trust an arbitrary client-supplied
     #: forwarding header"). Empty by default, so an unconfigured deployment
@@ -312,6 +318,7 @@ def _resolve_harness(environ: Mapping[str, str]) -> HarnessSettings:
         public_origin = None
 
     artifact_root = environ.get("HARNESS_ARTIFACT_ROOT", "").strip() or DEFAULT_ARTIFACT_ROOT
+    static_root = environ.get("HARNESS_STATIC_ROOT", "").strip() or None
     trusted_proxies = frozenset(
         part.strip()
         for part in environ.get("HARNESS_TRUSTED_PROXIES", "").split(",")
@@ -323,6 +330,7 @@ def _resolve_harness(environ: Mapping[str, str]) -> HarnessSettings:
         database_path=database_path,
         public_origin=public_origin,
         artifact_root=artifact_root,
+        static_root=static_root,
         trusted_proxies=trusted_proxies,
     )
 

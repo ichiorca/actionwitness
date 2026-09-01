@@ -14,6 +14,7 @@ against a corrupted database.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager, suppress
@@ -26,6 +27,10 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from actionwitness_service.api.composition import (
+    mount_static_applications,
+    register_demo_proxy,
+)
 from actionwitness_service.api.errors import ApiError, ApiErrorCode, error_from_core
 from actionwitness_service.api.middleware import (
     OriginMiddleware,
@@ -37,6 +42,7 @@ from actionwitness_service.api.routes import contracts as contract_routes
 from actionwitness_service.api.routes import evals as eval_routes
 from actionwitness_service.api.routes import runs as run_routes
 from actionwitness_service.api.routes import workspace as workspace_routes
+from actionwitness_service.api.security_headers import SecurityHeadersMiddleware
 from actionwitness_service.application.adapter_registry import AdapterRegistry
 from actionwitness_service.application.artifacts import ArtifactStore
 from actionwitness_service.application.cleanup import WorkspaceCleaner
@@ -46,11 +52,16 @@ from actionwitness_service.application.workspaces import WorkspaceStore
 from actionwitness_service.config import ServiceSettings
 from actionwitness_service.persistence.database import Database
 from actionwitness_service.persistence.locks import WorkspaceLocks
+from actionwitness_service.telemetry import RequestLoggingMiddleware, configure_logging
 
 __all__ = ["API_PREFIX", "create_app"]
 
 #: §15: every harness route lives under one versioned prefix.
 API_PREFIX = "/api/v1"
+
+#: Separate from the structured request logger: this one carries a traceback, so
+#: it must never be the channel §21.5 describes.
+_unhandled_logger = logging.getLogger("actionwitness.unhandled")
 
 
 def create_app(
@@ -67,6 +78,12 @@ def create_app(
     and replay stay deterministic (constitution §1). Passing none of them reads
     the process environment once, here and nowhere else.
     """
+    # The composition root is also where logging is composed. Conservative by
+    # construction — it adds a handler only when the process has none — so a
+    # deployment that configured its own keeps it, and the forty-odd tests that
+    # build an application do not each install another handler.
+    configure_logging()
+
     settings = ServiceSettings.from_env(os.environ if environ is None else environ)
     database = Database(database_path or settings.harness.database_path, clock=clock)
     workspaces = WorkspaceStore(database)
@@ -87,6 +104,11 @@ def create_app(
             base_url=settings.buggy_store.base_url if settings.buggy_store else ""
         )
         app.state.adapters = AdapterRegistry(settings, client=client)
+        # The `/demo/api/v1` proxy (§29.1) reaches the store over the same client
+        # the adapter uses, so a test that injects an `ASGITransport` gets the
+        # proxy pointed at its store too — the composed path is exercised rather
+        # than approximated.
+        app.state.target_client = client
 
         # §29.1: the built-in templates are seeded at startup, from the
         # integration that owns them. Idempotent, and skipped entirely when the
@@ -141,6 +163,12 @@ def create_app(
         limiter=limiter,
         trusted_proxies=settings.harness.trusted_proxies,
     )
+    # Registered last, so they run first and therefore *outermost*. Both have to
+    # see what the layers below refuse: a 429 from the rate limiter never reaches
+    # a route, and it is exactly the response an operator needs logged and the
+    # one a browser still needs the security headers on.
+    app.add_middleware(SecurityHeadersMiddleware)
+    app.add_middleware(RequestLoggingMiddleware)
 
     @app.exception_handler(ApiError)
     async def deliberate_refusal(request: Request, exc: ApiError) -> JSONResponse:
@@ -152,6 +180,7 @@ def create_app(
         `retryable` both come from the code's registry entry, so a call site
         cannot widen either.
         """
+        request.state.error_code = exc.code.value
         return JSONResponse(status_code=exc.http_status, content=exc.as_envelope())
 
     @app.exception_handler(RequestValidationError)
@@ -181,6 +210,7 @@ def create_app(
             "The request was not in an acceptable shape.",
             details=details,
         )
+        request.state.error_code = refusal.code.value
         return JSONResponse(status_code=refusal.http_status, content=refusal.as_envelope())
 
     @app.exception_handler(CoreError)
@@ -192,6 +222,7 @@ def create_app(
         an unmapped code becomes a 500 with no text of its own.
         """
         translated = error_from_core(exc)
+        request.state.error_code = translated.code.value
         return JSONResponse(status_code=translated.http_status, content=translated.as_envelope())
 
     @app.exception_handler(Exception)
@@ -206,21 +237,48 @@ def create_app(
         refusal = ApiError(
             ApiErrorCode.HARNESS_ERROR, "The harness could not complete the request."
         )
+        request.state.error_code = refusal.code.value
+        # The detail belongs in the server log, which is not the response. This
+        # is the one place a traceback is wanted, and `exc_info` keeps it out of
+        # the structured line's fields (§21.5) while still reaching stderr.
+        _unhandled_logger.exception("unhandled request failure", exc_info=exc)
         return JSONResponse(status_code=refusal.http_status, content=refusal.as_envelope())
 
     @app.get("/healthz")
-    async def healthz() -> dict[str, str]:  # spec §29.1
-        return {"status": "ok"}
+    async def healthz() -> dict[str, object]:  # spec §29.1
+        """Liveness, plus the two facts an operator cannot get any other way.
+
+        `public_origin` is reported because it is the single most common
+        deployment mistake this service has: it drives both the cookie's `Secure`
+        attribute and the origin allowlist, and when it is wrong every mutation
+        is refused with a correct-looking 403 from a service that is otherwise
+        healthy. It is an operator-supplied *origin*, not a secret — §29.1
+        forbids credentials in the health response, and there are none here.
+
+        `assets_mounted` distinguishes "the image shipped without a frontend"
+        from "the frontend failed to load", which look identical in a browser.
+        """
+        return {
+            "status": "ok",
+            "schema_version": getattr(app.state, "schema_version", None),
+            "public_origin": settings.harness.public_origin,
+            "assets_mounted": app.state.assets_mounted,
+        }
 
     app.include_router(workspace_routes.router, prefix=API_PREFIX)
     app.include_router(contract_routes.router, prefix=API_PREFIX)
     app.include_router(run_routes.router, prefix=API_PREFIX)
     app.include_router(eval_routes.router, prefix=API_PREFIX)
 
+    # §29.1's one-origin composition, registered after the harness API so that
+    # `/api/v1` can never be shadowed by an asset mount. ADR-0006 records why the
+    # store is proxied rather than imported.
+    register_demo_proxy(app, enabled=settings.is_enabled("buggy_store"))
+    app.state.assets_mounted = mount_static_applications(app, settings.harness.static_root)
+
     # TODO(M4): §15.2's instantiate, from-candidates, and published endpoints
     # TODO(005): the rest of §15.3 — run read, paged events, invocation,
     # confirmation decisions, verify, report, and comparison
-    # TODO(M4): mount compiled frontend assets; /demo composition per §29.1
     return app
 
 
