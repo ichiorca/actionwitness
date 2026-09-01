@@ -20,7 +20,7 @@ Cite the T-ID in every commit that advances it.
       create no order.
 - [x] T6 — The `/demo/api/v1` surface from §15.5 with Pydantic validation and
       stable errors; API tests through the real entry point.
-- [ ] T7 — The ordinary human storefront UI, usable with no harness and no
+- [x] T7 — The ordinary human storefront UI, usable with no harness and no
       WebMCP; its own frontend tests and build.
 - [x] T8 — `pre_fix`/`post_fix` scenario selection and the Tier 1
       `discount_reported_but_not_applied` fault; a direct target API test proves

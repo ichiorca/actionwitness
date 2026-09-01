@@ -104,6 +104,21 @@ Registered markers: `architecture`, `unit`, `integration`, `adapters`, `contract
 | `npm test` | Vitest (jsdom) — lifecycle-adapter compatibility cases |
 | `npm run build` | Vite production bundle |
 
+### Storefront frontend — from `examples/buggy_store/frontend`
+
+The demo target's own human UI. Built and tested independently of the harness
+frontend (spec §29.1), and deliberately free of WebMCP: this is the storefront a
+person uses when no agent, no harness, and no browser-tool support is present
+(AC-09).
+
+| Command | Purpose |
+|---|---|
+| `npm ci` | Install from the committed lockfile |
+| `npm run typecheck` | **Strict `tsc --noEmit`.** Separate gate from the build |
+| `npm test` | Vitest (jsdom, no `document.modelContext` by design) |
+| `npm run build` | Vite production bundle |
+| `npm run dev` | Serve the storefront, proxying `/demo` to a local store on port 8001 |
+
 > **`npm ci` is not runnable yet.** The frontend lockfile is committed only after
 > the ADR-0002 WebMCP hook spike pins exactly one package (`docs/adr/0002-webmcp-lifecycle-package.md`).
 > Until then use `npm install` locally and expect the pin to change the tree.

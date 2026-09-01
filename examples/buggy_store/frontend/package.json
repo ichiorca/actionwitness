@@ -3,5 +3,27 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Ordinary standalone human UI for the Buggy Store demo (spec §18); built independently of the harness frontend (§29.1). Scaffold placeholder — tooling added in Tier 1."
+  "description": "Ordinary standalone human UI for the Buggy Store demo (spec v1.9 §15.5, §18). Built independently of the harness frontend (§29.1) and deliberately free of WebMCP: this storefront is what a person uses when no agent, no harness, and no browser tool support is present.",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@testing-library/react": "^16.1.0",
+    "@testing-library/user-event": "^14.5.2",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "jsdom": "^25.0.1",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.3",
+    "vitest": "^3.2.4"
+  }
 }

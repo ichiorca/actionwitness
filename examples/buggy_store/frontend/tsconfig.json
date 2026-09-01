@@ -1,0 +1,42 @@
+{
+  "//": [
+    "Strict type-check configuration for the standalone storefront.",
+    "`npm run typecheck` runs tsc --noEmit against this file; a Vite build is",
+    "bundling only and is NOT type-check coverage (constitution: stack-typescript",
+    "rules). The two are separate gates on purpose.",
+    "",
+    "exactOptionalPropertyTypes and noUncheckedIndexedAccess are mandatory here",
+    "for the same reason as in the harness: this UI narrows untrusted HTTP",
+    "payloads, where an absent property and an explicit undefined mean different",
+    "things and every indexed lookup can miss.",
+    "",
+    "Note the absence of webmcp-types. This storefront has no browser-tool",
+    "surface at all, and a type package for one would invite adding it."
+  ],
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "noEmit": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "forceConsistentCasingInFileNames": true,
+
+    "strict": true,
+    "exactOptionalPropertyTypes": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+
+    "types": ["vite/client", "vitest/globals"]
+  },
+  "include": ["src", "vite.config.ts", "vitest.config.ts"]
+}

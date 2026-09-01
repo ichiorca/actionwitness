@@ -118,3 +118,99 @@ def test_frontend_lockfile_is_committed_with_the_pin() -> None:
         "the lockfile that recorded the tested tree"
     )
     assert '"use-webmcp-tool"' in lockfile.read_text(encoding="utf-8")
+
+
+# --- the standalone storefront (003-T7) -------------------------------------
+
+STORE_FRONTEND = REPO_ROOT / "examples" / "buggy_store" / "frontend"
+STORE_PACKAGE_JSON = STORE_FRONTEND / "package.json"
+STORE_TSCONFIG = STORE_FRONTEND / "tsconfig.json"
+
+
+def _store_package_json() -> dict:
+    return json.loads(STORE_PACKAGE_JSON.read_text(encoding="utf-8"))
+
+
+@pytest.mark.architecture
+def test_store_frontend_declares_every_required_script() -> None:
+    """§29.1 builds the two frontends independently, so each carries its own gates."""
+    scripts = _store_package_json().get("scripts", {})
+    missing = [name for name in REQUIRED_SCRIPTS if name not in scripts]
+    assert missing == [], f"store frontend package.json omits scripts: {missing}"
+    assert scripts["test"] == "vitest run"
+    assert "--noEmit" in scripts["typecheck"]
+    assert "tsc" not in scripts["build"], "build is bundling only"
+
+
+@pytest.mark.architecture
+@pytest.mark.parametrize("option,expected", sorted(REQUIRED_COMPILER_OPTIONS.items()))
+def test_store_tsconfig_enables_required_strictness(option: str, expected: bool) -> None:
+    compiler_options = json.loads(STORE_TSCONFIG.read_text(encoding="utf-8"))["compilerOptions"]
+    assert compiler_options.get(option) == expected, (
+        f"store tsconfig compilerOptions.{option} must be {expected}"
+    )
+
+
+@pytest.mark.architecture
+def test_the_storefront_declares_no_webmcp_dependency() -> None:
+    """AC-09 and §26.7: the human path must not need the browser-tool surface.
+
+    The storefront is what a person uses when WebMCP is absent, so a WebMCP
+    package here would be evidence that the fallback had quietly acquired a
+    dependency on the thing it is the fallback for.
+    """
+    manifest = _store_package_json()
+    declared = {**manifest.get("dependencies", {}), **manifest.get("devDependencies", {})}
+    webmcp = sorted(name for name in declared if "webmcp" in name.lower())
+    assert webmcp == [], f"the standalone storefront declares WebMCP packages: {webmcp}"
+
+
+def _shipped_sources() -> list:
+    """Production sources only.
+
+    Test files and the vitest setup are not in the bundle, and both mention the
+    browser-tool API precisely to say it is absent - scanning them would flag the
+    explanation as the violation.
+    """
+    return [
+        path
+        for path in (STORE_FRONTEND / "src").rglob("*.ts*")
+        if "test" not in path.relative_to(STORE_FRONTEND / "src").parts
+        and ".test." not in path.name
+    ]
+
+
+@pytest.mark.architecture
+def test_the_storefront_never_references_the_browser_tool_api() -> None:
+    """Checked in the shipped source as well as the manifest."""
+    offenders = [
+        path.relative_to(REPO_ROOT).as_posix()
+        for path in _shipped_sources()
+        if "modelContext" in path.read_text(encoding="utf-8")
+    ]
+    assert offenders == [], f"the storefront references WebMCP in: {offenders}"
+    assert _shipped_sources(), "the source scan found no files, so it proves nothing"
+
+
+@pytest.mark.architecture
+def test_the_storefront_calls_only_the_stores_own_surface() -> None:
+    """§15.5 reserves `/demo/api/v1` for this UI; it must call nothing else.
+
+    Request paths are composed from one base constant rather than written out
+    per call, so the check is that the base is the store's surface and that no
+    literal reaches the harness's `/api/v1` instead.
+    """
+    source = (STORE_FRONTEND / "src" / "api.ts").read_text(encoding="utf-8")
+    assert 'const API = "/demo/api/v1/store"' in source, (
+        "the storefront's base path is not the store's versioned surface"
+    )
+    for path in _shipped_sources():
+        text = path.read_text(encoding="utf-8")
+        assert '"/api/' not in text, f"{path.name} reaches the harness API"
+        assert "actionwitness" not in text.lower(), f"{path.name} names the harness"
+
+
+@pytest.mark.architecture
+def test_the_store_frontend_lockfile_is_committed() -> None:
+    """A frontend gate is only reproducible with the tree it was run against."""
+    assert (STORE_FRONTEND / "package-lock.json").is_file()

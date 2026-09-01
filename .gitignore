@@ -113,3 +113,7 @@ Thumbs.db
 
 # Intentionally trackable: AGENTS.md, CLAUDE.md, GEMINI.md, memory/, future
 # specs/, deliberate evals/, and all product documentation and source code.
+
+# Storefront build output (examples/buggy_store/frontend). The lockfile is
+# committed; the bundle is not.
+examples/buggy_store/frontend/dist/
