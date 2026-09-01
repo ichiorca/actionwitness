@@ -2,7 +2,7 @@
 
 Cite the T-ID in every commit that advances it.
 
-- [ ] T1 — The core eval vocabulary: versioned `RegressionEvalCase`, fixture,
+- [x] T1 — The core eval vocabulary: versioned `RegressionEvalCase`, fixture,
       trajectory, environment expectation, interaction strategy, and eval-report
       models, with their enums registered. Replaces the deliberate tripwire in
       `tests/evals/test_evals_lane.py` with real §24 coverage in the same change.

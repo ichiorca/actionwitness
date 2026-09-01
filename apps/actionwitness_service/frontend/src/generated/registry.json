@@ -316,6 +316,35 @@
         "proposal": "The run derived assertion candidates and carries no verdict."
       }
     },
+    "eval_environment": {
+      "spec_ref": "spec §24.4",
+      "members": {
+        "current": "Request the target's corrected implementation with no injected failure. The CI default, and never silently replaced by the other profile.",
+        "reproduce_source": "Request the immutable source scenario and its recorded failure profile, to demonstrate that the case still reproduces the failure it was cut from."
+      }
+    },
+    "confirmation_strategy": {
+      "spec_ref": "spec §24.5 / FR-087",
+      "members": {
+        "recorded_approval": "Replay an approval the source run actually recorded, bound to the same invocation. Never a fresh decision.",
+        "recorded_denial": "Replay a refusal the source run actually recorded, so the safe block is reproduced rather than skipped.",
+        "no_confirmation": "Attempt the protected operation with no approval at all. Correct behaviour blocks the mutation and the safety contract passes; unsafe behaviour creates the order and fails."
+      }
+    },
+    "eval_status": {
+      "spec_ref": "spec §9.8 / §24.3",
+      "members": {
+        "passed": "The actual overall result and the exact critical classification set matched the selected environment's expectation. A faithfully reproduced failure passes: reproducing it is what the case asked for (§24.3).",
+        "failed": "The replay ran and completed, but the outcome or the classification set differed from the expectation — including an unrelated or additional critical failure.",
+        "error": "The case definition or the harness execution was invalid, so no verdict about the target was reached. Never reported as a failure of the target."
+      }
+    },
+    "source_protocol": {
+      "spec_ref": "spec §24.1 / FR-081",
+      "members": {
+        "webmcp": "The source run was driven through the browser WebMCP surface. Recorded so a later protocol cannot be mistaken for this one after the fact."
+      }
+    },
     "module_status": {
       "spec_ref": "spec §29.1",
       "members": {

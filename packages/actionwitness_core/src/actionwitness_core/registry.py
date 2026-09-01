@@ -25,6 +25,7 @@ from types import ModuleType
 
 from actionwitness_core.contracts import enums as contract_enums
 from actionwitness_core.engine import enums as engine_enums
+from actionwitness_core.evals import enums as eval_enums
 from actionwitness_core.evidence import enums as evidence_enums
 from actionwitness_core.journeys import enums as journey_enums
 from actionwitness_core.ports import enums as port_enums
@@ -48,6 +49,10 @@ REGISTRY_MODULES: tuple[ModuleType, ...] = (
     evidence_enums,
     engine_enums,
     report_enums,
+    # Appended rather than interleaved, so `registry.json` gains rows at the end
+    # instead of shifting every existing one (the artifact is committed, and a
+    # reordering would be a diff with no meaning).
+    eval_enums,
 )
 
 
