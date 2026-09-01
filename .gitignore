@@ -100,7 +100,9 @@ Thumbs.db
 /docs/actionwitness-top3-features-round2.md
 
 # Operator-gated spec drafts awaiting rename to spec.md; the runway README
-# and approved specs are tracked.
+# and approved specs are tracked. (Twice now an edit has inverted this rule to
+# ignore an APPROVED spec.md instead — that hides the operator-approved WHAT
+# from the repo and from history. Approved specs are tracked. Drafts are not.)
 /specs/*/spec.md.draft
 
 # Session handoffs, bootstrap working files, and atomic-write sentinels.
