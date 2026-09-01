@@ -295,11 +295,54 @@ EXIT_GATE_006: dict[str, tuple[str, str]] = {
     # AC-03/04/11/19/20 are 005's gate and are mapped above.
 }
 
+#: 007's exit gate, each criterion to its covering test.
+EXIT_GATE_007: dict[str, tuple[str, str]] = {
+    "1. generation is idempotent, redacted, schema-valid and source-preserving; "
+    "a proposal run is refused by name": (
+        "tests/integration/test_007_exit_gate.py",
+        "test_gate_1_generation_is_idempotent_redacted_valid_and_source_preserving",
+    ),
+    "2. `reproduce_source` recreates the failure and the exact critical set, and exits 0": (
+        "tests/integration/test_007_exit_gate.py",
+        "test_gate_2_reproduce_source_matches_by_set_equality_and_exits_zero",
+    ),
+    "3. an unrelated or additional critical classification exits 1": (
+        "tests/integration/test_007_exit_gate.py",
+        "test_gate_3_an_unrelated_or_additional_classification_exits_one",
+    ),
+    "4. `current` exits 0; an invalid definition or harness execution exits 2": (
+        "tests/integration/test_007_exit_gate.py",
+        "test_gate_4_current_exits_zero_and_an_invalid_case_or_harness_exits_two",
+    ),
+    "5a. §24.3a — the recorded surface replays into the policy that needs it": (
+        "tests/integration/test_007_exit_gate.py",
+        "test_gate_5_recorded_surface_replays_into_the_policy_that_needs_it",
+    ),
+    "5b. …and no recorded surface never reads as satisfied (§16.1)": (
+        "tests/integration/test_007_exit_gate.py",
+        "test_gate_5_a_case_with_no_recorded_surface_never_reads_as_satisfied",
+    ),
+    "5c. an unevaluable policy is named and excluded from both sets; the selected "
+    "profile appears in the report": (
+        "tests/integration/test_007_exit_gate.py",
+        "test_gate_5_an_unevaluable_policy_is_named_and_excluded_from_both_sets",
+    ),
+    "6. AC-08, AC-12 and AC-15 through both API and CLI": (
+        "tests/integration/test_007_exit_gate.py",
+        "test_gate_6_ac_08_ac_12_and_ac_15_hold_through_api_and_cli",
+    ),
+    "7. the evals-lane tripwire is replaced by real §24 coverage": (
+        "tests/integration/test_007_exit_gate.py",
+        "test_gate_7_the_evals_lane_carries_real_coverage_rather_than_a_tripwire",
+    ),
+}
+
 MAPS = {
     "003": EXIT_GATE_003,
     "004": EXIT_GATE_004,
     "005": EXIT_GATE_005,
     "006": EXIT_GATE_006,
+    "007": EXIT_GATE_007,
 }
 
 
@@ -357,10 +400,11 @@ def test_every_exit_gate_criterion_names_a_covering_test(milestone: str) -> None
 
 
 #: How many criteria each spec publishes. Stated per milestone rather than
-#: assumed: 003–005 list five, and 006 lists six because the Tier 1 gate is a
-#: criterion in its own right. A shared constant would have to be loosened to
-#: admit 006, and loosening it is exactly how a dropped criterion gets through.
-PUBLISHED_CRITERIA: dict[str, int] = {"003": 5, "004": 5, "005": 5, "006": 6}
+#: assumed: 003–005 list five, 006 lists six because the Tier 1 gate is a
+#: criterion in its own right, and 007 lists seven. A shared constant would have
+#: to be loosened to admit each of them, and loosening it is exactly how a
+#: dropped criterion gets through.
+PUBLISHED_CRITERIA: dict[str, int] = {"003": 5, "004": 5, "005": 5, "006": 6, "007": 7}
 
 
 @pytest.mark.architecture

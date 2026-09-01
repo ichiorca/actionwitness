@@ -38,6 +38,8 @@ from actionwitness_core.evals.models import (
     RecordedDecision,
     RegressionEvalCase,
     SourceFinding,
+    SurfaceDelta,
+    SurfaceEvidence,
 )
 from actionwitness_core.evals.substitution import substitute_redacted
 from actionwitness_core.journeys.enums import EventActor, OutcomeEventType, RunState, SnapshotPhase
@@ -127,6 +129,7 @@ class EvalCaseService:
                 fixture_is_complete=is_complete,
                 trajectory=trajectory,
                 source_findings=findings,
+                surface=await self._recorded_surface(run_id),
                 confirmation_strategy=_strategy_for(decisions),
                 recorded_decisions=decisions,
                 generator_version=CASE_SCHEMA_VERSION,
@@ -295,6 +298,46 @@ class EvalCaseService:
             for spec in slot.factory().tool_specs()
             if spec.side_effect is SideEffectClass.READ_ONLY
         )
+
+    async def _recorded_surface(self, run_id: str) -> SurfaceEvidence | None:
+        """§24.3a's `surface` section, read from what the source run recorded.
+
+        Returns `None` when the run captured no baseline, and that absence is
+        the honest record: §16.1 makes `stable_tool_surface` with no baseline
+        `observation_unavailable`, never passed, and a synthesised empty
+        baseline would turn a policy nobody could evaluate into one that reads
+        as satisfied on replay.
+        """
+        rows = await self._work.fetch_all(
+            "SELECT event_type, tool_name, sequence_number, redacted_payload_json FROM events "
+            "WHERE run_id = ? AND event_type IN (?, ?) ORDER BY sequence_number",
+            (
+                run_id,
+                str(OutcomeEventType.TOOL_SURFACE_CAPTURED.value),
+                str(OutcomeEventType.TOOL_SURFACE_CHANGED.value),
+            ),
+        )
+        baseline: tuple[str, ...] | None = None
+        deltas: list[SurfaceDelta] = []
+        for row in rows:
+            payload = json.loads(row["redacted_payload_json"] or "{}")
+            if str(row["event_type"]) == str(OutcomeEventType.TOOL_SURFACE_CAPTURED.value):
+                tools = payload.get("tools") or []
+                baseline = tuple(str(tool) for tool in tools)
+                continue
+            deltas.append(
+                SurfaceDelta(
+                    # The delta's own recorded position, so replay does not have
+                    # to reconstruct an ordering from row order alone.
+                    sequence=int(payload.get("recorded_sequence") or row["sequence_number"] or 1),
+                    kind=str(payload.get("kind") or "unknown"),
+                    partition=str(payload.get("partition") or "target"),
+                    tool=_optional(row["tool_name"]),
+                )
+            )
+        if baseline is None:
+            return None
+        return SurfaceEvidence(baseline=baseline, deltas=tuple(deltas))
 
     async def _recorded_decisions(self, run_id: str) -> tuple[RecordedDecision, ...]:
         """Consent decisions the source run actually recorded (§24.5, FR-087).

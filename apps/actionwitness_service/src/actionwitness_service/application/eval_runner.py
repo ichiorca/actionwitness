@@ -30,11 +30,12 @@ its outcome as the case's.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from actionwitness_core.contracts.enums import SurfaceDeltaKind
 from actionwitness_core.evals.models import RegressionEvalCase, TrajectoryStep
 from actionwitness_core.evidence.effects import effect_context
 from actionwitness_core.evidence.models import RunEvent
@@ -244,7 +245,14 @@ class TrajectoryReplayer:
             before=before,
             after=after,
             steps=tuple(replayed),
-            events=tuple(events),
+            # §24.3a: the recorded surface joins the replayed timeline as
+            # events, because a headless replay cannot regenerate it and a
+            # `tool_surface_poisoned` case "could never reproduce its own
+            # classification and would fail permanently" without it.
+            events=(
+                *events,
+                *surface_events(case.surface, step_count=len(case.trajectory), now=self._clock()),
+            ),
             stopped_at=stopped_at,
             detail=detail,
         )
@@ -348,6 +356,73 @@ async def _append_eval_event(
             work.now(),
         ),
     )
+
+
+def surface_events(surface: Any, *, step_count: int, now: datetime) -> tuple[RunEvent, ...]:
+    """§24.3a's `surface` section, replayed as the events it was recorded from.
+
+    A case with no surface section produces nothing, and that is the honest
+    result: `stable_tool_surface` then evaluates as `observation_unavailable`
+    exactly as it does on a live run with no baseline (§16.1), rather than
+    reading as satisfied.
+
+    **Sequence numbers.** The baseline is 0 — it is captured at arming, before
+    any step. Deltas are numbered after the trajectory rather than interleaved
+    into it, so no two events share a number, and each carries the step
+    sequence it was *recorded* against in its payload. Inventing a position in
+    the trajectory for a delta would be asserting an ordering the recording
+    does not contain.
+    """
+    if surface is None:
+        return ()
+
+    baseline = RunEvent(
+        sequence_number=0,
+        event_type=OutcomeEventType.TOOL_SURFACE_CAPTURED,
+        actor=EventActor.EVAL,
+        created_at=now,
+        redacted_payload={"tools": list(surface.baseline)},
+    )
+    deltas = tuple(
+        RunEvent(
+            sequence_number=step_count + offset,
+            event_type=OutcomeEventType.TOOL_SURFACE_CHANGED,
+            actor=EventActor.EVAL,
+            created_at=now,
+            tool_name=delta.tool,
+            redacted_payload={
+                "kind": delta.kind,
+                "partition": delta.partition,
+                "recorded_sequence": delta.sequence,
+            },
+        )
+        for offset, delta in enumerate(surface.deltas, start=1)
+    )
+    return (baseline, *deltas)
+
+
+def surface_evidence(events: Sequence[RunEvent]) -> tuple[bool, tuple[SurfaceDeltaKind, ...]]:
+    """Read the two facts `stable_tool_surface` needs out of the event stream.
+
+    Derived from the events rather than read a second time from the case, so
+    the policy judges the same timeline the report shows. A delta kind the
+    enum does not know is dropped rather than guessed at — an unrecognised
+    kind cannot be matched against the policy's failing set, and silently
+    mapping it to a known one would manufacture a verdict.
+    """
+    baseline_recorded = any(
+        event.event_type is OutcomeEventType.TOOL_SURFACE_CAPTURED for event in events
+    )
+    kinds: list[SurfaceDeltaKind] = []
+    for event in events:
+        if event.event_type is not OutcomeEventType.TOOL_SURFACE_CHANGED:
+            continue
+        raw = event.redacted_payload.get("kind")
+        try:
+            kinds.append(SurfaceDeltaKind(raw))
+        except ValueError:
+            continue
+    return baseline_recorded, tuple(kinds)
 
 
 def _run_event(

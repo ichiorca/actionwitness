@@ -242,3 +242,27 @@ database when it exits. The alternative — a second, storage-free execution pat
 predate this milestone (verified against a clean tree) and BUILD_ORDER assigns
 "Complete ADR-0005" to **M7**. Fixing it here would be 008 work. Left failing and
 reported rather than quietly repaired.
+
+### D6 — T10 shipped only half of §24.3a; T13 completed it
+
+**§24.3a.** T10 was ticked with `non_replayable_policies` implemented and the
+`surface` half missing: the case model carried a `surface` section from T1, but
+nothing populated it at generation and nothing fed it to the policy engine at
+replay. Criterion 5 names that replay explicitly, and §24.3a is unambiguous
+about why it exists — without it a `tool_surface_poisoned` case "could never
+reproduce its own classification and would fail permanently".
+
+**Taken:** generation now reads the source run's `tool_surface_captured` and
+`tool_surface_changed` events into the case, and replay emits them back into the
+timeline, with the policy's two facts derived from that stream rather than read
+a second time from the case. A run that captured no baseline records `None`, so
+`stable_tool_surface` stays `observation_unavailable` exactly as §16.1 requires
+rather than passing on a synthesised empty baseline.
+
+**Worth an operator's eye:** nothing captures a surface baseline yet — that is
+browser-side work, and the live path leaves the same fields defaulted. So the
+replay is correct and tested but has no production baseline to replay *from* in
+this milestone. The delta events are numbered after the trajectory rather than
+interleaved into it, because the recording does not say where in the trajectory
+a delta belongs and inventing a position would assert an ordering nobody
+observed.

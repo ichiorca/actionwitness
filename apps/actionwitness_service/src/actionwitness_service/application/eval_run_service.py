@@ -41,6 +41,7 @@ from actionwitness_service.application.eval_runner import (
     ReplayOutcome,
     TrajectoryReplayer,
     prepare_eval_workspace,
+    surface_evidence,
 )
 from actionwitness_service.persistence.database import Database
 from actionwitness_service.persistence.repositories import new_id
@@ -325,9 +326,17 @@ class EvalRunService:
         # unreproducible while quietly leaving the policy unchecked.
         from actionwitness_core.engine.policies import PolicyEvidence, evaluate_policies
 
+        # §24.3a's surface facts come out of the replayed stream, so the
+        # policy judges the same timeline the report shows.
+        baseline_recorded, observed_deltas = surface_evidence(outcome.events)
         policy_findings = evaluate_policies(
             case.contract.document.policies,
-            PolicyEvidence(events=outcome.events, effect_map=effect_map or {}),
+            PolicyEvidence(
+                events=outcome.events,
+                effect_map=effect_map or {},
+                surface_baseline_recorded=baseline_recorded,
+                observed_surface_deltas=observed_deltas,
+            ),
         )
 
         result = aggregate((*findings, *policy_findings))

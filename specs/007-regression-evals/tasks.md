@@ -45,7 +45,7 @@ Cite the T-ID in every commit that advances it.
 - [x] T12 — The CLI: `eval validate` and `eval run --environment --report-dir`,
       structured argument parsing, a compact printed result, and FR-088's exit
       codes 0/1/2, replacing the scaffold that exits 2 for everything.
-- [ ] T13 — The exit gate: idempotent, redacted, schema-valid, source-preserving
+- [x] T13 — The exit gate: idempotent, redacted, schema-valid, source-preserving
       generation; `reproduce_source` exits 0 on an exact match; an unrelated or
       additional critical classification exits 1; `current` exits 0; an invalid
       definition or harness execution exits 2; AC-08, AC-12, and AC-15 through
