@@ -18,7 +18,7 @@ Cite the T-ID in every commit that advances it.
 - [x] T4 — Variant screening: reject any variant containing secrets or
       instructions to bypass confirmation, before a human is asked to review.
       A model-authored variant is untrusted text, never an instruction.
-- [ ] T5 — Explicit human approval, recorded, and prior to freezing.
+- [x] T5 — Explicit human approval, recorded, and prior to freezing.
 - [ ] T6 — Freeze approved variants into the content-hashed benchmark manifest
       before trials begin; generation is not rerun between repetitions.
 - [ ] T7 — Live trials: at least three scenarios with at least three completed
