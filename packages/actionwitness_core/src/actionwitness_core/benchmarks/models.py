@@ -406,9 +406,15 @@ class BenchmarkManifest(CoreModel):
     evaluator_command_mode: str | None = None
     model_provider: str | None = None
     model_name: str | None = None
-    #: Whatever parameters the evaluator exposed. Absent ones stay absent rather
-    #: than being filled with defaults this harness invented.
-    model_parameters: Mapping[str, JsonValue] = Field(default_factory=dict)
+    #: Whatever parameters the evaluator exported, exactly as it exported them.
+    #:
+    #: `None` and `{}` mean different things and both are reachable. `{}` says
+    #: the evaluator exported no parameters; `None` says this report did not
+    #: carry the field at all, so the harness does not know. FR-093 requires
+    #: missing metadata to be `null`, never inferred, and collapsing the two
+    #: would turn "we do not know" into "there were none" — a claim about the
+    #: run that nobody made.
+    model_parameters: Mapping[str, JsonValue] | None = None
     run_count: Annotated[int, Field(ge=0)] = 0
     reporter_schema: str | None = None
     normalized_adapter_version: str | None = None
@@ -434,7 +440,9 @@ class BenchmarkManifest(CoreModel):
             "evaluator_command_mode": self.evaluator_command_mode,
             "model_provider": self.model_provider,
             "model_name": self.model_name,
-            "model_parameters": dict(self.model_parameters),
+            "model_parameters": (
+                None if self.model_parameters is None else dict(self.model_parameters)
+            ),
             "run_count": self.run_count,
             "reporter_schema": self.reporter_schema,
             "normalized_adapter_version": self.normalized_adapter_version,

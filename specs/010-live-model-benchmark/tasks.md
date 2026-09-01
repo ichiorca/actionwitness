@@ -24,7 +24,7 @@ Cite the T-ID in every commit that advances it.
 - [x] T7 — Live trials: at least three scenarios with at least three completed
       live trials each, imported through the **unchanged** M7 path. A change
       needed here is a finding about 008, not a patch.
-- [ ] T8 — Parameter capture: persist exported model and evaluator parameters
+- [x] T8 — Parameter capture: persist exported model and evaluator parameters
       exactly; unsupported values remain `null`, never inferred.
 - [ ] T9 — The `live_model_run` artifact: persisted as an immutable benchmark
       source, finalized and precomputed before the demo is recorded, and never

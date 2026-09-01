@@ -282,8 +282,12 @@ def _manifest(
         target: config.get(source) if isinstance(config.get(source), str) else None
         for source, target in _MANIFEST_FIELDS.items()
     }
+    # Exactly what the evaluator exported, or `None` when it exported nothing.
+    # AC-17 asks for "actual exported evaluator/model parameters without
+    # inventing missing values", and an empty dict here would invent the claim
+    # that the evaluator reported none.
     parameters = config.get("modelParameters")
-    fields["model_parameters"] = dict(parameters) if isinstance(parameters, Mapping) else {}
+    fields["model_parameters"] = dict(parameters) if isinstance(parameters, Mapping) else None
     fields["reporter_schema"] = imported.reporter_schema
     fields["normalized_adapter_version"] = imported.normalizer_version
     # The number of repeated trials this report carries, counted rather than
