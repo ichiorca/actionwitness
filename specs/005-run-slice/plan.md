@@ -193,3 +193,76 @@ derivation or curation, so `proposal` is refused explicitly rather than silently
 downgraded — the 003 pattern for an unimplemented option. **Queued for the
 operator:** which milestone owns proposal mode? §32's cut order puts it at
 priority 5 and AC-23 marks it `[T1]`, but no BUILD_ORDER milestone lists it.
+
+### T2 — guidance derivation lives in the core, not the service
+
+§26.1's locked decision: "Guidance state and `next_action` shall be derived from
+the same server lifecycle state for the UI, WebMCP responses, and audit trail."
+Three surfaces, one derivation — so it is a pure, total function in
+`actionwitness_core.journeys.guidance` rather than three renderers in three
+places. Two implementations would agree in testing and diverge in exactly the
+situation guidance exists for: the one where a person and an agent disagree
+about whose turn it is.
+
+`GuidanceState.next_action()` is that same object narrowed, not a second
+derivation, and a parametrized test asserts the two agree for every phase.
+
+### T2 — `WorkspacePhase` and `GuidanceActionCode` added to the core registry
+
+`WorkspacePhase` transcribes §11.5's normative state diagram — it is a
+*workspace* phase, distinct from `RunState`, because FR-120 starts producing
+guidance before any run exists. All thirteen members are present even though
+four are not yet reachable, and a test asserts the copy table is total over the
+enum: a phase with no entry renders an empty banner, which is worse than a wrong
+one because nobody can tell it is empty by looking.
+
+`GuidanceActionCode` is **project-allocated**. FR-120 and FR-121 require an
+`action_code` on every guidance event and every tool `next_action`, and require
+the banner and the tool result to "resolve from the same server state and action
+code" — but the specification enumerates no vocabulary. Ten codes, registered so
+the UI, the tools, and the audit trail share one set of names.
+
+### T2 — 004's placeholder `next_action` was removed, not left beside the real one
+
+004-T11 shipped a deliberately minimal `next_action` returning bare strings
+(`"select_target"`, `"arm_run"`, …) and fabricated no `guidance` field. That
+projection is now deleted and `GET /workspace` serves both halves from the one
+`GuidanceState`. Leaving it would have created a second answer to "what should I
+do next", which is precisely what FR-120's "the frontend shall not invent a
+conflicting next action" forbids — and the wire shape of `next_action` changed
+from a string to FR-121's compact object, so four 004 tests were updated to the
+real contract.
+
+`"select_target"` disappeared with it: §11.5's diagram has no such state, and
+FR-024 makes contract and target selection atomic, so a workspace holding a
+contract without a target cannot exist.
+
+### T2 — the two guidance streams are joined by the guidance event's own id
+
+§12.13: "Guidance before a run exists is recorded in the separate
+workspace-scoped `guidance_events` stream. After arming, `guidance_transitioned`
+is also appended to the run timeline using the same guidance-event ID." The run
+event carries that id in its payload, and a test asserts the identity rather
+than merely that both rows exist — two rows written at the same instant are not
+linked, and a reader reconstructing "who was asked to do what" would be guessing
+from timestamps.
+
+The run event's actor is `harness`, not the guidance's own `active_actor`: the
+event records that the *server* moved guidance, not that the person or agent it
+is addressed to did something.
+
+### T2 — `workspace_version` is allocated like an event sequence
+
+`MAX + 1` scoped to the workspace, inside the appending transaction with the
+write lock already held (the ADR-0003 pattern). §17.1 names the column but fixes
+no semantics; this gives guidance an ordering for the stretch *before* any run
+exists, which the run timeline cannot cover.
+
+### T2 — copy rules are tested as behaviour, not style
+
+FR-122 says "copy shall not imply that an agent can make a human decision", and
+that promise breaks as a sentence rather than a type error. So the guidance lane
+asserts that no instruction addressed to the agent contains approve/authorize
+language, that only `human_approver` is ever asked to decide a confirmation,
+that every waiting phase says what it is waiting for (FR-124), and that `system`
+is the active actor only while it is genuinely working.

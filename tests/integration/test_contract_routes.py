@@ -291,7 +291,7 @@ async def test_selecting_a_contract_also_selects_its_target(app: FastAPI) -> Non
     }
     assert workspace["selected_contract_id"] == contract_id
     assert workspace["selected_target_id"] == TARGET_ID
-    assert workspace["next_action"] == "arm_run"
+    assert workspace["next_action"]["action_code"] == "arm_run"
 
 
 async def test_the_target_comes_from_the_contract_and_not_the_request(

@@ -126,6 +126,39 @@
         "eval": "A server-created isolated workspace for replay; its mutable state is removed after its report is persisted."
       }
     },
+    "workspace_phase": {
+      "spec_ref": "spec §11.5",
+      "members": {
+        "no_contract": "No contract is selected; the operator chooses one.",
+        "proposing": "A proposal-mode run is exercising the target; no contract is judged.",
+        "candidates": "A proposal run finished; its candidates await human curation.",
+        "contract_ready": "A contract is selected and the workspace can arm a run.",
+        "armed": "A run is armed with its initial observation captured; no action yet.",
+        "running": "The agent has taken at least one target action.",
+        "awaiting_confirmation": "A protected action is waiting on a human decision.",
+        "verifying": "Verification has started; no new target action is accepted.",
+        "passed": "Verification passed with no failing check.",
+        "passed_with_warnings": "Verification passed with at least one warning.",
+        "failed": "Verification failed at least one critical check.",
+        "eval_ready": "A regression eval exists and can be replayed.",
+        "eval_running": "A regression replay is in progress."
+      }
+    },
+    "guidance_action_code": {
+      "spec_ref": "project (FR-120, FR-121)",
+      "members": {
+        "select_contract": "Choose the outcome contract this run will be judged against.",
+        "arm_run": "Arm the selected contract and capture the initial observation.",
+        "invoke_target_tool": "Exercise one allowlisted target tool.",
+        "decide_confirmation": "Approve once or deny the pending protected action.",
+        "verify_outcome": "Capture final state and evaluate the contract.",
+        "review_findings": "Read the report and its findings.",
+        "curate_candidates": "Accept or reject each proposed assertion candidate.",
+        "run_regression_eval": "Replay the generated regression case.",
+        "reset_workspace": "Reset to return the workspace to its ready state.",
+        "wait": "No action is available; the server is working or a wait is pending."
+      }
+    },
     "assertion_operator": {
       "spec_ref": "spec §9.4",
       "members": {

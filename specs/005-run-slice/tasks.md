@@ -7,7 +7,7 @@ Cite the T-ID in every commit that advances it.
       observation, validate preconditions, and create the run, the `before`
       snapshot, and the arming events together. A run that exists without its
       baseline snapshot must not be reachable.
-- [ ] T2 — Derive guidance at arming and append the first guidance events, using
+- [x] T2 — Derive guidance at arming and append the first guidance events, using
       the server-derived `GuidanceState` rather than a client-supplied one.
 - [ ] T3 — Generic target-tool invocation: Python validation against the
       adapter's published schema, run-state checks, event-cap reservation

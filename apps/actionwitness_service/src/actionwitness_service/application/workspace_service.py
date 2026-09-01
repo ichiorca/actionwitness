@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from typing import Any, Final
 
 from actionwitness_core.journeys.enums import EventActor, OutcomeEventType, RunState
+from actionwitness_core.journeys.guidance import GuidanceState, derive_guidance, phase_for
 from actionwitness_core.journeys.transitions import is_terminal
 
 from actionwitness_service.api.errors import ApiError, ApiErrorCode
@@ -97,6 +98,7 @@ class WorkspaceService:
             )
             active_run = dict(active) if active else None
 
+        guidance = self.guidance(workspace, active_run)
         return {
             "workspace_id": self._workspace_id,
             "selected_target_id": workspace["selected_target_id"],
@@ -104,8 +106,28 @@ class WorkspaceService:
             "scenario_mode": workspace["scenario_mode"],
             "failure_profile": workspace["failure_profile"],
             "active_run": active_run,
-            "next_action": _next_action(workspace, active_run),
+            # §15.1 asks for "authoritative guidance, and one safe
+            # `next_action`". Both come from the same `GuidanceState`, because
+            # §26.1 requires the banner, the tool result, and the audit trail to
+            # resolve from one server derivation — two would agree in testing
+            # and diverge exactly when a person and an agent disagree about
+            # whose turn it is.
+            "guidance": guidance.model_dump(mode="json"),
+            "next_action": guidance.next_action(),
         }
+
+    def guidance(
+        self, workspace: Mapping[str, Any], active_run: Mapping[str, Any] | None
+    ) -> GuidanceState:
+        """This workspace's current guidance, derived from authoritative state."""
+        run_state = None if active_run is None else RunState(active_run["status"])
+        return derive_guidance(
+            phase_for(
+                has_contract=bool(workspace["selected_contract_id"]),
+                run_state=run_state,
+            ),
+            correlation_id=None if active_run is None else str(active_run["id"]),
+        )
 
     async def active_run(self) -> Mapping[str, Any] | None:
         row = await self._work.fetch_one(
@@ -279,21 +301,3 @@ class WorkspaceService:
                 ApiErrorCode.RUN_IN_PROGRESS,
                 f"The {what} may only be changed before arming. Reset the workspace first.",
             )
-
-
-def _next_action(workspace: Mapping[str, Any], active_run: Mapping[str, Any] | None) -> str:
-    """§15.1's "one safe `next_action`".
-
-    Deliberately a small, honest projection of the columns that exist today.
-    §18's authoritative guidance — the `guidance_events` stream, its copy
-    versions and recovery actions — is M4's, and inventing a partial version of
-    it here would produce a second source of truth for what the user should do
-    next. This one derives from workspace state only, and never claims more.
-    """
-    if active_run is not None:
-        return "await_active_run"
-    if not workspace["selected_target_id"]:
-        return "select_target"
-    if not workspace["selected_contract_id"]:
-        return "select_contract"
-    return "arm_run"

@@ -42,12 +42,14 @@ from actionwitness_core.contracts.models import parse_contract
 from actionwitness_core.engine.assertions import evaluate_preconditions
 from actionwitness_core.engine.enums import CheckStatus
 from actionwitness_core.journeys.enums import EventActor, OutcomeEventType, RunState, SnapshotPhase
+from actionwitness_core.journeys.guidance import derive_guidance, phase_for
 from actionwitness_core.ports.models import Observation
 from actionwitness_core.security.canonical import content_hash
 
 from actionwitness_service.api.errors import ApiError, ApiErrorCode
 from actionwitness_service.application.adapter_registry import AdapterRegistry, TargetUnavailable
 from actionwitness_service.application.authorization import WorkspaceScope
+from actionwitness_service.application.guidance_service import GuidanceRecorder
 from actionwitness_service.application.limits import WorkspaceCeilings
 from actionwitness_service.application.workspace_service import NONTERMINAL_RUN_STATES
 from actionwitness_service.persistence.database import Database, UnitOfWork
@@ -324,6 +326,17 @@ class RunService:
                     "provider": observation.provider_id,
                 },
             },
+        )
+
+        # FR-120: arming is a handoff — the operator armed, the agent acts next
+        # — so it produces a guidance transition, recorded in the workspace
+        # stream and linked into the run timeline by its own id (§12.13).
+        await GuidanceRecorder(work, workspace_id).append(
+            derive_guidance(
+                phase_for(has_contract=True, run_state=RunState.ARMED),
+                correlation_id=run_id,
+            ),
+            run_id=run_id,
         )
 
         return ArmedRun(

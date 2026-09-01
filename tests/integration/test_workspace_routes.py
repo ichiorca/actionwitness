@@ -129,11 +129,17 @@ async def test_a_fresh_workspace_reports_an_empty_but_complete_status(app: FastA
         "scenario_mode",
         "failure_profile",
         "active_run",
+        "guidance",
         "next_action",
         "capabilities",
     }
     assert body["active_run"] is None
-    assert body["next_action"] == "select_target"
+    # §15.1's "authoritative guidance, and one safe `next_action`", both derived
+    # from the one `GuidanceState` (FR-120, FR-121).
+    assert body["guidance"]["phase"] == "no_contract"
+    assert body["next_action"]["action_code"] == "select_contract"
+    assert body["next_action"]["actor"] == "operator"
+    assert body["next_action"]["requires_human_input"] is True
 
 
 async def test_the_status_reports_capability_state(app: FastAPI) -> None:
@@ -291,7 +297,9 @@ async def test_reset_retains_the_selected_contract(app: FastAPI) -> None:
     assert reset.json()["selected_contract_id"] == "con_selected"
     assert after["selected_contract_id"] == "con_selected"
     assert after["active_run"] is None
-    assert after["next_action"] == "select_target"
+    # The contract survived reset, so the workspace is ready to arm again rather
+    # than back at choosing one (FR-013).
+    assert after["next_action"]["action_code"] == "arm_run"
 
 
 async def test_reset_clears_the_active_run_pointer(app: FastAPI) -> None:

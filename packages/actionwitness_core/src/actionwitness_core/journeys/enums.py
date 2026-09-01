@@ -313,6 +313,94 @@ GUIDANCE_ACTOR_DESCRIPTIONS: Mapping[GuidanceActor, str] = {
 }
 
 
+class WorkspacePhase(StrEnum):
+    """The workspace lifecycle §11.5's diagram names.
+
+    Transcribed from that diagram, which is normative for which tools are
+    registered in each state. It is a *workspace* phase rather than a run state:
+    `RunState` describes one run, and this describes what the whole workspace is
+    doing — including the states before any run exists, which is where FR-120's
+    "every nonterminal workspace state shall produce one `GuidanceState`" starts.
+    """
+
+    NO_CONTRACT = "no_contract"
+    PROPOSING = "proposing"
+    CANDIDATES = "candidates"
+    CONTRACT_READY = "contract_ready"
+    ARMED = "armed"
+    RUNNING = "running"
+    AWAITING_CONFIRMATION = "awaiting_confirmation"
+    VERIFYING = "verifying"
+    PASSED = "passed"
+    PASSED_WITH_WARNINGS = "passed_with_warnings"
+    FAILED = "failed"
+    EVAL_READY = "eval_ready"
+    EVAL_RUNNING = "eval_running"
+
+
+WORKSPACE_PHASE_DESCRIPTIONS: Mapping[WorkspacePhase, str] = {
+    WorkspacePhase.NO_CONTRACT: "No contract is selected; the operator chooses one.",
+    WorkspacePhase.PROPOSING: (
+        "A proposal-mode run is exercising the target; no contract is judged."
+    ),
+    WorkspacePhase.CANDIDATES: "A proposal run finished; its candidates await human curation.",
+    WorkspacePhase.CONTRACT_READY: "A contract is selected and the workspace can arm a run.",
+    WorkspacePhase.ARMED: "A run is armed with its initial observation captured; no action yet.",
+    WorkspacePhase.RUNNING: "The agent has taken at least one target action.",
+    WorkspacePhase.AWAITING_CONFIRMATION: "A protected action is waiting on a human decision.",
+    WorkspacePhase.VERIFYING: "Verification has started; no new target action is accepted.",
+    WorkspacePhase.PASSED: "Verification passed with no failing check.",
+    WorkspacePhase.PASSED_WITH_WARNINGS: "Verification passed with at least one warning.",
+    WorkspacePhase.FAILED: "Verification failed at least one critical check.",
+    WorkspacePhase.EVAL_READY: "A regression eval exists and can be replayed.",
+    WorkspacePhase.EVAL_RUNNING: "A regression replay is in progress.",
+}
+
+
+class GuidanceActionCode(StrEnum):
+    """The stable name for one bounded next action (FR-120, FR-121).
+
+    **Project-allocated.** The specification requires an `action_code` on every
+    guidance event and on every tool `next_action`, and requires the banner and
+    the tool result to "resolve from the same server state and action code" —
+    but it enumerates no vocabulary. These are that vocabulary.
+
+    They are codes rather than sentences because §12.13 makes the *code* the
+    stable thing and the copy the changeable one: "display-copy changes may
+    alter future messages but never rewrite historical actor, action code,
+    correlation, or outcome evidence."
+    """
+
+    SELECT_CONTRACT = "select_contract"
+    ARM_RUN = "arm_run"
+    INVOKE_TARGET_TOOL = "invoke_target_tool"
+    DECIDE_CONFIRMATION = "decide_confirmation"
+    VERIFY_OUTCOME = "verify_outcome"
+    REVIEW_FINDINGS = "review_findings"
+    CURATE_CANDIDATES = "curate_candidates"
+    RUN_REGRESSION_EVAL = "run_regression_eval"
+    RESET_WORKSPACE = "reset_workspace"
+    #: No safe action exists. §15.1: "If no safe action is possible, the primary
+    #: action is omitted and the recovery instruction explains why."
+    WAIT = "wait"
+
+
+GUIDANCE_ACTION_DESCRIPTIONS: Mapping[GuidanceActionCode, str] = {
+    GuidanceActionCode.SELECT_CONTRACT: (
+        "Choose the outcome contract this run will be judged against."
+    ),
+    GuidanceActionCode.ARM_RUN: "Arm the selected contract and capture the initial observation.",
+    GuidanceActionCode.INVOKE_TARGET_TOOL: "Exercise one allowlisted target tool.",
+    GuidanceActionCode.DECIDE_CONFIRMATION: "Approve once or deny the pending protected action.",
+    GuidanceActionCode.VERIFY_OUTCOME: "Capture final state and evaluate the contract.",
+    GuidanceActionCode.REVIEW_FINDINGS: "Read the report and its findings.",
+    GuidanceActionCode.CURATE_CANDIDATES: "Accept or reject each proposed assertion candidate.",
+    GuidanceActionCode.RUN_REGRESSION_EVAL: "Replay the generated regression case.",
+    GuidanceActionCode.RESET_WORKSPACE: "Reset to return the workspace to its ready state.",
+    GuidanceActionCode.WAIT: "No action is available; the server is working or a wait is pending.",
+}
+
+
 class SnapshotPhase(StrEnum):
     """Which side of the journey a snapshot observes (spec §17.1, `snapshots.phase`)."""
 
@@ -362,4 +450,11 @@ ENUM_REGISTRATIONS: tuple[tuple[str, str, type[StrEnum], Mapping[StrEnum, str]],
     ("guidance_actor", "spec §17.1 / FR-120", GuidanceActor, GUIDANCE_ACTOR_DESCRIPTIONS),
     ("snapshot_phase", "spec §17.1", SnapshotPhase, SNAPSHOT_PHASE_DESCRIPTIONS),
     ("workspace_kind", "spec §17.1", WorkspaceKind, WORKSPACE_KIND_DESCRIPTIONS),
+    ("workspace_phase", "spec §11.5", WorkspacePhase, WORKSPACE_PHASE_DESCRIPTIONS),
+    (
+        "guidance_action_code",
+        "project (FR-120, FR-121)",
+        GuidanceActionCode,
+        GUIDANCE_ACTION_DESCRIPTIONS,
+    ),
 )

@@ -125,8 +125,13 @@ async def test_arming_creates_the_run_its_snapshot_and_its_events(stack: FastAPI
     assert snapshot["phase"] == "before"
     # The run's own creation is its first event: a `snapshot_captured` at
     # sequence 1 would describe a run that, by its own timeline, did not exist.
-    assert [row["event_type"] for row in events] == ["run_armed", "snapshot_captured"]
-    assert [row["actor"] for row in events] == ["human", "harness"]
+    # The guidance transition closes the sequence — arming is a handoff.
+    assert [row["event_type"] for row in events] == [
+        "run_armed",
+        "snapshot_captured",
+        "guidance_transitioned",
+    ]
+    assert [row["actor"] for row in events] == ["human", "harness", "harness"]
 
 
 async def test_the_persisted_snapshot_is_the_value_preconditions_were_checked_against(
@@ -222,7 +227,10 @@ async def test_arming_points_the_workspace_at_its_active_run(stack: FastAPI) -> 
 
     # Assert
     assert workspace["active_run"]["id"] == body["run_id"]
-    assert workspace["next_action"] == "await_active_run"
+    # An armed run hands control to the agent (FR-122).
+    assert workspace["guidance"]["phase"] == "armed"
+    assert workspace["next_action"]["actor"] == "agent"
+    assert workspace["next_action"]["action_code"] == "invoke_target_tool"
 
 
 # --- refusals that write nothing --------------------------------------------
