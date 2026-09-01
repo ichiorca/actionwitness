@@ -29,21 +29,27 @@ Run directly, or through `tests/architecture/test_core_only_install.py`:
 from __future__ import annotations
 
 import argparse
-import ast
-import json
-import subprocess
 import sys
-import tempfile
-from collections.abc import Iterable
 from pathlib import Path
+from typing import Final
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-CORE_PACKAGE = REPO_ROOT / "packages" / "actionwitness_core"
-TESTS_ROOT = REPO_ROOT / "tests"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _isolation import REPO_ROOT, IsolationJob, import_roots, run_isolated
+
+__all__ = [
+    "EXCLUDED_LANES",
+    "NON_CORE_ROOTS",
+    "core_only_test_files",
+    "job",
+    "run_isolation_check",
+]
+
+CORE_PACKAGE: Final = REPO_ROOT / "packages" / "actionwitness_core"
+TESTS_ROOT: Final = REPO_ROOT / "tests"
 
 #: A test file importing any of these needs a package the isolated environment
 #: deliberately does not have, so it is not part of the core's own suite.
-NON_CORE_ROOTS = frozenset(
+NON_CORE_ROOTS: Final[frozenset[str]] = frozenset(
     {
         "actionwitness_service",
         "integrations",
@@ -64,22 +70,11 @@ NON_CORE_ROOTS = frozenset(
 #: lane-coverage gate that re-collects the whole workspace suite. None of them is
 #: a test of the installed library, and the workspace they inspect is exactly
 #: what the isolated environment does not have.
-EXCLUDED_LANES = frozenset({"architecture"})
+EXCLUDED_LANES: Final[frozenset[str]] = frozenset({"architecture"})
 
 #: Proof that the environment really is missing what it claims to be missing. A
 #: green suite means nothing if the packages were installed after all.
-MUST_NOT_IMPORT = ("actionwitness_service", "buggy_store", "fastapi", "httpx", "aiosqlite")
-
-
-def _import_roots(path: Path) -> set[str]:
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    roots: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            roots.update(alias.name.split(".")[0] for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-            roots.add(node.module.split(".")[0])
-    return roots
+MUST_NOT_IMPORT: Final = ("actionwitness_service", "buggy_store", "fastapi", "httpx", "aiosqlite")
 
 
 def core_only_test_files() -> list[Path]:
@@ -95,95 +90,40 @@ def core_only_test_files() -> list[Path]:
         for path in TESTS_ROOT.rglob("test_*.py")
         if "__pycache__" not in path.parts
         and not (set(path.relative_to(TESTS_ROOT).parts) & EXCLUDED_LANES)
-        and not (_import_roots(path) & NON_CORE_ROOTS)
+        and not (import_roots(path) & NON_CORE_ROOTS)
     )
 
 
-def _run(command: Iterable[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(list(command), capture_output=True, text=True, check=False, **kwargs)
+def job() -> IsolationJob:
+    """The core-only job, with its test selection resolved now.
+
+    Built per call rather than at import time so a test added since this module
+    was first imported is still selected - the architecture lane imports this
+    once and runs it later.
+    """
+    return IsolationJob(
+        name="core-only",
+        package=CORE_PACKAGE,
+        requirements=("pytest>=8.3", "pytest-asyncio>=0.24"),
+        must_import=(
+            "actionwitness_core",
+            "actionwitness_core.ports",
+            "actionwitness_core.engine.assertions",
+        ),
+        must_not_import=MUST_NOT_IMPORT,
+        test_files=core_only_test_files(),
+    )
 
 
 def run_isolation_check(verbose: bool = False) -> tuple[bool, str]:
     """Build the clean environment, prove what is absent, and run the suite."""
-    files = core_only_test_files()
-    if not files:
-        return False, "no core-only test files were found; the selection is broken"
-
-    log: list[str] = []
-    with tempfile.TemporaryDirectory(prefix="actionwitness-core-only-") as workspace:
-        venv = Path(workspace) / "venv"
-        python = (
-            venv
-            / ("Scripts" if sys.platform == "win32" else "bin")
-            / ("python.exe" if sys.platform == "win32" else "python")
-        )
-
-        created = _run(["uv", "venv", str(venv)])
-        log.append(f"$ uv venv\n{created.stdout}{created.stderr}")
-        if created.returncode != 0:
-            return False, "\n".join(log)
-
-        installed = _run(
-            [
-                "uv",
-                "pip",
-                "install",
-                "--python",
-                str(python),
-                str(CORE_PACKAGE),
-                "pytest>=8.3",
-                "pytest-asyncio>=0.24",
-            ]
-        )
-        log.append(f"$ uv pip install\n{installed.stdout}{installed.stderr}")
-        if installed.returncode != 0:
-            return False, "\n".join(log)
-
-        # The core must be importable...
-        probe = _run(
-            [
-                str(python),
-                "-c",
-                "import actionwitness_core, actionwitness_core.ports, "
-                "actionwitness_core.engine.assertions; print('core ok')",
-            ]
-        )
-        log.append(f"$ import core\n{probe.stdout}{probe.stderr}")
-        if probe.returncode != 0:
-            return False, "\n".join(log)
-
-        # ...and everything else must not be.
-        script = (
-            "import importlib.util, json;"
-            f"names = {list(MUST_NOT_IMPORT)!r};"
-            "print(json.dumps([n for n in names if importlib.util.find_spec(n) is not None]))"
-        )
-        absent = _run([str(python), "-c", script])
-        log.append(f"$ absence probe\n{absent.stdout}{absent.stderr}")
-        if absent.returncode != 0:
-            return False, "\n".join(log)
-        present = json.loads(absent.stdout.strip() or "[]")
-        if present:
-            log.append(f"packages that should be absent are installed: {present}")
-            return False, "\n".join(log)
-
-        suite = _run(
-            [str(python), "-m", "pytest", "-q", *[str(path) for path in files]],
-            cwd=str(REPO_ROOT),
-        )
-        log.append(f"$ pytest ({len(files)} files)\n{suite.stdout}{suite.stderr}")
-        if suite.returncode != 0:
-            return False, "\n".join(log)
-
-    return True, "\n".join(log) if verbose else log[-1]
+    return run_isolated(job(), verbose=verbose)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--verbose", action="store_true", help="print every step's output")
-    parser.add_argument(
-        "--list", action="store_true", help="list the core-only test files and exit"
-    )
+    parser.add_argument("--list", action="store_true", help="list the core-only test files")
     arguments = parser.parse_args()
 
     if arguments.list:

@@ -26,7 +26,7 @@ Cite the T-ID in every commit that advances it.
       `discount_reported_but_not_applied` fault; a direct target API test proves
       the tool reports success while canonical state is unchanged, in `pre_fix`
       only. The other four profiles stay disabled and visibly labelled.
-- [ ] T9 — The store runs and tests with every assurance package absent: extend
+- [x] T9 — The store runs and tests with every assurance package absent: extend
       the architecture lane with a standalone install/run job for
       `examples/buggy_store`, mirroring the core-only job from 002-T13.
 - [x] T10 — Adapter: the five Appendix D.2 `TargetToolSpec` records and schemas,
