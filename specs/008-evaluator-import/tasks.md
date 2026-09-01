@@ -26,7 +26,7 @@ Cite the T-ID in every commit that advances it.
 - [x] T8 — Atomically finalize one immutable benchmark artifact that references,
       but never rewrites, the source evaluator and outcome artifacts.
 - [x] T9 — The §15.6 import/binding/replay/finalize APIs.
-- [ ] T10 — `BenchmarkPanel` with source kind, mode, coverage, evidence links,
+- [x] T10 — `BenchmarkPanel` with source kind, mode, coverage, evidence links,
       and interpretation guardrails.
 - [ ] T11 — Check in at least three scenarios with three trials each, including
       a call-level pass / outcome fail trial labeled `silent_outcome_defect`.

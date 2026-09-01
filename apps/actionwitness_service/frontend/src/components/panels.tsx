@@ -17,6 +17,7 @@
  * who cannot see the red.
  */
 
+import type { BenchmarkView, Rate } from "../api/benchmark";
 import type { CapabilityReport, Finding, TimelineEvent, WorkspaceStatus } from "../api/workspace";
 
 export interface CapabilityBarProps {
@@ -442,6 +443,260 @@ export function EvalPanel({
           </li>
         ))}
       </ul>
+    </section>
+  );
+}
+
+export interface BenchmarkPanelProps {
+  readonly benchmark: BenchmarkView | null;
+  readonly busy: boolean;
+  readonly onReplay: () => void;
+  readonly onFinalize: () => void;
+  /** Where the redacted per-trial evidence lives (FR-095's evidence links). */
+  readonly trialHref: (externalTrialId: string) => string;
+  readonly reportHref: string;
+}
+
+/** A rate, or the reason there is none (FR-092).
+ *
+ *  A null rate is rendered as words, never as `0.0000` and never as a blank
+ *  cell. "No eligible trials" is a finding about coverage; a zero would be a
+ *  measurement claim, and an empty cell would look like a rendering bug. */
+function RateValue({ rate }: { readonly rate: Rate }): React.ReactElement {
+  if (rate.value === null) {
+    return <span className="benchmark__rate benchmark__rate--absent">no eligible trials</span>;
+  }
+  return (
+    <span className="benchmark__rate">
+      {rate.value}{" "}
+      <span className="panel__label">
+        ({rate.numerator}/{rate.denominator})
+      </span>
+    </span>
+  );
+}
+
+/**
+ * The dual-layer benchmark (§9.9, FR-095, AC-16, 008-T10).
+ *
+ * **The two layers are never merged into one score.** §9.9 says the benchmark
+ * "measures correlation and incremental defect detection, not which evaluator
+ * is universally better", and FR-095 forbids the phrases "deterministic
+ * evaluator beat the probabilistic evaluator" and "accuracy comparison" in
+ * product copy. So the matrix is four labelled cells with their interpretations
+ * in words, and the copy says what the numbers mean rather than which layer won.
+ *
+ * **The source kind is prominent and literal.** AC-16 requires the application
+ * to accept `external_import` or `recorded_fixture` and "never represent either
+ * as a live execution". A recorded fixture says so at the top of the panel,
+ * because that is the claim somebody would otherwise repeat in a talk.
+ *
+ * **Coverage is shown beside every rate.** A rate over two eligible trials and
+ * a rate over two hundred read identically without it.
+ */
+export function BenchmarkPanel({
+  benchmark,
+  busy,
+  onReplay,
+  onFinalize,
+  trialHref,
+  reportHref,
+}: BenchmarkPanelProps): React.ReactElement {
+  if (benchmark === null) {
+    return (
+      <section className="panel" aria-label="Dual-layer benchmark">
+        <h3>Dual-layer benchmark</h3>
+        {/* FR-096: the module stays available and explains itself rather than
+            disappearing when no report has been supplied. */}
+        <p className="panel__note">
+          No benchmark yet. Import a supported evaluator report to compare what a
+          model <em>called</em> with what the business state actually <em>became</em>.
+        </p>
+      </section>
+    );
+  }
+
+  const { counts, metrics, manifest } = benchmark;
+  const insufficient = counts.eligibleTrials === 0;
+
+  return (
+    <section className="panel" aria-label="Dual-layer benchmark">
+      <h3>Dual-layer benchmark</h3>
+
+      {/* AC-16: source kind and correlation mode, prominent and never implied. */}
+      <p className="benchmark__source">
+        <span className="panel__label">Source:</span> <strong>{benchmark.sourceKind}</strong>{" "}
+        {benchmark.sourceKind === "recorded_fixture" ? (
+          <span className="benchmark__caveat">
+            &mdash; a checked-in report. No model was called in this run.
+          </span>
+        ) : null}
+        <br />
+        <span className="panel__label">Correlation mode:</span>{" "}
+        <strong>{benchmark.correlationMode}</strong>{" "}
+        <span className="panel__label">Status:</span> <strong>{benchmark.status}</strong>
+      </p>
+
+      <p className="panel__note">
+        Two layers answer two different questions over the same trials: whether the
+        model made the required calls, and whether the resulting business state was
+        valid. They are reported side by side because a trial can pass one and fail
+        the other &mdash; and that disagreement is the point.
+      </p>
+
+      {insufficient ? (
+        <p className="benchmark__insufficient" role="status">
+          Benchmark insufficient sample &mdash; no trial had usable evidence on both
+          layers, so no rate can be calculated. Coverage is below.
+        </p>
+      ) : null}
+
+      <table className="benchmark__matrix">
+        <caption>Trials by call-level result and business outcome</caption>
+        <thead>
+          <tr>
+            <th scope="col">Call level</th>
+            <th scope="col">Outcome</th>
+            <th scope="col">Trials</th>
+            <th scope="col">Reading</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th scope="row">pass</th>
+            <td>pass</td>
+            <td>{counts.callLevelPassOutcomePass}</td>
+            <td>Verified end to end.</td>
+          </tr>
+          <tr className="benchmark__row--signal">
+            <th scope="row">pass</th>
+            <td>fail</td>
+            <td>{counts.callLevelPassOutcomeFail}</td>
+            <td>Silent outcome defect &mdash; the calls looked right and the state did not.</td>
+          </tr>
+          <tr>
+            <th scope="row">fail</th>
+            <td>pass</td>
+            <td>{counts.callLevelFailOutcomePass}</td>
+            <td>Alternate path or an evaluator expectation mismatch; review.</td>
+          </tr>
+          <tr>
+            <th scope="row">fail</th>
+            <td>fail</td>
+            <td>{counts.callLevelFailOutcomeFail}</td>
+            <td>End-to-end failure.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <dl className="benchmark__coverage">
+        <dt>Eligible</dt>
+        <dd>{counts.eligibleTrials}</dd>
+        <dt>Excluded</dt>
+        <dd>
+          {counts.excludedTrials}{" "}
+          <span className="panel__label">(of which errors: {counts.errorTrials})</span>
+        </dd>
+        <dt>Total</dt>
+        <dd>{counts.totalTrials}</dd>
+      </dl>
+
+      <dl className="benchmark__metrics">
+        <dt>Call-level pass rate</dt>
+        <dd>
+          <RateValue rate={metrics.callLevelPassRate} />
+        </dd>
+        <dt>Outcome pass rate</dt>
+        <dd>
+          <RateValue rate={metrics.outcomePassRate} />
+        </dd>
+        <dt>End-to-end success rate</dt>
+        <dd>
+          <RateValue rate={metrics.endToEndSuccessRate} />
+        </dd>
+        <dt>Silent outcome failure rate</dt>
+        <dd>
+          <RateValue rate={metrics.silentOutcomeFailureRate} />
+        </dd>
+        <dt>Incremental outcome-failure trials</dt>
+        <dd>{metrics.incrementalOutcomeFailureTrials}</dd>
+      </dl>
+
+      <h4>By scenario</h4>
+      <ul className="benchmark__breakdown">
+        {benchmark.byScenario.map((group) => (
+          <li key={group.label}>
+            <strong>{group.label}</strong>{" "}
+            <span className="panel__label">eligible {group.counts.eligibleTrials}:</span>{" "}
+            <RateValue rate={group.metrics.endToEndSuccessRate} />
+          </li>
+        ))}
+      </ul>
+
+      {benchmark.byFailureProfile.length > 0 ? (
+        <>
+          <h4>By failure profile</h4>
+          <ul className="benchmark__breakdown">
+            {benchmark.byFailureProfile.map((group) => (
+              <li key={group.label}>
+                <strong>{group.label}</strong>{" "}
+                <span className="panel__label">eligible {group.counts.eligibleTrials}:</span>{" "}
+                <RateValue rate={group.metrics.silentOutcomeFailureRate} />
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : null}
+
+      {/* FR-093 reproducibility metadata. Absent fields say "not recorded"
+          rather than being hidden: "we do not know" is itself information. */}
+      <h4>Reproducibility</h4>
+      <dl className="benchmark__manifest">
+        <dt>Evaluator</dt>
+        <dd>{manifest.evaluatorName ?? "not recorded"}</dd>
+        <dt>Reporter schema</dt>
+        <dd>{manifest.reporterSchema ?? "not recorded"}</dd>
+        <dt>Normalizer</dt>
+        <dd>{manifest.normalizedAdapterVersion ?? "not recorded"}</dd>
+        <dt>Model</dt>
+        <dd>
+          {manifest.modelName ?? "not recorded"}
+          {manifest.modelProvider === null ? "" : ` (${manifest.modelProvider})`}
+        </dd>
+        <dt>Target build</dt>
+        <dd>{manifest.targetBuildCommit ?? "not recorded"}</dd>
+      </dl>
+
+      <h4>Trials</h4>
+      <ul className="benchmark__trials">
+        {benchmark.trials.map((trial) => (
+          <li key={trial.externalTrialId}>
+            {/* FR-095 evidence links: every number above is reachable back to
+                the redacted trial it came from. */}
+            <a href={trialHref(trial.externalTrialId)}>{trial.externalTrialId}</a>{" "}
+            <span className="panel__label">call:</span> {trial.callLevelResult}{" "}
+            <span className="panel__label">outcome:</span> {trial.outcomeResult}{" "}
+            {trial.eligibility === "excluded" ? (
+              <span className="benchmark__excluded">
+                excluded &mdash; {trial.exclusionReason ?? "no reason recorded"}
+              </span>
+            ) : null}
+            {trial.addressable ? null : (
+              <span className="benchmark__unaddressable"> needs an explicit binding choice</span>
+            )}
+          </li>
+        ))}
+      </ul>
+
+      <button type="button" onClick={onReplay} disabled={busy}>
+        Replay imported trajectories
+      </button>
+      <button type="button" onClick={onFinalize} disabled={busy}>
+        Finalize this benchmark
+      </button>
+      {benchmark.resultArtifactId === null ? null : (
+        <a href={reportHref}>Download the benchmark report</a>
+      )}
     </section>
   );
 }
