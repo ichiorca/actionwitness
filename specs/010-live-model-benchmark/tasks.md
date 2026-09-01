@@ -4,7 +4,7 @@ Cite the T-ID in every commit that advances it.
 
 **Entry condition:** M6, M7, and AC-16 green (BUILD_ORDER §7/M9).
 
-- [ ] T1 — The configured live backend: one explicitly configured LLM backend
+- [x] T1 — The configured live backend: one explicitly configured LLM backend
       behind a pinned `webmcp-evals` configuration, resolved as a module like
       every other. Absent configuration disables the live path and leaves the
       Tier 2 import path fully working (FR-096).
