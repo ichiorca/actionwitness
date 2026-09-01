@@ -706,3 +706,77 @@ The test that exposed it also stopped selecting "the first template that is not
 the canonical one": two of the three require an empty cart, so picking by
 position made it depend on listing order for a reason unrelated to what it
 asserts. It names the template it needs.
+
+### T10 — the harness's own scenario control now reaches the target
+
+The gap flagged since T1 is closed. `test_selecting_pre_fix_through_the_harness_makes_the_target_lie`
+runs the entire journey through `/api/v1` alone — select the profile, select the
+mode, arm, invoke, verify — and the discount fault appears because the harness
+put the target into `pre_fix`. Before this, the harness recorded a selection the
+target never heard about, and every test needing a faulty store had to drive the
+store's own surface.
+
+### T10 — preparation precedes persistence on the selection routes
+
+A workspace whose column said `pre_fix` while the target was still honest would
+arm a run whose evidence carries a scenario label that is not true, and every
+verdict from it would be mislabelled. So the target is prepared first and the
+selection recorded only if the adapter agrees; a refusal writes nothing.
+
+Because the adapter call is a wait, ADR-0003 forbids holding the lock across it,
+so the selection is re-read inside the writing transaction and compared — the
+same optimistic check arming uses. A concurrent change refuses rather than
+recording a selection the target was never prepared for.
+
+### T10 — reset cancels first, then reseeds
+
+FR-013's own order, and it matters: a reseed that ran first would wipe the state
+the cancelled run's evidence describes. The route cancels inside the
+transaction, then prepares outside it.
+
+### T10 — "when supported" is answered, not assumed
+
+`ReseedOutcome` carries whether the target was reseeded and why not. A silent
+no-op would leave a caller believing the target is clean when it holds whatever
+the last run left behind. A workspace with no target or no selected mode is
+skipped with a reason; an unavailable target is skipped with the registry's own
+reason; an `ExternalTargetAdapter` is skipped because §9.1 gives it no `prepare`
+at all.
+
+### T10 — an unadvertised mode never reaches the target
+
+Validated against the descriptor before `prepare` is called. The adapter would
+refuse it too, but a refusal arriving *after* a reseed attempt is harder to
+reason about than one arriving instead of it — and a test counts the `prepare`
+calls to prove none happened.
+
+### T10 — `runs.fault_active` is still unset (**operator decision**)
+
+§23.1's `ScenarioReference.fault_active` is documented as "derived by the
+adapter", and §17.1 gives `runs` the column — but `ManagedTargetAdapter.prepare`
+returns `None`, and no protocol method reports whether the selected profile is
+active in the selected mode. The harness cannot derive it without interpreting
+mode names, which §9.1 forbids.
+
+Populating it needs one of:
+
+1. `prepare` returning the resulting scenario state (a change to a public core
+   protocol, which the escalation contract reserves for the operator); or
+2. a new optional protocol method, e.g. `scenario_state(workspace_id)`; or
+3. accepting that `fault_active` stays `false` in Tier 1 reports and is
+   populated when the pre/post comparison needs it.
+
+The selection itself (`scenario_mode`, `failure_profile`) is recorded faithfully
+either way, and the comparison in T11 keys on those. **Queued for the operator.**
+
+### T10 — earlier tests keep setting the scenario at source, deliberately
+
+`test_scenario_control.py` owns the harness path. The verification, report,
+classifier, and invocation suites continue to set the store's scenario directly
+so that a break in scenario selection fails its own tests rather than theirs —
+their comments now say that is a choice rather than a limitation.
+
+`test_workspace_routes.py` did need a real store: selecting a mode now reaches
+the target, so a harness with nothing behind it can no longer accept one, and a
+fixture that pretended otherwise would test a system that does not exist in the
+composed deployment.

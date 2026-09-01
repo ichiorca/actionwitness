@@ -77,7 +77,12 @@ async def _arm(visitor: httpx.AsyncClient) -> str:
 
 
 async def _put_the_store_in_pre_fix(app: FastAPI, workspace_id: str) -> None:
-    """Arm the discount fault in the store itself; harness reseeding is T10."""
+    """Arm the discount fault in the store itself.
+
+    Set directly rather than through the harness (which can do this since
+    005-T10), so a break in scenario selection fails its own tests rather than
+    these.
+    """
     adapter = app.state.adapters.adapter("buggy_store")
     response = await adapter._client.post(
         "/demo/api/v1/store/scenario",

@@ -24,6 +24,7 @@ import httpx
 import pytest
 from actionwitness_service.api.app import API_PREFIX, create_app
 from actionwitness_service.persistence.database import Database
+from buggy_store.api import create_app as create_store
 from fastapi import FastAPI
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
@@ -34,9 +35,26 @@ WORKSPACE = f"{API_PREFIX}/workspace"
 
 @pytest.fixture
 async def app(tmp_path: Path) -> AsyncIterator[FastAPI]:
-    application = create_app(environ=ENV, database_path=tmp_path / "harness.sqlite3")
-    async with application.router.lifespan_context(application):
-        yield application
+    """The harness wired to a real store.
+
+    Selecting a scenario now reaches the target through the adapter (005-T10),
+    so a harness with nothing behind it can no longer accept a mode — and a
+    fixture that pretended otherwise would be testing a system that does not
+    exist in the composed deployment.
+    """
+    store = create_store(database_path=tmp_path / "store.sqlite3")
+    async with (
+        store.router.lifespan_context(store),
+        httpx.ASGITransport(app=store) as asgi,
+        httpx.AsyncClient(transport=asgi, base_url="http://buggy-store.test") as target_client,
+    ):
+        application = create_app(
+            environ=ENV,
+            database_path=tmp_path / "harness.sqlite3",
+            target_client=target_client,
+        )
+        async with application.router.lifespan_context(application):
+            yield application
 
 
 def client(app: FastAPI) -> httpx.AsyncClient:

@@ -73,11 +73,12 @@ async def _arm(visitor: httpx.AsyncClient) -> str:
 async def _put_the_store_in_pre_fix(app: FastAPI, workspace_id: str) -> None:
     """Arm the discount fault in the *store*, through the store's own API.
 
-    The harness records a scenario selection (004-T11) but does not yet reseed
-    the target through the adapter — that is 005-T10. Until it does, a test
-    that needs a genuinely faulty target has to say so directly rather than
-    setting a harness column and hoping. Doing it through the store's real
-    surface also keeps this test honest about which component is lying.
+    Deliberately not through the harness, even though 005-T10 made that work.
+    This file is about how an invocation is recorded, and driving the scenario
+    through the harness would make every test here also a test of scenario
+    selection — so a break in that machinery would fail these too and say
+    nothing about what they cover. `test_scenario_control.py` owns the harness
+    path.
     """
     adapter = app.state.adapters.adapter("buggy_store")
     store_client = adapter._client

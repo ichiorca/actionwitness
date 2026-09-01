@@ -33,7 +33,7 @@ Cite the T-ID in every commit that advances it.
 - [x] T9 — Server-derived guidance through the run: `GuidanceState`, append-only
       guidance events, and the compact `next_action` projection, replacing 004's
       deliberately minimal placeholder rather than sitting beside it.
-- [ ] T10 — Scenario switch and reset through the adapter, reseeding managed
+- [x] T10 — Scenario switch and reset through the adapter, reseeding managed
       target state where supported (FR-013).
 - [ ] T11 — Matched `pre_fix`/`post_fix` comparison using controlled-input hashes
       and actual trajectory identity. A mismatched rerun stays valid and returns

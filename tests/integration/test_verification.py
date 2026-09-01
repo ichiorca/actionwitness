@@ -64,7 +64,12 @@ def client(app: FastAPI) -> httpx.AsyncClient:
 
 
 async def _scenario(app: FastAPI, workspace_id: str, mode: str, profile: str) -> None:
-    """Put the *store* into a scenario. Harness reseeding is T10."""
+    """Put the *store* into a scenario, directly.
+
+    The harness can do this through `/api/v1/workspace` since 005-T10;
+    `test_scenario_control.py` covers that path. Here the scenario is set at
+    source so these tests fail only for reasons about the subject they name.
+    """
     adapter = app.state.adapters.adapter("buggy_store")
     response = await adapter._client.post(
         "/demo/api/v1/store/scenario",
