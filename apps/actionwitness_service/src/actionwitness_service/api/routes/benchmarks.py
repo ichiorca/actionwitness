@@ -110,9 +110,34 @@ async def create_benchmark(
     workspace_id: WorkspaceDependency,
     database: DatabaseDependency,
     locks: LocksDependency,
+    settings: SettingsDependency,
     request: Annotated[CreateBenchmarkRequest, Body()] = _DEFAULT_CREATE,
 ) -> dict[str, Any]:
-    """§15.6: a new suite, in `draft`."""
+    """§15.6: a new suite, in `draft`.
+
+    **A client cannot claim a live run.** AC-17 requires the *application* to
+    label a live suite `live_model_run`, and §25.3 requires a checked-in report
+    never to be "presented as a live execution" — so `live_model_run` is
+    accepted only where a live backend is actually configured.
+
+    Refused rather than quietly downgraded. A caller who asked for a live run
+    and silently received a fixture-labelled suite would go on to present its
+    numbers as a model result, which is the precise misrepresentation the two
+    requirements exist to prevent.
+    """
+    from integrations.google_evals.live import source_kind_for
+
+    if request.source_kind is SourceKind.LIVE_MODEL_RUN:
+        available = source_kind_for(settings.live_evaluator)
+        if available is not SourceKind.LIVE_MODEL_RUN:
+            raise ApiError(
+                ApiErrorCode.PRECONDITION_FAILED,
+                "This deployment has no configured live model backend, so a suite "
+                "cannot be labelled `live_model_run`. Import the checked-in report "
+                "as `recorded_fixture` instead — it produces the same matrix and "
+                "says truthfully where it came from.",
+            )
+
     async with locks.hold(workspace_id), database.transaction() as work:
         benchmark_id = await BenchmarkService(work, workspace_id).create(
             source_kind=request.source_kind,

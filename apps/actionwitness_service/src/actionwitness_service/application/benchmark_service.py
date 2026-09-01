@@ -596,9 +596,20 @@ class BenchmarkService:
 
     async def trials(self, benchmark_id: str) -> tuple[Mapping[str, Any], ...]:
         await self.get(benchmark_id)
+        # Ordered by the trial's own identifier alone, never by `created_at`.
+        # Timestamps have coarse granularity: nine rows written inside one tick
+        # sort by id, and nine that straddle a tick sort by insertion — so a
+        # `created_at` term makes the order depend on how fast the machine was.
+        #
+        # That would reach further than a listing. FR-094 hashes the finalized
+        # report over its trials, so a timing-dependent order makes the
+        # artifact's content hash timing-dependent too, and two identical
+        # benchmarks would disagree about their own identity. The constitution
+        # requires collections used in hashes to be normalized deterministically;
+        # this is that normalization.
         rows = await self._work.fetch_all(
             "SELECT * FROM benchmark_trials WHERE benchmark_suite_id = ? "
-            "ORDER BY created_at, external_trial_id",
+            "ORDER BY external_trial_id",
             (benchmark_id,),
         )
         return tuple(rows)
