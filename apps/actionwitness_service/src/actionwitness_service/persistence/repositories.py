@@ -74,8 +74,16 @@ class ContractRepository:
         self._work = work
         self._workspace_id = workspace_id
 
-    async def add(self, record: ContractRecord) -> None:
-        """Store one immutable contract under this repository's workspace."""
+    async def add(self, record: ContractRecord, *, source_template_id: str | None = None) -> None:
+        """Store one immutable contract under this repository's workspace.
+
+        `source_template_id` is a **column**, not a key inside the document, and
+        the distinction is load-bearing: the document is what the content hash
+        covers, so writing provenance into it would change the contract's
+        identity and make the stored hash describe something nobody authored.
+        Optional and keyword-only, so the signature still satisfies the core's
+        `ContractRepository.add(record)`.
+        """
         document = dict(record.document)
         await self._work.execute(
             """
@@ -87,7 +95,7 @@ class ContractRepository:
             (
                 record.contract_id,
                 self._workspace_id,
-                _optional_str(document.get("source_template_id")),
+                source_template_id,
                 record.content_hash,
                 str(document.get("name", "")),
                 record.schema_version,
@@ -126,6 +134,25 @@ class ContractRepository:
             """
         )
         return [_contract_of(row) for row in rows]
+
+    async def list_template_summaries(self) -> list[dict[str, Any]]:
+        """The listing projection §15.2 serves, rather than whole records.
+
+        A separate method because a summary is not a `ContractRecord`: it
+        carries `source_template_id`, which lives in a column precisely so it
+        stays out of the hashed document. Reconstructing records only to discard
+        their documents would also mean parsing every template on every list.
+        """
+        rows = await self._work.fetch_all(
+            """
+            SELECT id, source_template_id, name, schema_version, content_hash,
+                   document_json, created_at
+              FROM contracts
+             WHERE workspace_id IS NULL
+             ORDER BY created_at, id
+            """
+        )
+        return [dict(row) for row in rows]
 
 
 class EventRepository:

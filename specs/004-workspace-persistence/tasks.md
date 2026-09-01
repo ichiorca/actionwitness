@@ -51,7 +51,7 @@ Cite the T-ID in every commit that advances it.
       `purge_completed`, failure-profile selection, and scenario-mode selection
       before arming. Reset cancels nonterminal work and unresolved confirmations
       while retaining terminal artifacts and the selected contract.
-- [ ] T12 — Contract routes from §15.2: list built-in templates, read one
+- [x] T12 — Contract routes from §15.2: list built-in templates, read one
       immutable contract, and select the active contract, atomically selecting
       the target its `target_id` maps to (FR-024). The three templates are the
       ones `integrations.buggy_store` already seeds.

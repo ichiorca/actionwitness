@@ -334,6 +334,8 @@ async def test_purge_completed_preserves_built_in_templates(app: FastAPI) -> Non
     every purge statement is workspace-scoped."""
     # Arrange
     database: Database = app.state.database
+    async with database.reading() as work:
+        before = len(await work.fetch_all("SELECT id FROM contracts WHERE workspace_id IS NULL"))
     async with database.transaction() as work:
         await work.execute(
             """
@@ -352,10 +354,11 @@ async def test_purge_completed_preserves_built_in_templates(app: FastAPI) -> Non
         # Act
         await visitor.post(f"{WORKSPACE}/reset", json={"purge_completed": True})
 
-    # Assert
+    # Assert — the seeded built-ins survive alongside the one this test added.
     async with database.reading() as work:
         templates = await work.fetch_all("SELECT id FROM contracts WHERE workspace_id IS NULL")
-    assert [row["id"] for row in templates] == ["con_template"]
+    assert "con_template" in {row["id"] for row in templates}
+    assert len(templates) == before + 1
 
 
 async def test_purging_one_workspace_leaves_the_others_evidence(app: FastAPI) -> None:

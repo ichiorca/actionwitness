@@ -86,6 +86,17 @@ class UnitOfWork:
         """The instant to stamp rows with, as stored ISO-8601 UTC."""
         return _iso(self._clock())
 
+    def instant(self) -> datetime:
+        """The same instant as a timezone-aware `datetime`.
+
+        The core's models take a `datetime` and refuse a string outright — its
+        `UtcInstant` is a `BeforeValidator`, not a coercion — so a caller that
+        builds a core record needs this rather than `now()`. Both read the one
+        injected clock, so a row and the record describing it cannot disagree
+        about when they were made.
+        """
+        return self._clock().astimezone(UTC)
+
     async def execute(self, statement: str, parameters: tuple = ()) -> aiosqlite.Cursor:
         return await self._connection.execute(statement, parameters)
 

@@ -32,9 +32,11 @@ from actionwitness_service.api.middleware import (
     WorkspaceCookieMiddleware,
 )
 from actionwitness_service.api.origins import OriginPolicy
+from actionwitness_service.api.routes import contracts as contract_routes
 from actionwitness_service.api.routes import workspace as workspace_routes
 from actionwitness_service.application.adapter_registry import AdapterRegistry
 from actionwitness_service.application.cleanup import WorkspaceCleaner
+from actionwitness_service.application.contract_service import seed_templates
 from actionwitness_service.application.rate_limits import RateLimiter
 from actionwitness_service.application.workspaces import WorkspaceStore
 from actionwitness_service.config import ServiceSettings
@@ -81,6 +83,13 @@ def create_app(
             base_url=settings.buggy_store.base_url if settings.buggy_store else ""
         )
         app.state.adapters = AdapterRegistry(settings, client=client)
+
+        # §29.1: the built-in templates are seeded at startup, from the
+        # integration that owns them. Idempotent, and skipped entirely when the
+        # integration is not installed — §21.1 requires the harness to run
+        # without it, and a startup that insisted on seeding its templates
+        # would make that impossible.
+        app.state.templates_seeded = await _seed_builtin_templates(database, app.state.adapters)
 
         # FR-009: "at startup and at least hourly". The startup sweep is awaited
         # so a deployment begins with expired data already gone; the hourly one
@@ -170,8 +179,24 @@ def create_app(
         return {"status": "ok"}
 
     app.include_router(workspace_routes.router, prefix=API_PREFIX)
+    app.include_router(contract_routes.router, prefix=API_PREFIX)
 
-    # TODO(004-T12): contract template, read, and select routes (§15.2)
+    # TODO(M4): §15.2's instantiate, from-candidates, and published endpoints
     # TODO(M4): runs, events, and invocation routes (§15.3)
     # TODO(M4): mount compiled frontend assets; /demo composition per §29.1
     return app
+
+
+async def _seed_builtin_templates(database: Database, registry: AdapterRegistry) -> int:
+    """Seed each available integration's built-in contract templates.
+
+    An integration that is absent contributes nothing and is not an error
+    (§21.1). The seeding runs in one transaction so a partial set is never
+    visible, and it is idempotent so a restart writes nothing.
+    """
+    if not registry.is_available("buggy_store"):
+        return 0
+    from integrations.buggy_store import TEMPLATES
+
+    async with database.transaction() as work:
+        return await seed_templates(work, TEMPLATES)

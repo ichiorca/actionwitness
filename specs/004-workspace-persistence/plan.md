@@ -571,3 +571,62 @@ FR-011 says the option "must be chosen before arming" and FR-012 says an armed
 run's configuration is immutable and "completed evidence is never relabeled".
 A terminal run does not block, though — a finished run must not lock a
 workspace forever.
+
+### T12 — `source_template_id` is a column, never a key in the document
+
+Caught by a failing test rather than by review. Seeding first hashed the
+template's document and *then* wrote provenance into it, so the stored document
+no longer matched its own hash and every read failed its integrity check. The
+document is what the content hash covers, and the hash is the contract's
+identity — writing anything into it makes the stored hash describe something
+nobody authored. `ContractRepository.add` therefore takes `source_template_id`
+as a keyword-only column argument, which still satisfies the core's
+`add(record)` signature.
+
+The listing projection reads that column, so it is a separate repository method
+rather than a reconstruction of full `ContractRecord`s: a summary is not a
+record, and rebuilding records only to throw their documents away would parse
+every template on every list.
+
+### T12 — template identity includes the content hash
+
+`tpl_<template_id>_<hash prefix>`. Seeding is idempotent across restarts, and a
+template whose text changes between releases becomes a **new row** rather than
+silently overwriting the version an existing run was armed against (FR-012:
+"completed evidence is never relabeled"). The old row stays readable for the
+runs that used it.
+
+### T12 — selection takes no request body
+
+FR-024: "no endpoint may combine a contract with a different target." The target
+comes from the contract's own immutable `target_id`, so the forbidden
+combination is not expressible rather than merely rejected — there is no
+parameter to combine. When the named target is unavailable, **nothing is
+written**: a workspace left holding a contract whose target cannot run would be
+exactly the state the requirement forbids.
+
+### T12 — a tampered contract is `HARNESS_ERROR`, not a new code
+
+There is no evidence-integrity code in the registry, and rather than allocate a
+fifth project-allocated one, a stored contract that no longer hashes to its
+recorded value returns 500. It is a fault in the deployment, not something the
+caller can fix by changing the request, and constitution §5 requires it to be an
+explicit non-pass rather than serving the document anyway. **Queued for an
+operator decision:** whether M4's evidence-chain verification should introduce a
+distinct code rather than reusing `HARNESS_ERROR`.
+
+### T12 — only three of §15.2's six endpoints are implemented
+
+`POST /contracts` (instantiate from a template), `/from-candidates`, and
+`/published` belong to M4 and M8 and are absent rather than stubbed, per T12's
+scope: list templates, read one contract, select the active contract.
+
+### T12 — templates are seeded from the integration, and only when it is present
+
+The three Tier 1 contracts arrive as data from `integrations.buggy_store`, which
+understands what `target.cart.total` means; re-authoring them in a
+target-neutral service would put commerce vocabulary where the constitution
+forbids it, and copying them would give the project two sources of truth for
+what a contract asserts. Seeding is skipped entirely when the integration is not
+installed — §21.1 requires the harness to run without it, and a startup that
+insisted on seeding its templates would make that impossible.
