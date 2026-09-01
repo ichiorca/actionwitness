@@ -38,6 +38,7 @@ from actionwitness_core.evals.models import (
     RegressionEvalCase,
     SourceFinding,
 )
+from actionwitness_core.evals.substitution import substitute_redacted
 from actionwitness_core.journeys.enums import EventActor, OutcomeEventType, RunState, SnapshotPhase
 from actionwitness_core.kernel import CoreError
 from actionwitness_core.reports.enums import LayerResult
@@ -237,6 +238,13 @@ class EvalCaseService:
         for index, row in enumerate(rows, start=1):
             payload = json.loads(row["redacted_payload_json"] or "{}")
             arguments = payload.get("arguments") or {}
+            # §24.2 step 5. The stored arguments were redacted at record time,
+            # and `[REDACTED]` is not an email address — a replay sending the
+            # marker would fail argument validation at the target and reproduce
+            # that instead of the regression. The substitute is deterministic
+            # and unmistakably fake; no original value is recovered, because
+            # none was ever persisted.
+            arguments = substitute_redacted(arguments)
             trajectory.append((index, str(row["tool_name"]), arguments))
         return trajectory
 

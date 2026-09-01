@@ -14,7 +14,7 @@ Cite the T-ID in every commit that advances it.
       canonical state when the contract carries `no_undeclared_changes`), drop a
       read-only call only when it is irrelevant to every check and later
       mutation, and preserve repeated request IDs.
-- [ ] T4 — Redaction and hashing order: replace sensitive but replay-required
+- [x] T4 — Redaction and hashing order: replace sensitive but replay-required
       values with deterministic type-valid fixtures, validate against the
       repository's public JSON Schema, and calculate the content hash **last**,
       after every other field is final.

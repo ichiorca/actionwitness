@@ -1,0 +1,977 @@
+{
+  "$defs": {
+    "Assertion": {
+      "additionalProperties": false,
+      "description": "One business check against the final snapshot (\u00a79.4, FR-052).",
+      "properties": {
+        "id": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "operator": {
+          "$ref": "#/$defs/AssertionOperator"
+        },
+        "path": {
+          "$ref": "#/$defs/ContractPath"
+        },
+        "severity": {
+          "$ref": "#/$defs/AssertionSeverity",
+          "default": "critical"
+        },
+        "value": {
+          "$ref": "#/$defs/JsonValue",
+          "default": null
+        }
+      },
+      "required": [
+        "id",
+        "path",
+        "operator"
+      ],
+      "title": "Assertion",
+      "type": "object"
+    },
+    "AssertionOperator": {
+      "description": "The eight MVP operators (spec \u00a79.4).\n\nSemantics are exact: no operator performs implicit string/number/boolean\ncoercion, so `\"1\"` never equals `1`.",
+      "enum": [
+        "equals",
+        "not_equals",
+        "exists",
+        "absent",
+        "contains",
+        "unchanged",
+        "changed_by",
+        "count_equals"
+      ],
+      "title": "AssertionOperator",
+      "type": "string"
+    },
+    "AssertionSeverity": {
+      "description": "Assertion severity (spec \u00a79.5, FR-052).\n\nSeverity governs assertion findings only. Every MVP policy failure is\ncritical regardless of any severity a contract might try to attach to it.",
+      "enum": [
+        "info",
+        "warning",
+        "critical"
+      ],
+      "title": "AssertionSeverity",
+      "type": "string"
+    },
+    "CheckStatus": {
+      "description": "How one check ended.\n\n`observation_unavailable` exists so that a check whose evidence never arrived\nis reported as unresolved rather than degraded to a pass (\u00a716.1,\nconstitution \u00a75: \"observation failure produces an explicit non-pass result\").",
+      "enum": [
+        "passed",
+        "failed",
+        "not_evaluated",
+        "observation_unavailable"
+      ],
+      "title": "CheckStatus",
+      "type": "string"
+    },
+    "ConfirmationStrategy": {
+      "description": "\u00a724.5's deterministic interaction providers.\n\nNo member grants consent the recording did not contain (FR-087).",
+      "enum": [
+        "recorded_approval",
+        "recorded_denial",
+        "no_confirmation"
+      ],
+      "title": "ConfirmationStrategy",
+      "type": "string"
+    },
+    "ContentHash": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "ContractPath": {
+      "description": "Restricted dotted observation path (\u00a710.2)",
+      "type": "string"
+    },
+    "EmbeddedContract": {
+      "additionalProperties": false,
+      "description": "The source contract, verbatim, with the hash it was verified against.\n\n\u00a724.2 step 6 embeds the document and verifies its stored hash *before* case\ncreation. Embedding rather than referencing is what makes the case\nself-contained (FR-082): a case that pointed at a contract row could not be\nhanded to anyone.",
+      "properties": {
+        "content_hash": {
+          "$ref": "#/$defs/ContentHash"
+        },
+        "document": {
+          "$ref": "#/$defs/OutcomeContract"
+        }
+      },
+      "required": [
+        "content_hash",
+        "document"
+      ],
+      "title": "EmbeddedContract",
+      "type": "object"
+    },
+    "EnvironmentExpectation": {
+      "additionalProperties": false,
+      "description": "What one profile must produce for the eval to pass (\u00a724.1 `expected`).",
+      "properties": {
+        "overall_result": {
+          "$ref": "#/$defs/LayerResult"
+        },
+        "required_classifications": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/FailureClassification"
+          },
+          "title": "Required Classifications",
+          "type": "array"
+        }
+      },
+      "required": [
+        "overall_result"
+      ],
+      "title": "EnvironmentExpectation",
+      "type": "object"
+    },
+    "EvalEnvironment": {
+      "description": "\u00a724.4's two allowlisted runtime profiles.\n\nThe *names* are target-neutral on purpose. What `current` means for a given\ntarget \u2014 for the Buggy Store, `post_fix` with no active fault \u2014 is target\nknowledge, and \u00a724.4's mapping lives in the integration layer. A core that\nknew `pre_fix` would be a core that knew about one demo store.",
+      "enum": [
+        "current",
+        "reproduce_source"
+      ],
+      "title": "EvalEnvironment",
+      "type": "string"
+    },
+    "EvalExpectations": {
+      "additionalProperties": false,
+      "description": "Both profiles' expectations. Every case carries both (\u00a724.2 steps 7\u20138).",
+      "properties": {
+        "current": {
+          "$ref": "#/$defs/EnvironmentExpectation"
+        },
+        "reproduce_source": {
+          "$ref": "#/$defs/EnvironmentExpectation"
+        }
+      },
+      "required": [
+        "current",
+        "reproduce_source"
+      ],
+      "title": "EvalExpectations",
+      "type": "object"
+    },
+    "EvalFixture": {
+      "additionalProperties": false,
+      "description": "The initial state a replay restores (\u00a724.1 `fixture`, \u00a724.2 step 2).\n\n`complete` records whether the fixture was minimized or retained whole. A\ncontract carrying `no_undeclared_changes` is defined over paths it does not\nname, so a minimized fixture would make that policy unevaluable \u2014 and the\nrunner has to be able to tell \"small because nothing else mattered\" from\n\"small because somebody trimmed it wrongly\".",
+      "properties": {
+        "complete": {
+          "default": false,
+          "title": "Complete",
+          "type": "boolean"
+        },
+        "content_hash": {
+          "$ref": "#/$defs/ContentHash"
+        },
+        "state_version": {
+          "default": 0,
+          "minimum": 0,
+          "title": "State Version",
+          "type": "integer"
+        },
+        "target_state": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Target State",
+          "type": "object"
+        }
+      },
+      "required": [
+        "content_hash",
+        "target_state"
+      ],
+      "title": "EvalFixture",
+      "type": "object"
+    },
+    "EvalSource": {
+      "additionalProperties": false,
+      "description": "Where the case came from (\u00a724.1 `source`, FR-081).\n\n`failure_profile` is provenance, not configuration. \u00a724.2 step 9 records it\n\"without automatically activating it in ordinary CI runs\" \u2014 a case that\nforced its own fault profile would make `current` untestable, which is the\nprofile CI actually runs.",
+      "properties": {
+        "build_commit": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Build Commit"
+        },
+        "critical_classifications": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/FailureClassification"
+          },
+          "title": "Critical Classifications",
+          "type": "array"
+        },
+        "failure_profile": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Failure Profile"
+        },
+        "implementation_version": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Implementation Version",
+          "type": "string"
+        },
+        "overall_result": {
+          "$ref": "#/$defs/LayerResult"
+        },
+        "protocol": {
+          "$ref": "#/$defs/SourceProtocol",
+          "default": "webmcp"
+        },
+        "run_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "scenario_mode": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scenario Mode"
+        }
+      },
+      "required": [
+        "run_id",
+        "implementation_version",
+        "overall_result"
+      ],
+      "title": "EvalSource",
+      "type": "object"
+    },
+    "EvalTarget": {
+      "additionalProperties": false,
+      "description": "Which adapter replays this case (\u00a724.1 `target`, FR-084).",
+      "properties": {
+        "adapter": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Adapter",
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "type": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "adapter"
+      ],
+      "title": "EvalTarget",
+      "type": "object"
+    },
+    "ExpectedTools": {
+      "additionalProperties": false,
+      "description": "The optional observed-trajectory term (\u00a710.3).\n\nOmitting the whole block leaves observed trajectory `not_evaluated`; supplying\nit with an empty `calls` list would instead assert nothing while looking like\na check, so an empty list is refused.",
+      "properties": {
+        "calls": {
+          "items": {
+            "$ref": "#/$defs/ToolName"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "title": "Calls",
+          "type": "array"
+        },
+        "ordered": {
+          "default": false,
+          "title": "Ordered",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "calls"
+      ],
+      "title": "ExpectedTools",
+      "type": "object"
+    },
+    "FailureClassification": {
+      "description": "The twelve MVP classifications (spec \u00a722).\n\nRow order here follows \u00a722's table, which explicitly \"carries no precedence\" -\nprimary-failure selection is by severity, then causal event sequence, then\nlexical check ID.",
+      "enum": [
+        "tool_execution_error",
+        "false_success_or_state_mismatch",
+        "idempotency_violation",
+        "missing_confirmation",
+        "assertion_mismatch",
+        "missing_expected_tool",
+        "unexpected_tool",
+        "trajectory_order_violation",
+        "observation_unavailable",
+        "undeclared_state_change",
+        "tool_surface_mutation",
+        "harness_error"
+      ],
+      "title": "FailureClassification",
+      "type": "string"
+    },
+    "ForbiddenToolPolicy": {
+      "additionalProperties": false,
+      "description": "\u00a79.5 / FR-065: any invocation start for this tool fails the policy.",
+      "properties": {
+        "tool": {
+          "$ref": "#/$defs/ToolName"
+        },
+        "type": {
+          "const": "forbidden_tool",
+          "default": "forbidden_tool",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tool"
+      ],
+      "title": "ForbiddenToolPolicy",
+      "type": "object"
+    },
+    "IdempotencyPolicy": {
+      "additionalProperties": false,
+      "description": "\u00a79.5 / FR-063: a repeated request ID may change state at most once.",
+      "properties": {
+        "tool": {
+          "$ref": "#/$defs/ToolName"
+        },
+        "type": {
+          "const": "idempotent_by_request_id",
+          "default": "idempotent_by_request_id",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tool"
+      ],
+      "title": "IdempotencyPolicy",
+      "type": "object"
+    },
+    "Identifier": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "JsonValue": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "integer"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "string"
+        },
+        {
+          "items": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "array"
+        },
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "LayerResult": {
+      "description": "Every value any layer may report (spec \u00a723.1).\n\nWhich subset a given layer may use is fixed by `ALLOWED_LAYER_RESULTS`; this\nenum is their union so one type can carry them all.",
+      "enum": [
+        "passed",
+        "passed_with_warnings",
+        "blocked_safely",
+        "failed",
+        "error",
+        "not_evaluated"
+      ],
+      "title": "LayerResult",
+      "type": "string"
+    },
+    "MaximumMutationsPolicy": {
+      "additionalProperties": false,
+      "description": "\u00a79.5 / FR-064: qualifying state-changing completions are capped.",
+      "properties": {
+        "limit": {
+          "minimum": 0,
+          "title": "Limit",
+          "type": "integer"
+        },
+        "type": {
+          "const": "maximum_mutations",
+          "default": "maximum_mutations",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "limit"
+      ],
+      "title": "MaximumMutationsPolicy",
+      "type": "object"
+    },
+    "NoUndeclaredChangesPolicy": {
+      "additionalProperties": false,
+      "description": "\u00a79.5 / \u00a79.10: no undeclared canonical state path may change.\n\nEvery `allow_paths` entry is a waiver, and \u00a723.1 requires each applied waiver\nto appear in the report, so they are modelled as first-class paths rather\nthan as free text.",
+      "properties": {
+        "allow_paths": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ContractPath"
+          },
+          "title": "Allow Paths",
+          "type": "array"
+        },
+        "type": {
+          "const": "no_undeclared_changes",
+          "default": "no_undeclared_changes",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "title": "NoUndeclaredChangesPolicy",
+      "type": "object"
+    },
+    "OutcomeContract": {
+      "additionalProperties": false,
+      "description": "One validated, immutable outcome contract (\u00a710).",
+      "properties": {
+        "assertions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Assertion"
+          },
+          "maxItems": 25,
+          "title": "Assertions",
+          "type": "array"
+        },
+        "description": {
+          "default": "",
+          "maxLength": 500,
+          "title": "Description",
+          "type": "string"
+        },
+        "expected_tools": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExpectedTools"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "intent": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Intent",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "policies": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Policy"
+          },
+          "maxItems": 10,
+          "title": "Policies",
+          "type": "array"
+        },
+        "preconditions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Precondition"
+          },
+          "maxItems": 25,
+          "title": "Preconditions",
+          "type": "array"
+        },
+        "redaction": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RedactionSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "schema_version": {
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "target_id": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Target Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "name",
+        "target_id",
+        "intent"
+      ],
+      "title": "OutcomeContract",
+      "type": "object"
+    },
+    "Policy": {
+      "discriminator": {
+        "mapping": {
+          "forbidden_tool": "#/$defs/ForbiddenToolPolicy",
+          "idempotent_by_request_id": "#/$defs/IdempotencyPolicy",
+          "maximum_mutations": "#/$defs/MaximumMutationsPolicy",
+          "no_undeclared_changes": "#/$defs/NoUndeclaredChangesPolicy",
+          "requires_confirmation": "#/$defs/RequiresConfirmationPolicy",
+          "stable_tool_surface": "#/$defs/StableToolSurfacePolicy"
+        },
+        "propertyName": "type"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/RequiresConfirmationPolicy"
+        },
+        {
+          "$ref": "#/$defs/IdempotencyPolicy"
+        },
+        {
+          "$ref": "#/$defs/MaximumMutationsPolicy"
+        },
+        {
+          "$ref": "#/$defs/ForbiddenToolPolicy"
+        },
+        {
+          "$ref": "#/$defs/NoUndeclaredChangesPolicy"
+        },
+        {
+          "$ref": "#/$defs/StableToolSurfacePolicy"
+        }
+      ]
+    },
+    "Precondition": {
+      "additionalProperties": false,
+      "description": "One check against the initial snapshot (\u00a79.4).\n\nTransition operators are refused here because a precondition sees only one\nsnapshot; `unchanged` against a single snapshot is trivially true and would\nread as a check that had passed.",
+      "properties": {
+        "operator": {
+          "$ref": "#/$defs/AssertionOperator"
+        },
+        "path": {
+          "$ref": "#/$defs/ContractPath"
+        },
+        "value": {
+          "$ref": "#/$defs/JsonValue",
+          "default": null
+        }
+      },
+      "required": [
+        "path",
+        "operator"
+      ],
+      "title": "Precondition",
+      "type": "object"
+    },
+    "RedactionGlob": {
+      "description": "Redaction glob pattern (\u00a720.3)",
+      "type": "string"
+    },
+    "RedactionSpec": {
+      "additionalProperties": false,
+      "description": "The contract's own `redaction` block (\u00a710.1, \u00a720.3).\n\nModelled as the nested object \u00a710.1 shows rather than as a flat list, so a\ncanonical document round-trips back through the validator unchanged - which\nis what makes the stored document verifiable against its own hash.",
+      "properties": {
+        "paths": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RedactionGlob"
+          },
+          "maxItems": 25,
+          "title": "Paths",
+          "type": "array"
+        }
+      },
+      "title": "RedactionSpec",
+      "type": "object"
+    },
+    "ReplayConfiguration": {
+      "additionalProperties": false,
+      "description": "How the case replays (\u00a724.1 `replay`, \u00a724.5).\n\n`default_environment` is `current` and \u00a724.4 forbids a generated case from\nsilently forcing the other \u2014 a case that defaulted to `reproduce_source`\nwould report a reproduced failure as routine CI success.",
+      "properties": {
+        "confirmation_strategy": {
+          "$ref": "#/$defs/ConfirmationStrategy",
+          "default": "no_confirmation"
+        },
+        "default_environment": {
+          "$ref": "#/$defs/EvalEnvironment",
+          "default": "current"
+        }
+      },
+      "title": "ReplayConfiguration",
+      "type": "object"
+    },
+    "RequiresConfirmationPolicy": {
+      "additionalProperties": false,
+      "description": "\u00a79.5 / FR-060: a successful protected mutation needs a prior approval.",
+      "properties": {
+        "timeout_seconds": {
+          "default": 60,
+          "maximum": 300,
+          "minimum": 10,
+          "title": "Timeout Seconds",
+          "type": "integer"
+        },
+        "tool": {
+          "$ref": "#/$defs/ToolName"
+        },
+        "type": {
+          "const": "requires_confirmation",
+          "default": "requires_confirmation",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tool"
+      ],
+      "title": "RequiresConfirmationPolicy",
+      "type": "object"
+    },
+    "SchemaVersion": {
+      "pattern": "^\\d+\\.\\d+$",
+      "type": "string"
+    },
+    "SourceFinding": {
+      "additionalProperties": false,
+      "description": "One finding the source run produced (\u00a724.1 `source_findings`).",
+      "properties": {
+        "actual": {
+          "$ref": "#/$defs/JsonValue",
+          "default": null
+        },
+        "check_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "classification": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FailureClassification"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "expected": {
+          "$ref": "#/$defs/JsonValue",
+          "default": null
+        },
+        "path": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path"
+        },
+        "severity": {
+          "$ref": "#/$defs/AssertionSeverity"
+        },
+        "status": {
+          "$ref": "#/$defs/CheckStatus"
+        }
+      },
+      "required": [
+        "check_id",
+        "severity",
+        "status"
+      ],
+      "title": "SourceFinding",
+      "type": "object"
+    },
+    "SourceProtocol": {
+      "description": "FR-081's source marker: how the source run reached the target.",
+      "enum": [
+        "webmcp"
+      ],
+      "title": "SourceProtocol",
+      "type": "string"
+    },
+    "StableToolSurfacePolicy": {
+      "additionalProperties": false,
+      "description": "\u00a79.5: the target tool surface may not change outside a declared delta.\n\nThe default set is \u00a79.5's: `added`, `removed`, `schema_change` and\n`hint_change` fail, while `description_change` is a warning \"because benign\ncopy edits should not fail a run\".",
+      "properties": {
+        "failing_delta_kinds": {
+          "default": [
+            "added",
+            "removed",
+            "schema_change",
+            "hint_change"
+          ],
+          "items": {
+            "$ref": "#/$defs/SurfaceDeltaKind"
+          },
+          "title": "Failing Delta Kinds",
+          "type": "array"
+        },
+        "type": {
+          "const": "stable_tool_surface",
+          "default": "stable_tool_surface",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "title": "StableToolSurfacePolicy",
+      "type": "object"
+    },
+    "SurfaceDelta": {
+      "additionalProperties": false,
+      "description": "One recorded change to the published tool surface (\u00a724.3a).",
+      "properties": {
+        "kind": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Kind",
+          "type": "string"
+        },
+        "partition": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Partition",
+          "type": "string"
+        },
+        "sequence": {
+          "minimum": 1,
+          "title": "Sequence",
+          "type": "integer"
+        },
+        "tool": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tool"
+        }
+      },
+      "required": [
+        "sequence",
+        "kind",
+        "partition"
+      ],
+      "title": "SurfaceDelta",
+      "type": "object"
+    },
+    "SurfaceDeltaKind": {
+      "description": "The delta kinds `stable_tool_surface` strictness selects from (spec \u00a79.5).\n\nRegistered here rather than in a tool-surface package because this is\n*contract configuration*: a contract author picks which kinds fail, and the\nengine must recognise the whole set from the start so a seeded policy is\nnever silently ignored. Detecting the deltas themselves is later work.",
+      "enum": [
+        "added",
+        "removed",
+        "schema_change",
+        "hint_change",
+        "description_change"
+      ],
+      "title": "SurfaceDeltaKind",
+      "type": "string"
+    },
+    "SurfaceEvidence": {
+      "additionalProperties": false,
+      "description": "\u00a724.3a's tool-surface baseline and deltas.\n\nRecorded because a headless replay cannot regenerate it: without this a\n`tool_surface_poisoned` case \"could never reproduce its own classification\nand would fail permanently\".",
+      "properties": {
+        "baseline": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Baseline",
+          "type": "array"
+        },
+        "deltas": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SurfaceDelta"
+          },
+          "title": "Deltas",
+          "type": "array"
+        }
+      },
+      "title": "SurfaceEvidence",
+      "type": "object"
+    },
+    "ToolName": {
+      "maxLength": 30,
+      "minLength": 1,
+      "type": "string"
+    },
+    "TrajectoryStep": {
+      "additionalProperties": false,
+      "description": "One replayed call (\u00a724.1 `trajectory`, FR-086).\n\nArguments only \u2014 no code, no URL, no shell. FR-086 makes that a safety\nproperty: a case is data a CI job executes, so anything executable in it\nwould be arbitrary code execution wearing a fixture's clothes.",
+      "properties": {
+        "arguments": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Arguments",
+          "type": "object"
+        },
+        "sequence": {
+          "minimum": 1,
+          "title": "Sequence",
+          "type": "integer"
+        },
+        "tool": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Tool",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sequence",
+        "tool"
+      ],
+      "title": "TrajectoryStep",
+      "type": "object"
+    }
+  },
+  "$id": "https://actionwitness.dev/schemas/regression-eval-case/1.0.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "\u00a724.1's case document.\n\nSelf-contained by construction (FR-082): the contract is embedded, the\nfixture is data, the trajectory is arguments, and nothing here references a\nrow, a credential, or a private package.",
+  "properties": {
+    "contract": {
+      "$ref": "#/$defs/EmbeddedContract"
+    },
+    "expected": {
+      "$ref": "#/$defs/EvalExpectations"
+    },
+    "fixture": {
+      "$ref": "#/$defs/EvalFixture"
+    },
+    "id": {
+      "$ref": "#/$defs/Identifier"
+    },
+    "name": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Name",
+      "type": "string"
+    },
+    "non_replayable_policies": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Non Replayable Policies",
+      "type": "array"
+    },
+    "replay": {
+      "$ref": "#/$defs/ReplayConfiguration"
+    },
+    "schema_version": {
+      "$ref": "#/$defs/SchemaVersion",
+      "default": "1.0"
+    },
+    "source": {
+      "$ref": "#/$defs/EvalSource"
+    },
+    "source_findings": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/SourceFinding"
+      },
+      "title": "Source Findings",
+      "type": "array"
+    },
+    "surface": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SurfaceEvidence"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "target": {
+      "$ref": "#/$defs/EvalTarget"
+    },
+    "trajectory": {
+      "items": {
+        "$ref": "#/$defs/TrajectoryStep"
+      },
+      "title": "Trajectory",
+      "type": "array"
+    }
+  },
+  "required": [
+    "id",
+    "name",
+    "source",
+    "target",
+    "fixture",
+    "trajectory",
+    "contract",
+    "expected"
+  ],
+  "title": "RegressionEvalCase",
+  "type": "object"
+}
