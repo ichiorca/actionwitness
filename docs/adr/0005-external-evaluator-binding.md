@@ -1,12 +1,11 @@
 # ADR-0005 — External evaluator version and binding
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-09-01
 - **Implementing change:** 008-evaluator-import (M7); consumed read-only by 010 (M9)
 
-> Drafted from live upstream verification (2026-09-01), not from memory. The
-> operator approves the pin by flipping this record to Accepted; 008's first
-> task consumes it.
+> Drafted from live upstream verification (2026-09-01), not from memory;
+> operator accepted the pin the same day. 008-T1 consumes this record.
 
 ## Context
 

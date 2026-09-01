@@ -23,7 +23,7 @@ closed.
 | [ADR-0002](0002-webmcp-lifecycle-package.md) | WebMCP lifecycle package | Accepted | M0 — pin: `use-webmcp-tool@0.2.0`; native split for cancellation-sensitive tools |
 | [ADR-0003](0003-sqlite-transaction-and-lock-model.md) | SQLite transaction and lock model | Accepted | M3 repositories |
 | [ADR-0004](0004-rfc-8785-canonicalization.md) | RFC 8785 canonicalization implementation | Accepted | M1 immutable records |
-| ADR-0005 | External evaluator version and binding | Not started | M7 |
+| [ADR-0005](0005-external-evaluator-binding.md) | External evaluator version and binding | Accepted | M7 — pin: `webmcp-evals@0.0.4` (`fe33c1b`); explicit binding, fail-closed on weak addressing |
 | ADR-0006 | Deployment composition | Not started | M8 |
 
 ADR-0001 through ADR-0004 are the M0 preflight set (`specs/001-preflight-baseline`).
