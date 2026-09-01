@@ -7,12 +7,11 @@
 | `POST` | `/runs/{run_id}/verify`                           | 005-T6 |
 | `GET`  | `/runs/{run_id}/comparison`                       | 005-T11 |
 | `GET`  | `/runs/{run_id}/events`                           | 005-T12 |
+| `GET`  | `/runs/{run_id}`                                  | 006-T4 |
+| `GET`  | `/runs/{run_id}/findings`                         | 006-T4 |
 | `GET`  | `/runs/{run_id}/report`                           | 005-T12 |
 | `POST` | `/runs/{run_id}/confirmations/{id}/decision`       | 006-T2 |
 | `DELETE` | `/runs/{run_id}/confirmations/{id}`             | 006-T2 |
-
-The run read arrives with the task that owns it and is deliberately absent
-rather than stubbed.
 
 `POST /runs/{run_id}/verify` wins FR-038's race, captures the final
 observation, evaluates the contract through the core, and seals the run. The
@@ -28,6 +27,7 @@ selected, which is also what `GET /workspace` reports.
 
 from __future__ import annotations
 
+import json
 from typing import Annotated, Any, Literal
 
 from actionwitness_core.reports.enums import RunMode
@@ -41,8 +41,16 @@ from actionwitness_service.api.dependencies import (
     RegistryDependency,
     WorkspaceDependency,
 )
+from actionwitness_service.application.authorization import WorkspaceScope
 from actionwitness_service.application.comparison_service import ComparisonService
+from actionwitness_service.application.confirmation_service import ConfirmationService
 from actionwitness_service.application.decision_service import Decision, DecisionService
+from actionwitness_service.application.findings_service import (
+    DEFAULT_FINDING_LIMIT,
+    MAX_FINDING_LIMIT,
+    FindingsProjection,
+)
+from actionwitness_service.application.guidance_service import current_guidance
 from actionwitness_service.application.invocation_service import InvocationService
 from actionwitness_service.application.report_service import ReportService
 from actionwitness_service.application.run_service import RunService
@@ -365,3 +373,72 @@ async def cancel_confirmation(
         "detail": outcome.detail,
         "next_action": outcome.next_action,
     }
+
+
+@router.get("/{run_id}")
+async def read_run(
+    run_id: RunId,
+    workspace_id: WorkspaceDependency,
+    database: DatabaseDependency,
+    locks: LocksDependency,
+) -> dict[str, Any]:
+    """§15.3: "Get run status and summary".
+
+    The summary a client needs to decide what to do next — not the report, which
+    has its own endpoint and its own hash. Two differently shaped views of one
+    verdict would give a reader two places to read it from and no way to know
+    which was authoritative when they disagreed.
+    """
+    # §14.14: a request nobody answered is expired by the server. Done on the
+    # read a client polls, because otherwise the run waits on a decision that
+    # can never arrive and only a reset — which discards the evidence — frees
+    # it. A no-op when nothing has lapsed.
+    await DecisionService(database, locks).expire_lapsed(workspace_id, run_id)
+
+    async with database.reading() as work:
+        run = await WorkspaceScope(work, workspace_id).run(run_id)
+        pending = await ConfirmationService(work, workspace_id).pending_for_run(run_id)
+        guidance = await current_guidance(work, workspace_id)
+    return {
+        "run_id": str(run["id"]),
+        "status": str(run["status"]),
+        "overall_result": run["overall_result"],
+        "contract_id": run["contract_id"],
+        "target_id": str(run["target_id"]),
+        "adapter_id": str(run["target_adapter_id"]),
+        "scenario_mode": run["scenario_mode"],
+        "failure_profile": run["failure_profile"],
+        "comparison_source_run_id": run["comparison_source_run_id"],
+        "comparison_key_hash": run["comparison_key_hash"],
+        "started_at": str(run["started_at"]),
+        "completed_at": run["completed_at"],
+        # Present only while a human is being waited on, so a client that
+        # reloaded mid-decision can rebuild the dialog rather than losing it.
+        "pending_confirmation": (
+            None
+            if pending is None
+            else {
+                "confirmation_id": str(pending["id"]),
+                "tool_name": str(pending["tool_name"]),
+                "expires_at": str(pending["expires_at"]),
+                "consequence": json.loads(pending["consequence_summary_json"]),
+            }
+        ),
+        "next_action": guidance.next_action(),
+    }
+
+
+@router.get("/{run_id}/findings")
+async def read_findings(
+    run_id: RunId,
+    workspace_id: WorkspaceDependency,
+    database: DatabaseDependency,
+    limit: Annotated[int, Query(ge=1, le=MAX_FINDING_LIMIT)] = DEFAULT_FINDING_LIMIT,
+) -> dict[str, Any]:
+    """§11.4's bounded findings, for `get_run_findings` and the findings panel.
+
+    Bounded server-side. §23.3's budget is a rule about what the harness owes an
+    agent, and a client that applied it itself could simply not.
+    """
+    async with database.reading() as work:
+        return await FindingsProjection(work, workspace_id).read(run_id, limit=limit)

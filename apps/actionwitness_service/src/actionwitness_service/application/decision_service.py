@@ -162,6 +162,43 @@ class DecisionService:
 
         return await self._approve(workspace_id, run_id, request)
 
+    async def expire_lapsed(self, workspace_id: str, run_id: str) -> str | None:
+        """Resolve a request whose window closed with nobody acting on it.
+
+        §14.14: a closing tab cancels its request when it can, "otherwise the
+        server expires it". Without this a run waits on a decision that can
+        never arrive — verification is blocked by the in-flight invocation, and
+        the only way out is a reset, which also throws away the evidence.
+
+        Called from the reads a client polls rather than from a sweeper. The
+        hourly cleaner is three orders of magnitude slower than a 60-second
+        expiry, and a dedicated timer would be a second scheduler to own; the
+        polling client is already asking the question this answers.
+
+        Returns the expired request's id, or `None` when there was nothing to
+        expire — which is the common case, so it costs one indexed read.
+        """
+        async with self._database.reading() as work:
+            pending = await ConfirmationService(work, workspace_id).pending_for_run(run_id)
+        if pending is None or not self._lapsed(pending):
+            return None
+
+        try:
+            outcome = await self._refuse(
+                workspace_id,
+                run_id,
+                pending,
+                status=ConfirmationStatus.EXPIRED,
+                event=OutcomeEventType.CONFIRMATION_EXPIRED,
+                detail="This request expired before it was decided. Nothing was changed.",
+            )
+        except ApiError:
+            # Someone decided it between the read and the write. Their decision
+            # stands; expiring on top of it would overwrite a real answer with
+            # a timeout.
+            return None
+        return outcome.confirmation_id
+
     # -- reads ---------------------------------------------------------------
 
     async def _pending(
