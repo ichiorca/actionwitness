@@ -36,6 +36,10 @@ from actionwitness_core.security.canonical import content_hash
 from actionwitness_service.api.errors import ApiError, ApiErrorCode
 from actionwitness_service.application.adapter_registry import AdapterRegistry, TargetUnavailable
 from actionwitness_service.application.authorization import WorkspaceScope
+from actionwitness_service.application.guidance_service import (
+    GuidanceRecorder,
+    current_guidance,
+)
 from actionwitness_service.persistence.database import UnitOfWork
 from actionwitness_service.persistence.repositories import ContractRepository
 
@@ -171,6 +175,16 @@ class ContractService:
         await self._work.execute(
             "UPDATE workspaces SET selected_contract_id = ?, selected_target_id = ? WHERE id = ?",
             (contract_id, target_id, self._workspace_id),
+        )
+
+        # FR-122 / AC-21: the action history records each handoff. Selecting a
+        # contract moves the workspace from `no_contract` to `contract_ready`
+        # — a change of both phase and available action — and a history that
+        # began at the first tool call would leave a reader unable to see when
+        # the operator handed the journey to the agent. `transition` is a no-op
+        # when the phase has not actually moved.
+        await GuidanceRecorder(self._work, self._workspace_id).transition(
+            await current_guidance(self._work, self._workspace_id)
         )
         return {"selected_contract_id": contract_id, "selected_target_id": target_id}
 

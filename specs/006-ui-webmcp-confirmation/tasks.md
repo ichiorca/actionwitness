@@ -41,10 +41,10 @@ Cite the T-ID in every commit that advances it.
 - [x] T11 — `ConfirmationDialog`: focus trap and restoration, no preselected
       approval, `aria-live` handoffs, a text alternative for every status, and
       the read-only "confirmation pending in another tab" banner.
-- [ ] T12 — Journey B end to end: the agent calls `proceed_to_checkout`, the
+- [x] T12 — Journey B end to end: the agent calls `proceed_to_checkout`, the
       dialog appears, the tool promise stays pending, a human approves once, and
       verification confirms the order was created only after the approval event.
-- [ ] T13 — The Tier 1 gate: exit criteria 1–5, the single action code shared by
+- [x] T13 — The Tier 1 gate: exit criteria 1–5, the single action code shared by
       banner, enabled controls, native status result, tool `next_action`, and
       action history, and AC-01/03/04/06/09/11/19/20/21. Extend the architecture
       lane's exit-gate traceability map to 006.

@@ -83,6 +83,9 @@ async def _invoke(visitor: httpx.AsyncClient, run_id: str, tool: str, arguments:
     )
 
 
+#: Every expected sequence below begins with `contract_ready`: selecting a
+#: contract hands the journey from the operator to the agent, and AC-21 records
+#: each handoff. Arming is the second transition, not the first.
 async def _guidance_phases(app: FastAPI, workspace_id: str) -> list[str]:
     database: Database = app.state.database
     async with database.reading() as work:
@@ -115,7 +118,12 @@ async def test_guidance_follows_the_run_through_its_handoffs(stack: FastAPI) -> 
         await visitor.post(f"{RUNS}/{run_id}/verify")
 
     # Assert
-    assert await _guidance_phases(stack, workspace_id) == ["armed", "running", "failed"]
+    assert await _guidance_phases(stack, workspace_id) == [
+        "contract_ready",
+        "armed",
+        "running",
+        "failed",
+    ]
 
 
 async def test_repeating_an_action_records_no_second_transition(
@@ -142,7 +150,7 @@ async def test_repeating_an_action_records_no_second_transition(
             )
 
     # Assert
-    assert await _guidance_phases(stack, workspace_id) == ["armed", "running"]
+    assert await _guidance_phases(stack, workspace_id) == ["contract_ready", "armed", "running"]
 
 
 async def test_selecting_a_contract_before_arming_moves_guidance(
@@ -273,7 +281,7 @@ async def test_guidance_is_derived_after_the_state_change_not_before(
         await visitor.post(RUNS)
 
     # Assert
-    assert await _guidance_phases(stack, workspace_id) == ["armed"]
+    assert await _guidance_phases(stack, workspace_id) == ["contract_ready", "armed"]
 
 
 # --- isolation ---------------------------------------------------------------
@@ -288,7 +296,7 @@ async def test_guidance_is_per_workspace(stack: FastAPI) -> None:
         await alice.post(RUNS)
 
     # Assert
-    assert await _guidance_phases(stack, alice_workspace) == ["armed"]
+    assert await _guidance_phases(stack, alice_workspace) == ["contract_ready", "armed"]
     assert await _guidance_phases(stack, bob_workspace) == []
 
 

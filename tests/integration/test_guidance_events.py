@@ -84,8 +84,10 @@ async def test_arming_records_a_guidance_event_in_the_workspace_stream(
     # Assert
     async with database.reading() as work:
         rows = await work.fetch_all("SELECT * FROM guidance_events ORDER BY workspace_version")
-    assert len(rows) == 1
-    row = rows[0]
+    # Two: selecting the contract is itself a handoff and records one (AC-21),
+    # and arming records the second. This test is about the arming row.
+    assert len(rows) == 2
+    row = rows[-1]
     assert row["run_id"] == run_id
     assert row["phase"] == "armed"
     assert row["active_actor"] == "agent"
@@ -174,8 +176,8 @@ async def test_a_later_transition_appends_rather_than_editing(stack: FastAPI) ->
             "WHERE workspace_id = ? ORDER BY workspace_version",
             (workspace_id,),
         )
-    assert [row["phase"] for row in rows] == ["armed", "running"]
-    assert [row["workspace_version"] for row in rows] == [1, 2]
+    assert [row["phase"] for row in rows] == ["contract_ready", "armed", "running"]
+    assert [row["workspace_version"] for row in rows] == [1, 2, 3]
 
 
 async def test_workspace_version_is_monotonic_within_a_workspace(
@@ -223,8 +225,10 @@ async def test_two_workspaces_number_their_guidance_independently(
     # Assert
     async with database.reading() as work:
         rows = await work.fetch_all("SELECT workspace_id, workspace_version FROM guidance_events")
-    assert len(rows) == 2
-    assert {row["workspace_version"] for row in rows} == {1}
+    # Two workspaces, two transitions each (contract selection, then arming),
+    # and each numbered from one — which is the property under test.
+    assert len(rows) == 4
+    assert {row["workspace_version"] for row in rows} == {1, 2}
     assert len({row["workspace_id"] for row in rows}) == 2
 
 

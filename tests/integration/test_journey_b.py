@@ -72,21 +72,18 @@ def client(app: FastAPI) -> httpx.AsyncClient:
 
 
 async def _checkout_contract(visitor: httpx.AsyncClient) -> str:
-    """Step 1: the contract whose policy protects checkout."""
+    """Select the contract whose journey *is* a confirmed checkout.
+
+    Selected by `source_template_id`, not by "has a confirmation policy": the
+    canonical SAVE20 template carries one too, so a looser match picks a
+    contract that expects a discount and forbids an order — and the run then
+    fails for reasons that have nothing to do with consent.
+    """
     templates = (await visitor.get(f"{CONTRACTS}/templates")).json()["templates"]
-    for template in templates:
-        document = (await visitor.get(f"{CONTRACTS}/{template['contract_id']}")).json()
-        policies = document.get("document", document).get("policies") or []
-        if any(
-            policy.get("type") == "requires_confirmation"
-            and policy.get("tool") == "proceed_to_checkout"
-            for policy in policies
-        ):
-            assert (
-                await visitor.post(f"{CONTRACTS}/{template['contract_id']}/select")
-            ).status_code == 200
-            return str(template["contract_id"])
-    raise AssertionError("no built-in template protects proceed_to_checkout")
+    chosen = next(t for t in templates if t["source_template_id"] == "confirmed_checkout_only")
+    selected = await visitor.post(f"{CONTRACTS}/{chosen['contract_id']}/select")
+    assert selected.status_code == 200, selected.text
+    return str(chosen["contract_id"])
 
 
 async def _prepared(visitor: httpx.AsyncClient) -> tuple[str, str]:

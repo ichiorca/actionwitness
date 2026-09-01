@@ -215,3 +215,84 @@ first exercise of the store's `/store/checkout` path through the harness, of the
 `requires_confirmation` policy in a real evaluation, and of a contract whose
 `expected_tools` includes `proceed_to_checkout`. Expect the first genuine
 integration surprises there rather than in T1–T3.
+
+---
+
+## Implementation ledger
+
+### Decisions taken under the standing assumptions
+
+The operator authorised implementing the whole spec without answering the
+pre-T1 question first, so both recommended options were taken:
+
+1. **Browser criteria are operator-attested.** `docs/tier-1-gate-checklist.md`
+   carries criteria 1 and 2 and AC-01, matching the carve-out BUILD_ORDER
+   already makes for AC-10. The architecture gate that forbids covering an
+   exit-gate criterion from an opt-in lane was **not** weakened; the map points
+   criterion 1 at a test that fails if the checklist disappears.
+2. **The frontend lint and type-check gates were added** (T5), and the
+   architecture lane now asserts both. The gate found three real problems on
+   its first run.
+
+### `ExecutionContext.human_consent_granted` — a public protocol addition
+
+The harness states *that* a human authorised an invocation; the adapter decides
+what its target needs to honour it. Passing a target's own confirmation
+identifier through the harness would put one target's consent mechanism in a
+field every other target has to understand (§9.1).
+
+Additive with a `False` default, so it is backward compatible and fails closed —
+but it is still a change to a public core protocol, which the escalation
+contract reserves for the operator. **Flagged for review.**
+
+### §14.7's "same transaction" spans two systems
+
+The specification asks approval revalidation, consumption, and order creation to
+be atomic. Creating the order is remote I/O, and ADR-0003 forbids holding a
+transaction across a wait — the same tension 005 resolved for FR-030.
+
+Resolved the same way: the *target's* transaction makes "no order without a
+spent confirmation" true on its side, this service's transaction makes "no
+consumed approval without a recorded decision" true here, and the stable
+idempotency key joins them so a retry replays the original order. The decision
+is recorded **before** any mutation, and consumption happens **after** the
+mutation is known to have landed.
+
+### The resumed invocation reuses its start event
+
+§14.14 has the invoking page call back after the decision, so a protected action
+is one invocation in two requests. The second reuses the first's correlation id,
+request id, **and start event** — §10.3 builds the observed trajectory from
+start events, so writing a second would make one logical action appear twice and
+fail a contract that expected the journey actually performed. Caught by T13's
+gate rather than by reasoning; it had already shipped in T2.
+
+### Contract selection now records a guidance transition
+
+AC-21's last bullet asks the action history to record each handoff. Selecting a
+contract moves the workspace from `no_contract` to `contract_ready` — a change
+of both phase and active actor — and nothing recorded it, so the history began
+at the first tool call.
+
+This changed seven of 005's guidance tests, all of which asserted *when the
+stream begins* rather than what arming records. Their substantive claims were
+preserved and their premises corrected; no assertion was weakened.
+
+### Four §11.1 tools remain out of scope
+
+`create_outcome_contract` (declarative form → 012), `create_regression_eval` and
+`run_regression_eval` (→ 007), `propose_assertions` (proposal mode, still an
+open 005 decision). Named in `harnessTools.ts` so the absence reads as a
+decision. **If the operator reads M5 as requiring all eleven, T7 grows.**
+
+### Carried forward, still open
+
+- **`runs.fault_active` is never populated**, and `ComparisonPanel` will render
+  it. Now visible to a user rather than only to a test.
+- **FR-039's lease enforcement surface** — `require_no_lease()` still has no
+  production caller.
+- **The store frontend declares no lint.** Its required-script list is separate
+  so the gap is named rather than excused; belongs to the hardening milestone.
+- **`ComparisonPanel` is wired with placeholder props** in `App.tsx`. The panel
+  and its tests are complete; fetching `GET /runs/{id}/comparison` into it is a
+  small follow-up, and it is listed here rather than left to be discovered.

@@ -208,20 +208,140 @@ EXIT_GATE_005: dict[str, tuple[str, str]] = {
     ),
 }
 
-MAPS = {"003": EXIT_GATE_003, "004": EXIT_GATE_004, "005": EXIT_GATE_005}
+#: Spec 006's exit gate, in the spec's own words.
+#:
+#: Criteria 1 and 2 are about a *real browser*, and no automated test in this
+#: repository can discharge them: the browser lane is opt-in, and the gate below
+#: forbids covering an exit-gate criterion from an opt-in lane. They are
+#: operator-attested against `docs/tier-1-gate-checklist.md`, whose existence is
+#: asserted — a deleted checklist would leave two criteria covered by nothing
+#: while this map still looked complete.
+#:
+#: The server half of criterion 2 *is* automated and is named here: the human
+#: path needs no tool, because the tools drive the endpoints the page does.
+EXIT_GATE_006: dict[str, tuple[str, str]] = {
+    "1. a compatible browser completes Journeys A and B through real WebMCP tools "
+    "(OPERATOR-ATTESTED: docs/tier-1-gate-checklist.md)": (
+        "tests/architecture/test_exit_gate_traceability.py",
+        "test_the_operator_checklist_covers_the_browser_criteria",
+    ),
+    "2a. an unsupported browser completes the manual equivalent — the journey "
+    "needs no browser agent": (
+        "tests/integration/test_006_exit_gate.py",
+        "test_gate_2_the_whole_journey_needs_no_browser_agent",
+    ),
+    "2b. …and shows setup guidance before anything is configured": (
+        "tests/integration/test_006_exit_gate.py",
+        "test_gate_2_guidance_is_present_before_anything_is_configured",
+    ),
+    "3a. banner, controls, status result, tool `next_action`, and action history "
+    "share one action code at every transition": (
+        "tests/integration/test_006_exit_gate.py",
+        "test_gate_3_every_surface_names_one_action_code_through_journey_b",
+    ),
+    "3b. the handoff to the human names exactly one actor": (
+        "tests/integration/test_006_exit_gate.py",
+        "test_gate_3_the_handoff_to_the_human_names_exactly_one_actor",
+    ),
+    "4a. no order exists before approval": (
+        "tests/integration/test_journey_b.py",
+        "test_journey_b_creates_the_order_only_after_the_approval",
+    ),
+    "4b. the approval is consumed exactly once": (
+        "tests/integration/test_journey_b.py",
+        "test_one_approval_produces_exactly_one_order",
+    ),
+    "4c. denial, expiry, and cancellation create no order": (
+        "tests/integration/test_006_exit_gate.py",
+        "test_gate_4_a_refused_action_creates_no_order",
+    ),
+    "5a. StrictMode double-mount leaves exactly one registration": (
+        "apps/actionwitness_service/frontend/src/webmcp/adapter.test.ts",
+        "leaves exactly one live tool under StrictMode's double mount",
+    ),
+    "5b. registration cleanup on unmount": (
+        "apps/actionwitness_service/frontend/src/webmcp/adapter.test.ts",
+        "unregisters on unmount, so a closed panel leaves no callable tool",
+    ),
+    "5c. polling does not stop on an empty page": (
+        "apps/actionwitness_service/frontend/src/state/useRunTimeline.test.ts",
+        "keeps polling after an empty page while the run is live",
+    ),
+    "5d. error normalization returns isError rather than rejecting": (
+        "apps/actionwitness_service/frontend/src/webmcp/adapter.test.ts",
+        "normalizes a thrown handler into isError rather than rejecting",
+    ),
+    "5e. refresh rebuilds a pending confirmation": (
+        "tests/integration/test_run_read_and_findings.py",
+        "test_a_refreshing_client_can_rebuild_a_pending_dialog",
+    ),
+    "5f. accessibility — no preselected approval, focus trapped and restored": (
+        "apps/actionwitness_service/frontend/src/components/panels.test.tsx",
+        "preselects neither choice",
+    ),
+    "6a. AC-06 — an order exists only behind an approval consumed once": (
+        "tests/integration/test_journey_b.py",
+        "test_the_consent_policy_passes_on_the_approved_journey",
+    ),
+    "6b. AC-09 — the workspace stays usable without WebMCP": (
+        "apps/actionwitness_service/frontend/src/components/panels.test.tsx",
+        "reports a browser without WebMCP as a fact, not a failure",
+    ),
+    "6c. AC-21 — guidance names one actor and one next action at each handoff": (
+        "tests/integration/test_journey_b.py",
+        "test_the_guidance_names_the_human_then_hands_back",
+    ),
+    # AC-01 defers to M8 with AC-10, which BUILD_ORDER already schedules there;
+    # AC-03/04/11/19/20 are 005's gate and are mapped above.
+}
+
+MAPS = {
+    "003": EXIT_GATE_003,
+    "004": EXIT_GATE_004,
+    "005": EXIT_GATE_005,
+    "006": EXIT_GATE_006,
+}
 
 
 def _defines(path: Path, function: str) -> bool:
-    """Whether `path` defines a top-level function named `function`.
+    """Whether `path` defines the named test.
 
-    Parsed rather than string-searched: a mention in a docstring or a comment is
-    not coverage, and `assert "def name" in source` would accept both.
+    Python is parsed rather than string-searched: a mention in a docstring or a
+    comment is not coverage, and `assert "def name" in source` would accept
+    both.
+
+    TypeScript cannot be parsed here — the Python lane has no Node toolchain —
+    so a vitest case is matched by its `it("…")` title, which is the name a
+    reader would search for anyway. Weaker than the AST check, and worth being
+    explicit about: what it still catches is a renamed or deleted test quietly
+    ceasing to cover a criterion, which is the failure this gate exists for.
     """
-    tree = ast.parse(path.read_text(encoding="utf-8"))
+    source = path.read_text(encoding="utf-8")
+    if path.suffix in {".ts", ".tsx"}:
+        return f'it("{function}"' in source
+    tree = ast.parse(source)
     return any(
         isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == function
         for node in tree.body
     )
+
+
+CHECKLIST = REPO_ROOT / "docs" / "tier-1-gate-checklist.md"
+
+
+@pytest.mark.architecture
+def test_the_operator_checklist_covers_the_browser_criteria() -> None:
+    """006's criteria 1 and 2 are operator-attested, so the checklist *is* the
+    coverage — and a deleted checklist would leave them covered by nothing while
+    the map above still looked complete.
+
+    Named as criterion 1's covering "test" deliberately: a map should point at
+    something that fails when the coverage disappears, and this does.
+    """
+    assert CHECKLIST.is_file(), "the Tier 1 operator checklist is missing"
+    text = CHECKLIST.read_text(encoding="utf-8")
+    for required in ("Journeys A and B", "unsupported browser", "Attested by:", "no order"):
+        assert required in text, f"the checklist no longer covers {required!r}"
 
 
 @pytest.mark.architecture
@@ -236,19 +356,27 @@ def test_every_exit_gate_criterion_names_a_covering_test(milestone: str) -> None
     assert not missing, "exit-gate criteria without a covering test:\n" + "\n".join(missing)
 
 
+#: How many criteria each spec publishes. Stated per milestone rather than
+#: assumed: 003–005 list five, and 006 lists six because the Tier 1 gate is a
+#: criterion in its own right. A shared constant would have to be loosened to
+#: admit 006, and loosening it is exactly how a dropped criterion gets through.
+PUBLISHED_CRITERIA: dict[str, int] = {"003": 5, "004": 5, "005": 5, "006": 6}
+
+
 @pytest.mark.architecture
 @pytest.mark.parametrize("milestone", sorted(MAPS))
-def test_each_map_covers_all_five_published_criteria(milestone: str) -> None:
-    """Every milestone lists five criteria; these maps split some into parts.
+def test_each_map_covers_every_published_criterion(milestone: str) -> None:
+    """These maps split some criteria into parts; none may be missing entirely.
 
     Checked by leading number rather than by count, so splitting criterion 5
     into nine entries stays honest while dropping criterion 3 entirely does not.
     """
+    expected = {str(number) for number in range(1, PUBLISHED_CRITERIA[milestone] + 1)}
     covered = {
         re.match(r"\d+", criterion.split(".")[0])[0]  # type: ignore[index]
         for criterion in MAPS[milestone]
     }
-    assert covered == {"1", "2", "3", "4", "5"}
+    assert covered == expected
 
 
 @pytest.mark.architecture

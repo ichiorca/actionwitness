@@ -214,20 +214,29 @@ class InvocationService:
             return await self._stale_approval(workspace_id, run_id, approved, before=before)
 
         # 3 — reserve, transition, and record the start (FR-031, FR-008).
-        started_sequence, pending = await self._start_or_trip(
-            workspace_id,
-            run_id,
-            spec,
-            invocation_id=invocation_id,
-            correlation_id=correlation_id,
-            request_id=request_id,
-            tool_identity_hash=tool_identity_hash,
-            before=before,
-            policy=policy,
-            arguments=checked,
-            verification_reservation=reservation,
-            requirement=None if approved is not None else requirement,
-        )
+        if approved is not None:
+            # **No second start event.** This is the *same* invocation, paused
+            # for consent and now resumed — §10.3 builds the observed
+            # trajectory from start events, so writing another would make one
+            # logical action appear twice and fail a contract that expected the
+            # journey it actually performed.
+            started_sequence = await self._resumed_start(run_id, correlation_id)
+            pending = None
+        else:
+            started_sequence, pending = await self._start_or_trip(
+                workspace_id,
+                run_id,
+                spec,
+                invocation_id=invocation_id,
+                correlation_id=correlation_id,
+                request_id=request_id,
+                tool_identity_hash=tool_identity_hash,
+                before=before,
+                policy=policy,
+                arguments=checked,
+                verification_reservation=reservation,
+                requirement=requirement,
+            )
 
         # A protected action stops here. Nothing is dispatched, so no mutation
         # can precede the consent that authorizes it — which is the property
@@ -550,6 +559,28 @@ class InvocationService:
                 "correlation_id": correlation_id,
                 "tool_name": spec.name,
             }
+
+    async def _resumed_start(self, run_id: str, correlation_id: str) -> int:
+        """The sequence of the start event this invocation already wrote.
+
+        A paused invocation recorded its start before asking for consent, so
+        the resumed half is a continuation rather than a new call. Reusing that
+        sequence keeps the timeline's one-start-one-terminal shape intact.
+        """
+        async with self._database.reading() as work:
+            row = await work.fetch_one(
+                "SELECT sequence_number FROM events WHERE run_id = ? AND correlation_id = ? "
+                "AND event_type = ? ORDER BY sequence_number LIMIT 1",
+                (
+                    run_id,
+                    correlation_id,
+                    str(OutcomeEventType.TOOL_INVOCATION_STARTED.value),
+                ),
+            )
+        # Zero rather than a guess if it is somehow missing: the terminal event
+        # records it as "started at", and inventing a sequence would point a
+        # reader at an event that never happened.
+        return int(row["sequence_number"]) if row else 0
 
     async def _live_approval(
         self, work: UnitOfWork, workspace_id: str, run_id: str, tool_name: str
