@@ -331,3 +331,38 @@ exercised via synthetic events/keys and are inconclusive under automation;
 both are asserted by unit tests and should be confirmed by hand in the
 criterion 2 run. Criterion 2 (no-WebMCP browser) remains open; AC-01 stays
 deferred to M8 per the checklist.
+
+## Tier 1 gate — criterion 2 run (2026-09-01, flag disabled, Claude-driven)
+
+WebMCP absent (both API locations undefined). All four boxes exercised; box 4
+carries a qualification and one queued operator decision:
+
+- The capability bar degrades exactly as required — informational, names the
+  manual path, reads as guidance rather than an error. Workspace state
+  survived the browser identity swap via the cookie.
+- Manual Journey A: harness lifecycle by page buttons; shopping via the
+  standalone storefront joined to the observed workspace (its localStorage
+  identity key); the human can SEE the fault in the storefront (SAVE20
+  applied, Discount: None, total unchanged). Verification through the
+  recorded route reproduces the identical verdict:
+  false_success_or_state_mismatch, expected 20.00 / observed 25.00.
+- Manual Journey B: checkout via the FR-126 developer control; the full §14
+  lifecycle in one timeline - confirmation_expired → tool_invocation_cancelled
+  (a safe block, run not failed), re-request, approved before completed,
+  order created, verify passed with tool_execution blocked_safely.
+- **Finding (queued decision): an ownerless confirmation cannot be decided in
+  the UI.** The dialog's non-owned branch says "pending in another tab —
+  answer it there", which is correct when a tool-invoking tab owns the wait
+  and factually wrong when nothing does (pure-manual/dev-control world): no
+  tab shows decision buttons, and the §14.14 message misdirects. The decision
+  endpoint (FR-126) covers the letter; whether the dialog should offer a
+  decide-here affordance when no local waiter exists — accepting that a
+  cross-tab owner cannot be detected client-side — is an operator call,
+  likely alongside 007+ work. Also noted: out-of-band mutations leave the
+  banner stale until refresh (server stays authoritative; the designed
+  posture), and guidance still says "Use the target's tools" in a browser
+  that has none — wording could acknowledge the manual path.
+
+Criterion 1 + criterion 2 attested; AC-01 deferred to M8 by the checklist's
+own design. The Tier 1 gate is closed to the extent the checklist allows
+before deployment.

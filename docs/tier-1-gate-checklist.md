@@ -85,7 +85,25 @@ off.
 - [ ] The confirmation dialog appears, is operable by keyboard, and the decision
       records — the human path does not depend on a tool being registered.
 
-Attested by: ______________________  Date: ____________  Build: ____________
+Attested by: operator (Claude-driven session, operator-directed; see the 006
+plan's criterion 2 entry for the box-4 qualification and one queued decision)
+Date: 2026-09-01  Build: Chrome 151.0.0.0 stable, `#enable-webmcp-testing`
+**Disabled** (document.modelContext and navigator.modelContext both absent)
+
+### Manual target actions — the FR-126 documented developer control
+
+The harness lifecycle (configure, arm, verify, decide, reset) has visible
+buttons. Target actions have two manual equivalents: the standalone storefront
+(share the workspace by setting its `buggy-store.workspace-id` localStorage key
+to the harness workspace id), and the recorded invocation route itself — the
+same FastAPI operation every tool uses:
+
+    POST /api/v1/runs/{run_id}/target-tools/{tool}:invoke   {"arguments": {...}}
+    POST /api/v1/runs/{run_id}/confirmations/{id}/decision  {"decision": "approve_once" | "deny"}
+
+A confirmation raised this way is owned by no tab: the dialog renders its
+read-only branch, and the decision goes through the endpoint above. A resumed
+protected action repeats the same tool call with the same request_id.
 
 ## AC-01 — working live application
 
