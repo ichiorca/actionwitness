@@ -250,3 +250,45 @@ So a test constructs the real application rather than a lookalike, and so
 clock resolution is coarse enough that two adjacent requests can otherwise share
 a timestamp. Passing none of them reads `os.environ` once, in the composition
 root and nowhere else.
+
+### T6 — the workspace goes in the `WHERE` clause, not in a post-fetch comparison
+
+FR-006 says "even when its identifier is known", and the fetch-then-compare
+pattern satisfies that until one handler forgets the comparison — a forgetting
+that is invisible in review, because the code that fetches looks complete. So
+`WorkspaceScope` puts the workspace in the query: another workspace's row does
+not resolve, and there is no fetched row for a handler to mishandle. The table
+name is checked against a frozen set before interpolation, because SQLite
+cannot bind an identifier and a caller-supplied table name would be an
+injection point.
+
+### T6 — the refusal is 404, and byte-identical to a genuinely missing resource
+
+A 403 would confirm that the identifier names something real, which is the one
+fact FR-006 protects. "Someone else's" and "never existed" therefore share a
+status *and a message*: a wording difference is a working oracle, and that is
+how this kind of leak usually survives review. A test compares the two response
+bodies rather than only their statuses.
+
+### T6 — the §15.8 exception handler landed here rather than in T7
+
+T7 owns `Origin` validation and the `CoreError` → HTTP mapping. The handler
+that turns a raised `ApiError` into §15.8's envelope arrived one task early
+because without it a refusal cannot reach a client at all, and T6's tests are
+required to be two-client HTTP tests. T7 extends the same handler.
+
+### T6 — the four resource kinds are exercised through a test-mounted probe router
+
+§15's routes for runs, confirmations, and artifacts belong to M4 and M5.
+Inventing them here to have something to authorize would canonise route shapes
+a later milestone owns. Instead the tests mount a probe router on the **real**
+application: the cookie middleware, `WorkspaceDependency`, `WorkspaceScope`, the
+`ApiError` handler, and the envelope are all production code, and only the leaf
+handler belongs to the test. When the real routes arrive they call the same
+scope, and T13's exit gate re-checks isolation across whatever is mounted then.
+
+### T6 — no request-scoped `UnitOfWork` dependency
+
+A transaction opened as a FastAPI dependency lives for the whole request,
+including any I/O the handler performs — exactly the "held across a wait" that
+ADR-0003 forbids. Handlers open their own around the work and nothing else.

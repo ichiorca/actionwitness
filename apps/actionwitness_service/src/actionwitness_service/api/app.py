@@ -19,8 +19,10 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
+from actionwitness_service.api.errors import ApiError
 from actionwitness_service.api.middleware import WorkspaceCookieMiddleware
 from actionwitness_service.application.workspaces import WorkspaceStore
 from actionwitness_service.config import ServiceSettings
@@ -63,6 +65,18 @@ def create_app(
         store=workspaces,
         secure=settings.harness.secure_cookies,
     )
+
+    @app.exception_handler(ApiError)
+    async def deliberate_refusal(request: Request, exc: ApiError) -> JSONResponse:
+        """Every refusal reaches the client as §15.8's one envelope.
+
+        Registered here rather than left to each handler, because a handler
+        that has to remember to build an envelope will eventually forget and
+        the forgotten path becomes a 200 with a half-built body. The status and
+        `retryable` both come from the code's registry entry, so a call site
+        cannot widen either.
+        """
+        return JSONResponse(status_code=exc.http_status, content=exc.as_envelope())
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:  # spec §29.1
