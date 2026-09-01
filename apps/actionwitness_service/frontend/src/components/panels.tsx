@@ -359,3 +359,89 @@ const TERMINAL = ["passed", "passed_with_warnings", "failed", "error", "cancelle
 function isTerminal(status: string): boolean {
   return TERMINAL.includes(status);
 }
+
+export interface EvalCaseSummary {
+  readonly evalCaseId: string;
+  readonly name: string;
+  readonly contentHash: string;
+  readonly latestStatus: string | null;
+  readonly latestOutcome: string | null;
+  readonly latestEnvironment: string | null;
+}
+
+export interface EvalPanelProps {
+  readonly cases: readonly EvalCaseSummary[];
+  readonly busy: boolean;
+  readonly canCreate: boolean;
+  readonly onCreate: () => void;
+  readonly onReplay: (evalCaseId: string, environment: string) => void;
+}
+
+/**
+ * Regression eval cases and their last replay (§24, 007-T11).
+ *
+ * The panel's one hard rule: **it never merges eval status with business
+ * outcome.** A reproduced failure is a *passing* eval whose target *failed*
+ * (§24.3), and a UI that showed one number would report the product's best
+ * evidence as a broken build. So both are rendered, each labelled, and the
+ * pairing is spelled out in words rather than left to a colour.
+ */
+export function EvalPanel({
+  cases,
+  busy,
+  canCreate,
+  onCreate,
+  onReplay,
+}: EvalPanelProps): React.ReactElement {
+  return (
+    <section className="panel" aria-label="Regression evals">
+      <h3>Regression evals</h3>
+      <p className="panel__note">
+        A case turns this failure into a file CI can replay. Replaying against{" "}
+        <strong>current</strong> should pass; replaying against{" "}
+        <strong>reproduce source</strong> should reproduce the original failure — and
+        reproducing it is a <em>passing</em> eval.
+      </p>
+      <button type="button" onClick={onCreate} disabled={busy || !canCreate}>
+        Create a regression eval from this run
+      </button>
+      <ul>
+        {cases.map((entry) => (
+          <li key={entry.evalCaseId}>
+            <strong>{entry.name}</strong>
+            <div className="eval__hash">{entry.contentHash}</div>
+            {entry.latestStatus === null ? (
+              <div>Not replayed yet.</div>
+            ) : (
+              <div>
+                {/* Two labelled facts, never one merged verdict. */}
+                <span className="panel__label">Eval:</span> <strong>{entry.latestStatus}</strong>{" "}
+                <span className="panel__label">Target outcome:</span>{" "}
+                <strong>{entry.latestOutcome ?? "not evaluated"}</strong>{" "}
+                <span className="panel__label">Environment:</span> {entry.latestEnvironment}
+              </div>
+            )}
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                onReplay(entry.evalCaseId, "current");
+              }}
+            >
+              Replay against current
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                onReplay(entry.evalCaseId, "reproduce_source");
+              }}
+            >
+              Replay against source
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}

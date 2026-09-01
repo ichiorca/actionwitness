@@ -34,6 +34,7 @@ from actionwitness_service.api.middleware import (
 )
 from actionwitness_service.api.origins import OriginPolicy
 from actionwitness_service.api.routes import contracts as contract_routes
+from actionwitness_service.api.routes import evals as eval_routes
 from actionwitness_service.api.routes import runs as run_routes
 from actionwitness_service.api.routes import workspace as workspace_routes
 from actionwitness_service.application.adapter_registry import AdapterRegistry
@@ -214,6 +215,7 @@ def create_app(
     app.include_router(workspace_routes.router, prefix=API_PREFIX)
     app.include_router(contract_routes.router, prefix=API_PREFIX)
     app.include_router(run_routes.router, prefix=API_PREFIX)
+    app.include_router(eval_routes.router, prefix=API_PREFIX)
 
     # TODO(M4): §15.2's instantiate, from-candidates, and published endpoints
     # TODO(005): the rest of §15.3 — run read, paged events, invocation,

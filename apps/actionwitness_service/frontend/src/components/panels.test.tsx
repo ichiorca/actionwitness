@@ -23,7 +23,13 @@ import { describe, expect, it, vi } from "vitest";
 import { parseGuidance, parseWorkspace } from "../api/workspace";
 import { ConfirmationDialog } from "./ConfirmationDialog";
 import { GuidanceBanner } from "./GuidanceBanner";
-import { CapabilityBar, ComparisonPanel, ConfigPanel, FindingsPanel } from "./panels";
+import {
+  CapabilityBar,
+  ComparisonPanel,
+  ConfigPanel,
+  EvalPanel,
+  FindingsPanel,
+} from "./panels";
 
 const GUIDANCE = {
   phase: "awaiting_confirmation",
@@ -346,5 +352,89 @@ describe("ConfirmationDialog (§14.4, AC-06)", () => {
     // second, but a person should not be invited to make it.
     expect(screen.getByRole("button", { name: /approve/i }).getAttribute("disabled")).not.toBeNull();
     expect(screen.getByRole("button", { name: /deny/i }).getAttribute("disabled")).not.toBeNull();
+  });
+});
+
+describe("EvalPanel (§24.3)", () => {
+  const summary = {
+    evalCaseId: "eval_1",
+    name: "one-mug-save20",
+    contentHash: "sha256:abc",
+    latestStatus: "passed",
+    latestOutcome: "failed",
+    latestEnvironment: "reproduce_source",
+  };
+
+  it("never merges eval status with business outcome", () => {
+    render(
+      <EvalPanel
+        cases={[summary]}
+        busy={false}
+        canCreate
+        onCreate={vi.fn()}
+        onReplay={vi.fn()}
+      />,
+    );
+
+    // A reproduced failure is a *passing* eval whose target *failed*. One
+    // merged number here would report the product's best evidence as a broken
+    // build, which is the misreading §24.3 warns about.
+    expect(screen.getByText("passed")).toBeDefined();
+    expect(screen.getByText("failed")).toBeDefined();
+    expect(screen.getByText(/Eval:/)).toBeDefined();
+    expect(screen.getByText(/Target outcome:/)).toBeDefined();
+  });
+
+  it("says in words that reproducing a failure is a pass", () => {
+    render(
+      <EvalPanel cases={[]} busy={false} canCreate onCreate={vi.fn()} onReplay={vi.fn()} />,
+    );
+
+    // The one sentence that stops somebody filing the reproduction as a bug.
+    expect(screen.getByText(/reproducing it is a/)).toBeDefined();
+  });
+
+  it("names the environment a replay ran against", () => {
+    render(
+      <EvalPanel
+        cases={[summary]}
+        busy={false}
+        canCreate
+        onCreate={vi.fn()}
+        onReplay={vi.fn()}
+      />,
+    );
+
+    // §24.4: a passing eval must not hide which environment produced it.
+    expect(screen.getByText(/reproduce_source/)).toBeDefined();
+  });
+
+  it("offers both profiles and passes the chosen one up", () => {
+    const onReplay = vi.fn();
+    render(
+      <EvalPanel cases={[summary]} busy={false} canCreate onCreate={vi.fn()} onReplay={onReplay} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /replay against source/i }));
+
+    expect(onReplay).toHaveBeenCalledWith("eval_1", "reproduce_source");
+  });
+
+  it("withholds creation when the run cannot produce a case", () => {
+    render(
+      <EvalPanel
+        cases={[]}
+        busy={false}
+        canCreate={false}
+        onCreate={vi.fn()}
+        onReplay={vi.fn()}
+      />,
+    );
+
+    // FR-080: a passing run has no failure to reproduce, so offering the
+    // control would invite an action the server refuses.
+    expect(
+      screen.getByRole("button", { name: /create a regression eval/i }).getAttribute("disabled"),
+    ).not.toBeNull();
   });
 });

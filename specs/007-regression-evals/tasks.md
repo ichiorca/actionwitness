@@ -39,7 +39,7 @@ Cite the T-ID in every commit that advances it.
       evaluated in `non_replayable_policies` — excluded from both classification
       sets and named in the report, so a passing eval cannot hide an unevaluated
       policy.
-- [ ] T11 — The canonical eval report (FR-088) and §15.4's API routes, plus
+- [x] T11 — The canonical eval report (FR-088) and §15.4's API routes, plus
       `EvalPanel`. Cleanup of mutable eval-target state happens **after** the
       immutable report is persisted.
 - [ ] T12 — The CLI: `eval validate` and `eval run --environment --report-dir`,

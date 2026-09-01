@@ -41,6 +41,14 @@ import {
 /** §11.5's phases, as the server spells them. */
 const TERMINAL_PHASES = ["passed", "passed_with_warnings", "failed", "error", "cancelled"];
 
+/** FR-080: only a failed or warning-bearing run can produce a case. A passing
+ *  run has no failure to reproduce, and offering the tool there would invite an
+ *  agent to ask for something the server refuses. */
+const EVAL_ELIGIBLE_PHASES = ["failed", "passed_with_warnings"];
+
+/** §15.4's path segment, named once so the routes below read as data. */
+const EVAL_SEGMENT = "evals";
+
 function isTerminal(phase: string): boolean {
   return TERMINAL_PHASES.includes(phase);
 }
@@ -59,6 +67,7 @@ export interface HarnessToolset {
 export function useHarnessToolset(
   status: WorkspaceStatus | null,
   refresh: () => Promise<void>,
+  evalCaseId: string | null = null,
 ): HarnessToolset {
   // Before the first load there is no authoritative state. Defaulting to a
   // phase would publish acting tools against a workspace nobody has read yet —
@@ -210,8 +219,67 @@ export function useHarnessToolset(
     },
   });
 
+  const createEval = useHarnessTool({
+    name: "create_regression_eval",
+    description: "Turn this failed run into a portable, self-contained regression eval case.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: false },
+    // §11.1: "run is failed or warning-bearing and replay-eligible under
+    // FR-080". Eligibility is the server's judgement; this flag only keeps the
+    // tool out of the states where it is obviously wrong.
+    enabled: loaded && EVAL_ELIGIBLE_PHASES.includes(phase) && runId !== null,
+    execute: async () => {
+      if (runId === null) {
+        throw new Error("No run to cut a case from.");
+      }
+      const created = await request(`/runs/${runId}/${EVAL_SEGMENT}`, {
+        method: "POST",
+        parse: (value) => value,
+      });
+      await refresh();
+      return created;
+    },
+  });
+
+  const runEval = useHarnessTool({
+    name: "run_regression_eval",
+    description:
+      "Replay a regression eval case in an isolated workspace and report whether it met " +
+      "its expectation.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        environment: {
+          type: "string",
+          enum: ["current", "reproduce_source"],
+          description: "Which implementation to replay against. Defaults to current.",
+        },
+      },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false },
+    // §11.1: "eval case exists and no eval run is active".
+    enabled: loaded && evalCaseId !== null,
+    execute: async (args: { environment?: string }) => {
+      if (evalCaseId === null) {
+        throw new Error("No eval case to replay.");
+      }
+      // The profile travels only when the caller named one, so the *server's*
+      // default applies (§24.4: `current` is always the default) rather than
+      // one this layer chose on its behalf.
+      const body = args.environment === undefined ? {} : { environment: args.environment };
+      return await request(`/${EVAL_SEGMENT}/${evalCaseId}/runs`, {
+        method: "POST",
+        body,
+        parse: (value) => value,
+      });
+    },
+  });
+
   return {
     states: {
+      create_regression_eval: createEval,
+      run_regression_eval: runEval,
       list_contract_templates: listTemplates,
       get_outcome_contract: getContract,
       arm_outcome_contract: armContract,
