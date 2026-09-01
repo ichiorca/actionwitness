@@ -12,7 +12,7 @@ Cite the T-ID in every commit that advances it.
       or deployment secret, retained only in the evaluator process
       environment. Never through the browser, a WebMCP argument, a committed
       file, or an uploaded benchmark manifest — one test per prohibited place.
-- [ ] T3 — Intent generation: from one canonical contract intent, up to six
+- [x] T3 — Intent generation: from one canonical contract intent, up to six
       paraphrased, ambiguous, and adversarial variants, with Python
       schema-validating length and character limits.
 - [ ] T4 — Variant screening: reject any variant containing secrets or

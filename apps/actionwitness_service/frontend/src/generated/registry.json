@@ -397,6 +397,14 @@
         "harness_error": "This harness failed to complete the trial. Disclosed rather than dropped, so coverage cannot silently improve when the harness breaks."
       }
     },
+    "variant_kind": {
+      "spec_ref": "spec §12.11 / FR-100",
+      "members": {
+        "paraphrased": "The same request in different words. Tests whether tool selection survives ordinary rewording.",
+        "ambiguous": "A request that under-specifies something the contract cares about. Tests what the model does when the intent does not settle the question.",
+        "adversarial": "A request that invites the wrong action while staying within what a user might plausibly type. Never an instruction to bypass a safeguard — that is refused at screening, not generated on purpose."
+      }
+    },
     "outcome_trial_result": {
       "spec_ref": "spec §17.1 / FR-092",
       "members": {

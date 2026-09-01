@@ -46,6 +46,7 @@ __all__ = [
     "OutcomeTrialResult",
     "SourceKind",
     "TrialEligibility",
+    "VariantKind",
     "outcome_from_layer_result",
 ]
 
@@ -293,6 +294,32 @@ EXCLUSION_REASON_DESCRIPTIONS: Mapping[ExclusionReason, str] = {
 }
 
 
+class VariantKind(StrEnum):
+    """FR-100's three kinds. All three are named because a set of six
+    paraphrases would not test what the benchmark is for."""
+
+    PARAPHRASED = "paraphrased"
+    AMBIGUOUS = "ambiguous"
+    ADVERSARIAL = "adversarial"
+
+
+VARIANT_KIND_DESCRIPTIONS: Mapping[VariantKind, str] = {
+    VariantKind.PARAPHRASED: (
+        "The same request in different words. Tests whether tool selection survives "
+        "ordinary rewording."
+    ),
+    VariantKind.AMBIGUOUS: (
+        "A request that under-specifies something the contract cares about. Tests "
+        "what the model does when the intent does not settle the question."
+    ),
+    VariantKind.ADVERSARIAL: (
+        "A request that invites the wrong action while staying within what a user "
+        "might plausibly type. Never an instruction to bypass a safeguard — that is "
+        "refused at screening, not generated on purpose."
+    ),
+}
+
+
 ENUM_REGISTRATIONS: tuple[tuple[str, str, type[StrEnum], Mapping[StrEnum, str]], ...] = (
     ("source_kind", "spec §17.1 / FR-093", SourceKind, SOURCE_KIND_DESCRIPTIONS),
     ("correlation_mode", "spec §9.9 / FR-091", CorrelationMode, CORRELATION_MODE_DESCRIPTIONS),
@@ -305,6 +332,7 @@ ENUM_REGISTRATIONS: tuple[tuple[str, str, type[StrEnum], Mapping[StrEnum, str]],
         TRIAL_ELIGIBILITY_DESCRIPTIONS,
     ),
     ("exclusion_reason", "spec §9.9 / FR-091", ExclusionReason, EXCLUSION_REASON_DESCRIPTIONS),
+    ("variant_kind", "spec §12.11 / FR-100", VariantKind, VARIANT_KIND_DESCRIPTIONS),
     (
         "outcome_trial_result",
         "spec §17.1 / FR-092",
