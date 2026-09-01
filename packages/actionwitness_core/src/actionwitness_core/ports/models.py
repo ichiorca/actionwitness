@@ -166,6 +166,18 @@ class ExecutionContext(CoreModel):
     correlation_id: Identifier
     idempotency_key: Identifier
     actor: EventActor
+    #: Whether a human has authorized *this* invocation (§14, FR-060).
+    #:
+    #: Target-neutral on purpose: the harness states that consent exists and the
+    #: adapter decides what its target needs in order to honour it — a store
+    #: confirmation record, a signed header, nothing at all. The alternative,
+    #: passing a target's own confirmation identifier through the harness, would
+    #: put one target's consent mechanism in a field every other target has to
+    #: understand.
+    #:
+    #: Defaults to `False` so an adapter that forgets to check it fails closed,
+    #: and so a caller cannot omit the field on the one path where it matters.
+    human_consent_granted: bool = False
 
 
 class ToolExecutionResult(CoreModel):

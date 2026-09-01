@@ -183,12 +183,35 @@ class InvocationService:
         # tool never accepts must not produce a start event claiming otherwise.
         checked = validate_arguments(dict(spec.input_schema), arguments, tool_name=tool_name)
 
-        invocation_id = self._id_source()
-        correlation_id = invocation_id
-        request_id = f"req_{invocation_id}"
+        # A protected tool that already carries a live approval is a *resumed*
+        # invocation, not a new one: §14.14 has the invoking page call back after
+        # the human decides. It reuses the original correlation and request ids,
+        # because FR-060 matches an approval to the mutation it authorized by
+        # correlation id, and a fresh id would make the approval look like
+        # consent for nothing in particular.
+        approved: Mapping[str, Any] | None = None
+        if requirement is not None:
+            async with self._database.reading() as work:
+                approved = await self._live_approval(work, workspace_id, run_id, tool_name)
+
+        if approved is not None:
+            invocation_id = self._id_source()
+            correlation_id = str(approved["correlation_id"])
+            request_id = str(approved["correlation_id"]).replace("inv", "req", 1)
+        else:
+            invocation_id = self._id_source()
+            correlation_id = invocation_id
+            request_id = f"req_{invocation_id}"
 
         # 2 — canonical state before the call. I/O, outside every lock.
         before = await self._observe(adapter, workspace_id, policy)
+
+        # §14.7's revalidation. ADR-0003 held nothing across the human's decision,
+        # so the world may have moved; the approval described the state a person
+        # was shown, and if that changed their consent no longer describes what
+        # is about to happen.
+        if approved is not None and binding_hash(before) != str(approved["state_binding_hash"]):
+            return await self._stale_approval(workspace_id, run_id, approved, before=before)
 
         # 3 — reserve, transition, and record the start (FR-031, FR-008).
         started_sequence, pending = await self._start_or_trip(
@@ -203,7 +226,7 @@ class InvocationService:
             policy=policy,
             arguments=checked,
             verification_reservation=reservation,
-            requirement=requirement,
+            requirement=None if approved is not None else requirement,
         )
 
         # A protected action stops here. Nothing is dispatched, so no mutation
@@ -230,7 +253,14 @@ class InvocationService:
                 workspace_id,
                 tool_name,
                 checked,
-                _context(workspace_id, run_id, invocation_id, request_id, correlation_id),
+                _context(
+                    workspace_id,
+                    run_id,
+                    invocation_id,
+                    request_id,
+                    correlation_id,
+                    human_consent_granted=approved is not None,
+                ),
             )
         except Exception as exc:
             # FR-033: persisted as an error event "without leaking internal
@@ -256,6 +286,7 @@ class InvocationService:
             duration_ms=duration_ms,
             policy=policy,
             arguments=checked,
+            consumed_confirmation=None if approved is None else str(approved["id"]),
         )
 
     # -- steps ---------------------------------------------------------------
@@ -520,6 +551,91 @@ class InvocationService:
                 "tool_name": spec.name,
             }
 
+    async def _live_approval(
+        self, work: UnitOfWork, workspace_id: str, run_id: str, tool_name: str
+    ) -> Mapping[str, Any] | None:
+        """An approval this run holds that has not been spent yet (FR-066).
+
+        `approved` and not `consumed`: an approval is spent by the mutation it
+        authorized and can never authorize a second one, which is what makes
+        "approve once" true rather than aspirational.
+        """
+        row = await work.fetch_one(
+            """
+            SELECT * FROM confirmation_requests
+             WHERE workspace_id = ? AND run_id = ? AND tool_name = ? AND status = ?
+             ORDER BY decided_at DESC, id DESC LIMIT 1
+            """,
+            (workspace_id, run_id, tool_name, str(ConfirmationStatus.APPROVED.value)),
+        )
+        return None if row is None else dict(row)
+
+    async def _stale_approval(
+        self,
+        workspace_id: str,
+        run_id: str,
+        approved: Mapping[str, Any],
+        *,
+        before: Observation,
+    ) -> InvocationOutcome:
+        """The approved state moved before the approval was spent (§14.7).
+
+        Fails closed and *cancels* the approval rather than leaving it live. A
+        human approved a particular cart; carrying that consent forward onto a
+        different one is precisely the replay the binding hash exists to
+        prevent, and leaving it pending would let the next attempt succeed
+        against state nobody agreed to.
+
+        Nothing is dispatched, so no mutation occurs.
+        """
+        confirmation_id = str(approved["id"])
+        async with self._locks.hold(workspace_id), self._database.transaction() as work:
+            await work.execute(
+                "UPDATE confirmation_requests SET status = ?, decided_at = ? "
+                "WHERE id = ? AND workspace_id = ? AND status = ?",
+                (
+                    str(ConfirmationStatus.CANCELLED.value),
+                    work.now(),
+                    confirmation_id,
+                    workspace_id,
+                    str(ConfirmationStatus.APPROVED.value),
+                ),
+            )
+            await EventRepository(work).append(
+                run_id,
+                {
+                    "event_type": str(OutcomeEventType.CONFIRMATION_CANCELLED.value),
+                    "actor": str(EventActor.HARNESS.value),
+                    "tool_name": str(approved["tool_name"]),
+                    "correlation_id": str(approved["correlation_id"]),
+                    "status": str(ConfirmationStatus.CANCELLED.value),
+                    "state_hash_before": before.content_hash(),
+                    "redacted_payload": {
+                        "confirmation_id": confirmation_id,
+                        "reason": "state_changed_after_approval",
+                        "mutated": False,
+                    },
+                },
+            )
+            guidance = await current_guidance(work, workspace_id)
+
+        return InvocationOutcome(
+            invocation_id=confirmation_id,
+            sequence_number=0,
+            terminal_event=str(OutcomeEventType.CONFIRMATION_CANCELLED.value),
+            reported_status=None,
+            reported_summary=(
+                "The approved state changed before the action ran, so the approval was "
+                "cancelled and nothing was done. Ask for the action again to review the "
+                "current state."
+            ),
+            error_code="stale_approval",
+            duration_ms=0,
+            observed_state_version=before.state_version,
+            observed_state_changed=False,
+            next_action=guidance.next_action(),
+        )
+
     async def _paused(
         self,
         workspace_id: str,
@@ -572,6 +688,7 @@ class InvocationService:
         duration_ms: int,
         policy: RedactionPolicy,
         arguments: Mapping[str, Any],
+        consumed_confirmation: str | None = None,
     ) -> InvocationOutcome:
         terminal = (
             OutcomeEventType.TOOL_INVOCATION_FAILED if result is None else result.terminal_event
@@ -643,6 +760,15 @@ class InvocationService:
                     "redacted_payload": payload,
                 },
             )
+            if consumed_confirmation is not None:
+                # FR-066: spent here, in the same transaction as the terminal
+                # event, and only now that the mutation is known to have
+                # happened. Consuming before dispatch would spend an approval on
+                # a call that might never land.
+                await ConfirmationService(work, workspace_id).consume_approved(
+                    consumed_confirmation
+                )
+
             # FR-121's compact `next_action`, derived from the workspace as it
             # now stands rather than from the phase this handler assumed. An
             # invocation that tripped the event ceiling leaves the run in
@@ -727,7 +853,13 @@ def _require_published(adapter: Any, tool_name: str) -> TargetToolSpec:
 
 
 def _context(
-    workspace_id: str, run_id: str, invocation_id: str, request_id: str, correlation_id: str
+    workspace_id: str,
+    run_id: str,
+    invocation_id: str,
+    request_id: str,
+    correlation_id: str,
+    *,
+    human_consent_granted: bool = False,
 ) -> Any:
     from actionwitness_core.ports.models import ExecutionContext
 
@@ -742,4 +874,5 @@ def _context(
         # that key — a retry of the same intent reuses it by reusing the id.
         idempotency_key=invocation_id,
         actor=EventActor.AGENT,
+        human_consent_granted=human_consent_granted,
     )

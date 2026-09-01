@@ -35,6 +35,7 @@ from actionwitness_core.ports import ManagedTargetAdapter, ObservationProvider
 from actionwitness_core.ports.enums import ExecutionMode, RetrySemantics, SideEffectClass
 from actionwitness_core.ports.models import ExecutionContext, ScenarioSelection
 from buggy_store.api import create_app
+from integrations.buggy_store.adapter import MissingHumanConsent
 from integrations.buggy_store.observation import PROVENANCE, PROVIDER_ID
 
 from integrations.buggy_store import (
@@ -358,20 +359,31 @@ async def test_a_conflicting_retry_is_a_failure_not_a_silent_second_mutation(
 # --- safe blocks are not failures (FR-033) ----------------------------------
 
 
-async def _open_confirmation(adapter: BuggyStoreAdapter) -> str:
-    response = await adapter._client.post(
-        "/demo/api/v1/store/checkout/confirmations",
-        headers={"X-Workspace-Id": "ws-1"},
-        json={},
-    )
-    return response.json()["confirmation_id"]
+def _consented(sequence: int = 9) -> ExecutionContext:
+    """A context carrying the harness's human approval for this invocation."""
+    return _context(sequence).model_copy(update={"human_consent_granted": True})
 
 
-async def _decide(adapter: BuggyStoreAdapter, confirmation_id: str, approved: bool) -> None:
-    await adapter._client.post(
-        f"/demo/api/v1/store/checkout/confirmations/{confirmation_id}/decision",
-        headers={"X-Workspace-Id": "ws-1"},
-        json={"approved": approved},
+def _refusing_store(status_code: int, body: dict) -> httpx.AsyncClient:
+    """A client that answers the checkout call with one documented refusal.
+
+    The adapter opens and approves the target's own confirmation inside a single
+    dispatch, so a store that refuses at checkout is a *race* outcome — the
+    record lapsed or was cancelled between approving it and spending it. Rare,
+    but not dead: FR-033 says the adapter must report those as safe blocks
+    rather than failures, and this is the only way to reach that translation
+    deterministically.
+    """
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/checkout"):
+            return httpx.Response(status_code, json=body)
+        if "confirmations" in request.url.path:
+            return httpx.Response(201, json={"confirmation_id": "cnf-store-1"})
+        return httpx.Response(200, json={"state_version": 1})
+
+    return httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="http://buggy-store.test"
     )
 
 
@@ -379,15 +391,15 @@ async def _decide(adapter: BuggyStoreAdapter, confirmation_id: str, approved: bo
 async def test_an_approved_checkout_completes_successfully(
     adapter: BuggyStoreAdapter,
 ) -> None:
+    """The harness states that a human approved; the adapter records that in the
+    form this target requires and spends it (§14, FR-060)."""
     await _armed(adapter)
-    confirmation_id = await _open_confirmation(adapter)
-    await _decide(adapter, confirmation_id, approved=True)
 
     result = await adapter.execute(
         "ws-1",
         "proceed_to_checkout",
-        {"confirmation_id": confirmation_id, "request_id": "req-000000000009"},
-        _context(9),
+        {"request_id": "req-000000000009"},
+        _consented(),
     )
     assert result.terminal_event is OutcomeEventType.TOOL_INVOCATION_COMPLETED
     assert result.reported_status is ToolReportedStatus.SUCCESS
@@ -395,63 +407,89 @@ async def test_an_approved_checkout_completes_successfully(
 
 
 @pytest.mark.adapters
-async def test_a_denied_checkout_is_blocked_by_user_not_failed(
+async def test_a_checkout_without_human_consent_creates_nothing(
     adapter: BuggyStoreAdapter,
 ) -> None:
-    """FR-033: a denial is a safe terminal outcome, never a tool execution error."""
-    await _armed(adapter)
-    confirmation_id = await _open_confirmation(adapter)
-    await _decide(adapter, confirmation_id, approved=False)
+    """Fails closed, and *before* the store is contacted.
 
-    result = await adapter.execute(
-        "ws-1",
-        "proceed_to_checkout",
-        {"confirmation_id": confirmation_id, "request_id": "req-000000000009"},
-        _context(9),
-    )
+    The constitution forbids an agent creating or approving its own consent, and
+    this adapter is the last place that could be broken quietly. So the check is
+    asserted twice: the call raises, and the store still holds no confirmation
+    and no order — an adapter that opened one before noticing would leave a
+    consent record nobody asked for.
+    """
+    await _armed(adapter)
+
+    with pytest.raises(MissingHumanConsent):
+        await adapter.execute(
+            "ws-1",
+            "proceed_to_checkout",
+            {"request_id": "req-000000000009"},
+            _context(9),  # no consent
+        )
+
+    cart = await adapter._client.get("/demo/api/v1/store/cart", headers={"X-Workspace-Id": "ws-1"})
+    assert cart.json()["order"]["created"] is False
+
+
+@pytest.mark.adapters
+@pytest.mark.parametrize(
+    ("lapsed", "reported"),
+    [
+        ("denied", ToolReportedStatus.BLOCKED_BY_USER),
+        ("cancelled", ToolReportedStatus.BLOCKED_BY_USER),
+        # A clock running out is not a person refusing, and the report says so.
+        ("expired", ToolReportedStatus.BLOCKED_BY_EXPIRY),
+    ],
+)
+async def test_a_store_refusal_after_consent_is_a_safe_block_not_a_failure(
+    lapsed: str, reported: ToolReportedStatus
+) -> None:
+    """FR-033: a denied, expired or cancelled protected action is an expected
+    terminal outcome, so the adapter reports a *completed* invocation with a
+    blocked status.
+
+    An adapter that returned a failure here would make the harness punish the
+    safe behaviour it exists to encourage, and the consent policy would fail a
+    run that did exactly the right thing.
+    """
+    refusal = {
+        "error": {
+            "code": "CONFIRMATION_REQUIRED",
+            "message": f"confirmation is {lapsed}",
+            "details": {"status": lapsed},
+        }
+    }
+    async with _refusing_store(409, refusal) as client:
+        adapter = BuggyStoreAdapter(client, clock=lambda: EPOCH)
+
+        result = await adapter.execute(
+            "ws-1", "proceed_to_checkout", {"request_id": "req-000000000009"}, _consented()
+        )
+
     assert result.terminal_event is OutcomeEventType.TOOL_INVOCATION_COMPLETED
-    assert result.reported_status is ToolReportedStatus.BLOCKED_BY_USER
+    assert result.reported_status is reported
     assert result.claims_success() is False
 
 
 @pytest.mark.adapters
-async def test_a_cancelled_confirmation_is_also_a_safe_block(
-    adapter: BuggyStoreAdapter,
-) -> None:
-    await _armed(adapter)
-    confirmation_id = await _open_confirmation(adapter)
-    await adapter._client.delete(
-        f"/demo/api/v1/store/checkout/confirmations/{confirmation_id}",
-        headers={"X-Workspace-Id": "ws-1"},
-    )
-    result = await adapter.execute(
-        "ws-1",
-        "proceed_to_checkout",
-        {"confirmation_id": confirmation_id, "request_id": "req-000000000009"},
-        _context(9),
-    )
-    assert result.reported_status is ToolReportedStatus.BLOCKED_BY_USER
+async def test_a_store_demanding_confirmation_is_a_failure_not_a_safe_block() -> None:
+    """The distinction that keeps `blocked_by_user` meaningful.
 
-
-@pytest.mark.adapters
-async def test_a_checkout_with_no_approval_at_all_is_a_failure(
-    adapter: BuggyStoreAdapter,
-) -> None:
-    """Nothing was safely refused: the caller never asked a human.
-
-    This is the distinction that keeps `blocked_safely` meaningful. Treating an
-    unasked-for checkout as a safe block would let a run that skipped consent
-    entirely look like one that respected a denial.
+    `confirmation_required` means nothing was safely refused — the store never
+    saw an approval at all. Treating that as a safe block would let a run that
+    skipped consent entirely look like one that respected a denial.
     """
-    await _armed(adapter)
-    confirmation_id = await _open_confirmation(adapter)
+    # The same code, with no `status` detail: the store never saw an approval,
+    # so there is no safe refusal to report.
+    unexplained = {"error": {"code": "CONFIRMATION_REQUIRED", "message": "approval required"}}
+    async with _refusing_store(409, unexplained) as client:
+        adapter = BuggyStoreAdapter(client, clock=lambda: EPOCH)
 
-    result = await adapter.execute(
-        "ws-1",
-        "proceed_to_checkout",
-        {"confirmation_id": confirmation_id, "request_id": "req-000000000009"},
-        _context(9),
-    )
+        result = await adapter.execute(
+            "ws-1", "proceed_to_checkout", {"request_id": "req-000000000009"}, _consented()
+        )
+
     assert result.terminal_event is OutcomeEventType.TOOL_INVOCATION_FAILED
     assert result.error_code == "confirmation_required"
 

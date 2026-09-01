@@ -61,7 +61,14 @@ from integrations.buggy_store.tools import (
     spec_for,
 )
 
-__all__ = ["ADAPTER_ID", "DESCRIPTOR", "TARGET_ID", "BuggyStoreAdapter", "ToolNotAllowed"]
+__all__ = [
+    "ADAPTER_ID",
+    "DESCRIPTOR",
+    "TARGET_ID",
+    "BuggyStoreAdapter",
+    "MissingHumanConsent",
+    "ToolNotAllowed",
+]
 
 TARGET_ID: Final = "buggy-store"
 ADAPTER_ID: Final = "integrations.buggy_store"
@@ -75,7 +82,24 @@ DESCRIPTOR: Final = TargetDescriptor(
     supported_scenario_modes=("pre_fix", "post_fix"),
 )
 
+#: The store's own confirmation window. Short, because it is opened and spent
+#: inside one dispatch: the human decision it represents already happened at the
+#: harness boundary, and a long window here would only widen the gap between
+#: that decision and the mutation it authorized.
+_STORE_CONFIRMATION_SECONDS: Final = 30
+
 _API: Final = "/demo/api/v1/store"
+
+
+class MissingHumanConsent(PermissionError):
+    """A protected tool was dispatched without a human approval (§14, FR-060).
+
+    Raised before the store is contacted at all, so an adapter reached by some
+    future path that forgot the harness's consent gate creates no confirmation
+    and no order. Fails closed: the constitution forbids an agent creating or
+    approving its own consent, and this is the last place that could be broken
+    without anyone noticing.
+    """
 
 
 class ToolNotAllowed(ValueError):
@@ -222,16 +246,66 @@ class BuggyStoreAdapter:
                     f"{_API}/discount", headers=dict(headers), json=dict(arguments)
                 )
             case _ if spec.name == PROCEED_TO_CHECKOUT:
-                return await self._client.post(
-                    f"{_API}/checkout",
-                    headers=dict(headers),
-                    json={
-                        "confirmation_id": arguments["confirmation_id"],
-                        "request_id": arguments["request_id"],
-                    },
-                )
+                return await self._checkout(arguments, headers, context)
         raise ToolNotAllowed(  # pragma: no cover - unreachable while the allowlist is closed
             f"{spec.name!r} is allowlisted but has no route"
+        )
+
+    async def _checkout(
+        self,
+        arguments: Mapping[str, Any],
+        headers: Mapping[str, str],
+        context: ExecutionContext,
+    ) -> httpx.Response:
+        """Spend the harness's human consent against this target's own record.
+
+        The harness states *that* a human authorized this invocation
+        (`ExecutionContext.human_consent_granted`); it does not know how a
+        target records consent, and §9.1 keeps it that way. This store keeps its
+        own confirmation rows and refuses a checkout without one, so translating
+        the harness's fact into that store's mechanism is the integration's job
+        — which is what this method is.
+
+        **Consent is checked before anything is opened.** Without it no
+        confirmation is created and no checkout is attempted, so an adapter
+        reached by a path that forgot the gate fails closed rather than
+        manufacturing its own approval.
+
+        The store's own confirmation is opened and approved back to back here.
+        That is not the harness approving on a human's behalf: the human already
+        decided, at the harness boundary where the cookie authorizes them
+        (§14.5). This records that decision in the form the target requires.
+        """
+        if not context.human_consent_granted:
+            raise MissingHumanConsent(
+                "proceed_to_checkout requires a human approval bound to this invocation"
+            )
+
+        opened = await self._client.post(
+            f"{_API}/checkout/confirmations",
+            headers=dict(headers),
+            json={"expires_in_seconds": _STORE_CONFIRMATION_SECONDS},
+        )
+        opened.raise_for_status()
+        confirmation_id = str(opened.json()["confirmation_id"])
+
+        decided = await self._client.post(
+            f"{_API}/checkout/confirmations/{confirmation_id}/decision",
+            headers=dict(headers),
+            json={"approved": True},
+        )
+        decided.raise_for_status()
+
+        return await self._client.post(
+            f"{_API}/checkout",
+            headers=dict(headers),
+            json={
+                "confirmation_id": confirmation_id,
+                # The harness's idempotency key, unchanged: a retry of the same
+                # intent must replay the store's original order rather than
+                # create a second one (App. D.2).
+                "request_id": arguments["request_id"],
+            },
         )
 
     # -- result translation --------------------------------------------------

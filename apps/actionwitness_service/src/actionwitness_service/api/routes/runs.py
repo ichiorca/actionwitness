@@ -8,9 +8,11 @@
 | `GET`  | `/runs/{run_id}/comparison`                       | 005-T11 |
 | `GET`  | `/runs/{run_id}/events`                           | 005-T12 |
 | `GET`  | `/runs/{run_id}/report`                           | 005-T12 |
+| `POST` | `/runs/{run_id}/confirmations/{id}/decision`       | 006-T2 |
+| `DELETE` | `/runs/{run_id}/confirmations/{id}`             | 006-T2 |
 
-The rest of §15.3 — the run read and the confirmation decisions — arrives with
-the tasks that own it and is deliberately absent rather than stubbed.
+The run read arrives with the task that owns it and is deliberately absent
+rather than stubbed.
 
 `POST /runs/{run_id}/verify` wins FR-038's race, captures the final
 observation, evaluates the contract through the core, and seals the run. The
@@ -26,7 +28,7 @@ selected, which is also what `GET /workspace` reports.
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from actionwitness_core.reports.enums import RunMode
 from fastapi import APIRouter, Body, Path, Query
@@ -40,6 +42,7 @@ from actionwitness_service.api.dependencies import (
     WorkspaceDependency,
 )
 from actionwitness_service.application.comparison_service import ComparisonService
+from actionwitness_service.application.decision_service import Decision, DecisionService
 from actionwitness_service.application.invocation_service import InvocationService
 from actionwitness_service.application.report_service import ReportService
 from actionwitness_service.application.run_service import RunService
@@ -285,3 +288,80 @@ async def read_report(
     """
     async with database.reading() as work:
         return await ReportService(work, workspace_id, artifacts).report(run_id)
+
+
+class DecisionRequest(BaseModel):
+    """§14.4's choice. Named, not a boolean.
+
+    `approve_once` says what the approval is: consent for one invocation, spent
+    by it. A caller sending `true` could reasonably believe it had switched
+    something on.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    decision: Literal["approve_once", "deny"]
+
+
+ConfirmationId = Annotated[str, Path(min_length=1, max_length=128)]
+
+
+@router.post("/{run_id}/confirmations/{confirmation_id}/decision")
+async def decide_confirmation(
+    run_id: RunId,
+    confirmation_id: ConfirmationId,
+    workspace_id: WorkspaceDependency,
+    database: DatabaseDependency,
+    locks: LocksDependency,
+    request: Annotated[DecisionRequest, Body()],
+) -> dict[str, Any]:
+    """§15.3: "Human approver chooses `approve_once` or `deny`".
+
+    The workspace cookie authorizes this, never the identifier in the path
+    (§14.5) — so a `confirmation_id` learned elsewhere resolves to nothing.
+    There is deliberately no way for an agent to reach this with its own
+    credentials: the constitution forbids an agent approving its own consent,
+    and the only thing standing between those two statements is that this
+    endpoint reads the same cookie as every other.
+    """
+    outcome = await DecisionService(database, locks).decide(
+        workspace_id, run_id, confirmation_id, request.decision
+    )
+    return {
+        "confirmation_id": outcome.confirmation_id,
+        "status": outcome.status,
+        # §14.6: the response states the decision, whether any mutation
+        # occurred, and who acts next.
+        "mutated": outcome.mutated,
+        "run_status": outcome.run_status,
+        "detail": outcome.detail,
+        "next_action": outcome.next_action,
+    }
+
+
+@router.delete("/{run_id}/confirmations/{confirmation_id}")
+async def cancel_confirmation(
+    run_id: RunId,
+    confirmation_id: ConfirmationId,
+    workspace_id: WorkspaceDependency,
+    database: DatabaseDependency,
+    locks: LocksDependency,
+) -> dict[str, Any]:
+    """§15.3: cancel because the invocation, tab, or workspace went away.
+
+    A cancellation is not a denial: nobody refused the action, the request
+    simply stopped being answerable. Both create no order, and both are
+    recorded distinctly so a reader can tell "a person said no" from "the tab
+    closed" (§14.9).
+    """
+    outcome = await DecisionService(database, locks).decide(
+        workspace_id, run_id, confirmation_id, Decision.CANCEL
+    )
+    return {
+        "confirmation_id": outcome.confirmation_id,
+        "status": outcome.status,
+        "mutated": outcome.mutated,
+        "run_status": outcome.run_status,
+        "detail": outcome.detail,
+        "next_action": outcome.next_action,
+    }

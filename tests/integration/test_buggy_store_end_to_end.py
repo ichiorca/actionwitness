@@ -50,6 +50,7 @@ from actionwitness_core.reports.models import (
     compose_outcome_report,
 )
 from buggy_store.api import create_app
+from integrations.buggy_store.adapter import MissingHumanConsent
 from integrations.buggy_store.templates import template_for
 
 from integrations.buggy_store import ADAPTER_ID, TARGET_ID, BuggyStoreAdapter
@@ -327,7 +328,14 @@ async def test_the_journey_is_reproducible(traced) -> None:
 async def test_the_consent_journey_creates_an_order_only_behind_an_approval(
     traced,
 ) -> None:
-    """The third seeded contract, exercised through the adapter."""
+    """The third seeded contract, exercised through the adapter.
+
+    Consent is the harness's fact, not a store identifier: the adapter is told
+    that a human authorized *this* invocation and translates that into whatever
+    its target requires (§14, §9.1). So the test no longer mints a store
+    confirmation of its own — which also makes the claim stronger, because a
+    caller can no longer manufacture the thing that authorizes the order.
+    """
     adapter, _ = traced
     await adapter.prepare("ws-1", {}, ScenarioSelection(scenario_mode="post_fix"))
     provider = adapter.observation_provider()
@@ -339,33 +347,22 @@ async def test_the_consent_journey_creates_an_order_only_behind_an_approval(
         _context(1),
     )
 
-    opened = await adapter._client.post(
-        "/demo/api/v1/store/checkout/confirmations",
-        headers={"X-Workspace-Id": "ws-1"},
-        json={},
-    )
-    confirmation_id = opened.json()["confirmation_id"]
-
-    # Before approval, nothing exists.
-    refused = await adapter.execute(
-        "ws-1",
-        "proceed_to_checkout",
-        {"confirmation_id": confirmation_id, "request_id": "req-000000000009"},
-        _context(9),
-    )
-    assert refused.terminal_event is OutcomeEventType.TOOL_INVOCATION_FAILED
+    # Without consent: refused before the store is contacted, and no order.
+    with pytest.raises(MissingHumanConsent):
+        await adapter.execute(
+            "ws-1",
+            "proceed_to_checkout",
+            {"request_id": "req-000000000009"},
+            _context(9),
+        )
     assert (await provider.capture("ws-1")).payload["order"]["created"] is False
 
-    await adapter._client.post(
-        f"/demo/api/v1/store/checkout/confirmations/{confirmation_id}/decision",
-        headers={"X-Workspace-Id": "ws-1"},
-        json={"approved": True},
-    )
+    # With it: the order appears.
     ordered = await adapter.execute(
         "ws-1",
         "proceed_to_checkout",
-        {"confirmation_id": confirmation_id, "request_id": "req-000000000010"},
-        _context(10),
+        {"request_id": "req-000000000010"},
+        _context(10).model_copy(update={"human_consent_granted": True}),
     )
     assert ordered.claims_success() is True
     assert (await provider.capture("ws-1")).payload["order"]["created"] is True
