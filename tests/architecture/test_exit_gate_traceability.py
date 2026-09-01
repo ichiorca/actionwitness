@@ -519,6 +519,74 @@ EXIT_GATE_010: dict[str, tuple[str, str]] = {
     ),
 }
 
+#: 013's exit gate, in the spec's own words.
+#:
+#: Criterion 6 is "full suite, architecture lane, both frontend gates green",
+#: which no test can assert about itself — a suite that failed would not be
+#: around to report it. It is covered instead by the gate that would fail if a
+#: lane stopped selecting tests, since a marker typo silently deselecting a lane
+#: is the way "all green" becomes true by running nothing.
+EXIT_GATE_013: dict[str, tuple[str, str]] = {
+    "1. same snapshots produce a byte-identical changed-path set and partition": (
+        "tests/integration/test_013_exit_gate.py",
+        "test_gate_1_the_same_snapshots_produce_an_identical_partition",
+    ),
+    "1b. …proved at the diff itself, including decimal reformatting and ordering": (
+        "tests/unit/test_state_diff.py",
+        "test_the_same_snapshots_produce_a_byte_identical_result",
+    ),
+    "2. a run whose only defect is an unnamed-path mutation fails with `undeclared_state_change`": (
+        "tests/integration/test_013_exit_gate.py",
+        "test_gate_2_every_named_assertion_passes_and_the_run_fails",
+    ),
+    "2b. …the report names the paths": (
+        "tests/integration/test_013_exit_gate.py",
+        "test_gate_2_the_failure_is_classified_and_names_its_paths",
+    ),
+    "2c. …and the same journey passes with the fault inactive (FR-019's pair)": (
+        "tests/integration/test_013_exit_gate.py",
+        "test_gate_2_the_same_journey_passes_with_the_fault_inactive",
+    ),
+    "2d. …the UI shows a 'changed outside contract' panel": (
+        "apps/actionwitness_service/frontend/src/components/panels.test.tsx",
+        "lists every path the server said was undeclared",
+    ),
+    "3. `allow_paths` admits declared churn without widening anything else": (
+        "tests/integration/test_undeclared_change_evaluation.py",
+        "test_a_waiver_admits_churn_without_widening_anything_else",
+    ),
+    "3b. …a waiver respects the dotted-key boundary, so it is a hatch not a hole": (
+        "tests/unit/test_trajectory_and_policies.py",
+        "test_a_waiver_respects_the_same_boundary_rule",
+    ),
+    "3c. …and every applied waiver is recorded so it is never invisible": (
+        "tests/unit/test_trajectory_and_policies.py",
+        "test_an_applied_waiver_is_recorded_so_it_is_never_invisible",
+    ),
+    "4. a generated eval case reproduces the same classification in replay": (
+        "tests/integration/test_013_exit_gate.py",
+        "test_gate_4_a_generated_case_reproduces_the_classification",
+    ),
+    "4b. …and the policy is evaluated during replay rather than skipped": (
+        "tests/integration/test_undeclared_change_replay.py",
+        "test_the_policy_is_evaluated_in_replay_rather_than_skipped",
+    ),
+    "5. the `undeclared_side_effect` template ships": (
+        "tests/integration/test_013_exit_gate.py",
+        "test_gate_5_the_undeclared_side_effect_template_ships",
+    ),
+    "5b. …and the template-honesty test now covers three profiles": (
+        "tests/integration/test_013_exit_gate.py",
+        "test_gate_5_the_template_honesty_gate_now_covers_three_profiles",
+    ),
+    "6. full suite, architecture lane, and both frontend gates green (DISCHARGED "
+    "BY RUNNING THEM; the covering test is the lane gate that fails if one "
+    "stops selecting tests)": (
+        "tests/architecture/test_test_lanes.py",
+        "test_every_lane_selects_at_least_one_test",
+    ),
+}
+
 MAPS = {
     "003": EXIT_GATE_003,
     "004": EXIT_GATE_004,
