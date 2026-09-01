@@ -26,12 +26,14 @@ ESLINT_CONFIG = FRONTEND / "eslint.config.js"
 
 REQUIRED_SCRIPTS = ("typecheck", "lint", "test", "build")
 
-#: The store frontend does not yet declare `lint`. It is a separate application
-#: with its own gates (§29.1), and adding an ESLint configuration to it is not
-#: this milestone's work — but the quality bars apply to it too, so the gap is
-#: named here rather than hidden by a shared constant that quietly excused it.
-#: Recorded in the 006 deviations ledger for the repository-hardening milestone.
-STORE_REQUIRED_SCRIPTS = ("typecheck", "test", "build")
+#: Closed in 009-T6. Through 006–008 the store frontend declared no `lint` and
+#: carried no ESLint configuration; the gap was named here rather than hidden by a
+#: shared constant that quietly excused it, and deferred to the
+#: repository-hardening milestone. It now declares the same four gates the harness
+#: does, so the two constants are equal — kept as separate names because §29.1
+#: builds the two applications independently, and a future divergence should have
+#: to be written down here rather than inherited.
+STORE_REQUIRED_SCRIPTS = REQUIRED_SCRIPTS
 
 # Mandated by the project's TypeScript rules, not by taste: the harness narrows
 # untrusted HTTP and WebMCP payloads, where an absent property and an explicit
@@ -148,6 +150,10 @@ def test_store_frontend_declares_every_required_script() -> None:
     assert scripts["test"] == "vitest run"
     assert "--noEmit" in scripts["typecheck"]
     assert "tsc" not in scripts["build"], "build is bundling only"
+    assert "eslint" in scripts["lint"], "the lint script must actually invoke eslint"
+    assert (STORE_FRONTEND / "eslint.config.js").is_file(), (
+        "a lint script with no configuration behind it is worse than no lint script"
+    )
 
 
 @pytest.mark.architecture

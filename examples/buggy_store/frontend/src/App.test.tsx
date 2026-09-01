@@ -79,7 +79,7 @@ class FakeStore {
       if (this.refuseMutation !== null) {
         return this.refuse(this.refuseMutation.code, this.refuseMutation.message, 409);
       }
-      const body = JSON.parse(String(init?.body)) as { quantity: number };
+      const body = this.jsonBody<{ quantity: number }>(init);
       if (body.quantity === 0) {
         this.cart = { items: {}, discount: null, subtotal: "0.00", total: "0.00" };
       } else {
@@ -131,7 +131,7 @@ class FakeStore {
       );
     }
     if (path.endsWith("/decision") && method === "POST") {
-      const body = JSON.parse(String(init?.body)) as { approved: boolean };
+      const body = this.jsonBody<{ approved: boolean }>(init);
       this.confirmationStatus = body.approved ? "approved" : "denied";
       return this.ok({ confirmation_id: "confirmation-0001", status: this.confirmationStatus });
     }
@@ -149,6 +149,23 @@ class FakeStore {
     }
     return this.refuse("STORE_ERROR", `unrouted ${method} ${path}`, 404);
   };
+
+  /**
+   * The request body, narrowed to the string the storefront actually sends.
+   *
+   * `RequestInit["body"]` is `BodyInit | null`, which includes `Blob`,
+   * `FormData`, and `URLSearchParams` — all of which `String()` would turn into
+   * `"[object Object]"` and `JSON.parse` would then reject with a message about
+   * character 1. Throwing here says what went wrong instead, and asserts
+   * something true about `api.ts`: it sends JSON strings and nothing else.
+   */
+  private jsonBody<T>(init: RequestInit | undefined): T {
+    const raw = init?.body;
+    if (typeof raw !== "string") {
+      throw new TypeError(`the storefront sends JSON strings; got ${typeof raw}`);
+    }
+    return JSON.parse(raw) as T;
+  }
 
   private ok(body: unknown, status = 200): Response {
     return new Response(JSON.stringify(body), {

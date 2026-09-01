@@ -1,0 +1,307 @@
+# ActionWitness CI (009-T6/T7/T10; spec §26, BUILD_ORDER §7/M8).
+#
+# Every job below runs a command the README already documents. That is the point:
+# CI that invents its own invocations drifts from the instructions a contributor
+# follows, and the first symptom is a green pipeline over a broken quick-start.
+# `readme-clean-checkout` closes that loop by executing the documented commands
+# from a fresh clone with nothing cached (AC-10).
+#
+# Lanes are separate jobs rather than steps in one, because §26's isolation gates
+# only mean something if they run in an environment where the other packages are
+# genuinely absent — and because a lint failure should not be reported as a test
+# failure.
+#
+# Actions are first-party (`actions/*`) and pinned to major tags; `uv` is
+# installed from PyPI at the exact version `uv.lock` was resolved with, rather
+# than through a third-party setup action or a piped install script.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A second push to a branch makes the first run's result irrelevant.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Pinned to match the local toolchain and the version the Dockerfile installs.
+  UV_VERSION: "0.11.18"
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "22"
+
+jobs:
+  # --- §26.7 architecture and isolation gates --------------------------------
+  architecture:
+    name: Architecture gates and package isolation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install "uv==${UV_VERSION}"
+      - run: uv sync --frozen
+
+      - name: Architecture gates
+        run: uv run pytest tests/architecture -q
+
+      # Both isolation scripts build a clean virtualenv and install exactly one
+      # distribution into it. They are the only proof that AC-19's "installs with
+      # every application package absent" is true rather than merely intended,
+      # and they cannot be replaced by an import check inside a venv that has
+      # everything installed.
+      - name: Core-only install (AC-19)
+        run: uv run python scripts/core_only_isolation.py
+
+      - name: Store-only install (§26.7)
+        run: uv run python scripts/store_only_isolation.py
+
+  # --- §26.1/§26.2 the Python suite ------------------------------------------
+  python:
+    name: Python suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install "uv==${UV_VERSION}"
+      - run: uv sync --frozen
+
+      - name: Formatting gate
+        run: uv run ruff format --check .
+
+      - name: Lint gate
+        run: uv run ruff check .
+
+      # The whole suite, not a selection. `filterwarnings=error` and
+      # `--strict-markers` are already on in pyproject, so an unregistered marker
+      # or an unexpected warning fails here rather than accumulating.
+      - name: Full suite
+        run: uv run pytest -q
+
+  # --- §24 the eval CLI, exercised as an installed console script -------------
+  eval-cli:
+    name: Eval CLI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install "uv==${UV_VERSION}"
+      - run: uv sync --frozen
+
+      - name: Eval lane
+        run: uv run pytest -q -m evals
+
+      # FR-088 fixes the exit codes, and the in-process tests call `main()`
+      # directly. This is the only check that the *installed* `actionwitness`
+      # entry point resolves and returns them — a packaging mistake in
+      # `[project.scripts]` is invisible to every other lane.
+      - name: Exit codes through the console script
+        run: |
+          uv run actionwitness eval validate README.md && {
+            echo "expected exit 2 for a file that is not an eval case"; exit 1;
+          } || test $? -eq 2
+
+      # §24.6's published schema is a deliverable (README, §29.2). A malformed one
+      # would be found by whoever tried to use it, which is too late.
+      - name: The published case schema is valid JSON
+        run: |
+          uv run python -c "import json,pathlib;\
+          json.loads(pathlib.Path('packages/actionwitness_core/src/actionwitness_core/evals/regression_eval_case_1_0.json').read_text())"
+
+  # --- §29.1 the two frontends, built independently ---------------------------
+  harness-frontend:
+    name: Harness frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/actionwitness_service/frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: apps/actionwitness_service/frontend/package-lock.json
+      - run: npm ci
+      # Four separate commands on purpose. `npm run build` is bundling: Vite
+      # strips types without checking them, so a pipeline that ran only `build`
+      # would have no type coverage while appearing to.
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+
+  store-frontend:
+    name: Storefront frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: examples/buggy_store/frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: examples/buggy_store/frontend/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+
+  # --- 009-T7 supply chain and secret hygiene ---------------------------------
+  supply-chain:
+    name: Secret and dependency review
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Dependency review compares a pull request against its base, so it
+          # needs both sides of the diff.
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install "uv==${UV_VERSION}"
+
+      # `--frozen` fails if a manifest and the lockfile disagree. That is the
+      # supply-chain check that matters most here: an undeclared or drifted
+      # dependency cannot reach the image, because the image resolves from this
+      # same lockfile.
+      - name: The lockfile agrees with every manifest
+        run: uv lock --check
+
+      - name: No secret-shaped values are committed
+        run: uv run --no-project python scripts/scan_for_secrets.py
+
+      # First-party, and advisory-only on pushes to main where there is no base
+      # to diff against.
+      - name: Dependency review
+        if: github.event_name == 'pull_request'
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: moderate
+          license-check: true
+
+  # --- 009-T2/T7 the artifact itself ------------------------------------------
+  image:
+    name: Image build and artifact hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the release image
+        run: docker build -t actionwitness:ci .
+
+      # The static half of this runs in `tests/architecture`. This half looks in
+      # the built filesystem, because `.dockerignore` is a claim about the build
+      # context and this is the artifact.
+      - name: The image carries no planning input, rig, or secret
+        run: |
+          set -eu
+          forbidden="BUILD_ORDER.md actionwitness-functional-spec.md .cavesson .git .env spike.html"
+          for name in $forbidden; do
+            if docker run --rm --entrypoint sh actionwitness:ci -c \
+                 "find / -name '$name' -not -path '*/node_modules/*' 2>/dev/null | head -1" \
+               | grep -q .; then
+              echo "the image contains $name"; exit 1
+            fi
+          done
+
+      # `-P` keeps the working directory off sys.path. Without it this check is
+      # answered by whatever directories happen to sit next to the interpreter:
+      # `integrations` is a namespace package, so a stray directory of that name
+      # in the cwd reports as an installed module and the test fails for a reason
+      # that has nothing to do with the image.
+      - name: The store environment holds no assurance package (§26.7, ADR-0006)
+        run: |
+          docker run --rm --entrypoint /opt/store/bin/python actionwitness:ci -P -c "
+          import importlib.util as u
+          leaked = [m for m in ('actionwitness_core','actionwitness_service','integrations','httpx')
+                    if u.find_spec(m) is not None]
+          assert not leaked, f'the store virtualenv contains {leaked}'
+          # Positive control: without this the check passes just as well against
+          # an empty interpreter, and would keep passing if the store stopped
+          # being installed at all.
+          assert u.find_spec('buggy_store') is not None, 'the store itself is missing'
+          import buggy_store.api  # the app factory must import, not merely resolve
+          "
+
+      - name: The harness environment holds what it needs
+        run: |
+          docker run --rm --entrypoint /opt/harness/bin/python actionwitness:ci -P -c "
+          import actionwitness_core, actionwitness_service.api.app, integrations.buggy_store, httpx
+          import importlib.util as u
+          # The demo target is reached over HTTP, never imported (ADR-0006). Its
+          # absence here is what makes that a property of the artifact.
+          assert u.find_spec('buggy_store') is None, 'the harness virtualenv contains buggy_store'
+          "
+
+      - name: The image serves /healthz and both applications
+        run: |
+          set -eu
+          docker run -d --name aw -p 8000:8000 actionwitness:ci
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/healthz >/dev/null 2>&1; then break; fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:8000/healthz
+          curl -fsS http://127.0.0.1:8000/ | grep -qi "<!doctype html"
+          curl -fsS http://127.0.0.1:8000/demo | grep -qi "<!doctype html"
+          curl -fsS -H 'X-Workspace-Id: ci-smoke' \
+            http://127.0.0.1:8000/demo/api/v1/store/state | grep -q target_state
+          docker logs aw
+          docker rm -f aw
+
+  # --- 009-T10 AC-10: a fresh checkout follows the README ---------------------
+  readme-clean-checkout:
+    name: Clean checkout follows the README (AC-10)
+    runs-on: ubuntu-latest
+    steps:
+      # No caches anywhere in this job, deliberately. The claim is that somebody
+      # who has never seen this repository can follow the README, and a warm npm
+      # or uv cache is exactly the advantage they do not have.
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - run: pip install "uv==${UV_VERSION}"
+
+      # Exactly the README's "Quick start", in order.
+      - name: uv sync
+        run: uv sync
+
+      - name: uv run pytest tests/architecture -q
+        run: uv run pytest tests/architecture -q
+
+      - name: The CLI surface answers
+        run: uv run actionwitness eval --help
+
+      - name: npm ci && npm run build (harness)
+        working-directory: apps/actionwitness_service/frontend
+        run: npm ci && npm run build
+
+      - name: npm ci && npm run build (storefront)
+        working-directory: examples/buggy_store/frontend
+        run: npm ci && npm run build
+
+      # The README's command tables are a deliverable too (§29.2). This asserts
+      # every command they list actually exists.
+      - name: Every documented command is real
+        run: uv run pytest tests/architecture/test_readme_commands.py -q
