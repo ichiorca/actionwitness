@@ -51,7 +51,13 @@ export class ConfirmationCoordinator {
    * the wait ends as `cancelled` rather than hanging, and the caller is
    * expected to tell the server so the human's dialog closes too.
    */
-  async wait(confirmationId: string, signal: AbortSignal): Promise<ConfirmationOutcome> {
+  async wait(
+    confirmationId: string,
+    signal: AbortSignal | undefined,
+  ): Promise<ConfirmationOutcome> {
+    // No signal is the pinned build's normal case (ADR-0002: executeTool
+    // forwards none). The wait still resolves through settle(); it simply
+    // cannot be caller-cancelled, which is the documented degradation.
     return await new Promise<ConfirmationOutcome>((resolve) => {
       let settled = false;
       const settle = (outcome: ConfirmationOutcome): void => {
@@ -62,7 +68,7 @@ export class ConfirmationCoordinator {
         }
         settled = true;
         this.#waiters.delete(confirmationId);
-        signal.removeEventListener("abort", onAbort);
+        signal?.removeEventListener("abort", onAbort);
         this.#announce();
         resolve(outcome);
       };
@@ -71,13 +77,13 @@ export class ConfirmationCoordinator {
         settle({ kind: "cancelled" });
       }
 
-      if (signal.aborted) {
+      if (signal?.aborted) {
         settle({ kind: "cancelled" });
         return;
       }
 
       this.#waiters.set(confirmationId, { settle });
-      signal.addEventListener("abort", onAbort, { once: true });
+      signal?.addEventListener("abort", onAbort, { once: true });
       this.#announce();
     });
   }

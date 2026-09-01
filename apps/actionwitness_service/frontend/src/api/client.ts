@@ -50,7 +50,10 @@ export class ApiError extends Error {
 export interface RequestOptions<T> {
   readonly method?: "GET" | "POST" | "PUT" | "DELETE";
   readonly body?: unknown;
-  readonly signal?: AbortSignal;
+  // `| undefined` is deliberate under exactOptionalPropertyTypes: callers
+  // forward an invocation signal that the pinned build never supplies
+  // (ADR-0002), so an explicit undefined must be assignable.
+  readonly signal?: AbortSignal | undefined;
   /**
    * Narrows the response body. Required rather than optional: an unvalidated
    * `as T` is the exact move the constitution forbids at a boundary, and making

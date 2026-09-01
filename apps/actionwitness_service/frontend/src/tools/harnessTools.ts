@@ -103,13 +103,32 @@ export function useHarnessToolset(
 
   const armContract = useHarnessTool({
     name: "arm_outcome_contract",
-    description: "Capture the initial authoritative state and create a run for the active contract.",
-    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    description:
+      "Capture the initial authoritative state and create a run for the active contract. " +
+      "Optionally bind an eligible completed run as the matched-comparison source.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        comparison_source_run_id: {
+          type: "string",
+          minLength: 1,
+          maxLength: 128,
+          description:
+            "A terminal run in this workspace to compare this run against (§15.3 matched pre/post pair).",
+        },
+      },
+      additionalProperties: false,
+    },
     annotations: { readOnlyHint: false },
     // §11.1: "valid contract selected and no run active".
     enabled: loaded && phase === "contract_ready",
-    execute: async () => {
-      const armed = await request("/runs", { method: "POST", body: {}, parse: (value) => value });
+    execute: async (args: Record<string, unknown>) => {
+      const source = args["comparison_source_run_id"];
+      const armed = await request("/runs", {
+        method: "POST",
+        body: typeof source === "string" ? { comparison_source_run_id: source } : {},
+        parse: (value) => value,
+      });
       await refresh();
       return armed;
     },

@@ -66,7 +66,10 @@ Chrome with `#enable-webmcp-testing` enabled (the build ADR-0002 records).
       - [ ] Repeat and **deny** instead: no order, and the run still verifies
             without being marked failed for the refusal.
 
-Attested by: ______________________  Date: ____________  Build: ____________
+Attested by: operator (Claude-driven session, operator-directed; three
+defects found and fixed during the run — see specs/006-ui-webmcp-confirmation/
+plan.md gate-run entry)  Date: 2026-09-01  Build: Chrome 151.0.0.0 stable,
+`#enable-webmcp-testing` Enabled
 
 ## Criterion 2 — an unsupported browser completes the manual equivalent
 

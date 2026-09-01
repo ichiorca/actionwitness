@@ -57,6 +57,12 @@ export default function App(): React.ReactElement {
   const [templates, setTemplates] = useState<readonly ContractTemplate[]>([]);
   const [findings, setFindings] = useState<FindingsPage | null>(null);
   const [pending, setPending] = useState<PendingConfirmation | null>(null);
+  const [comparison, setComparison] = useState<{
+    comparable: boolean | null;
+    differingFields: readonly string[];
+    resolved: readonly string[];
+    introduced: readonly string[];
+  }>({ comparable: null, differingFields: [], resolved: [], introduced: [] });
 
   const phase = status?.guidance.phase ?? "";
   const runId = status?.activeRun?.runId ?? null;
@@ -149,6 +155,30 @@ export default function App(): React.ReactElement {
           }
         },
         () => undefined,
+      );
+      // §15.3: a matched pre/post comparison, or a structured refusal when the
+      // run was armed without a source — the refusal maps to the panel's null
+      // (no pair exists), never to an error the user has to dismiss.
+      void request(`/runs/${runId}/comparison`, {
+        parse: (value) => value as Record<string, unknown>,
+        signal: controller.signal,
+      }).then(
+        (doc) => {
+          if (live) {
+            setComparison({
+              comparable: doc["comparable"] === true,
+              differingFields: (doc["differing_fields"] as readonly string[] | undefined) ?? [],
+              resolved: (doc["resolved_classifications"] as readonly string[] | undefined) ?? [],
+              introduced:
+                (doc["introduced_classifications"] as readonly string[] | undefined) ?? [],
+            });
+          }
+        },
+        () => {
+          if (live) {
+            setComparison({ comparable: null, differingFields: [], resolved: [], introduced: [] });
+          }
+        },
       );
     }
 
@@ -281,7 +311,12 @@ export default function App(): React.ReactElement {
             overallResult={findings?.overallResult ?? null}
           />
 
-          <ComparisonPanel comparable={null} differingFields={[]} resolved={[]} introduced={[]} />
+          <ComparisonPanel
+            comparable={comparison.comparable}
+            differingFields={comparison.differingFields}
+            resolved={comparison.resolved}
+            introduced={comparison.introduced}
+          />
         </div>
       )}
 

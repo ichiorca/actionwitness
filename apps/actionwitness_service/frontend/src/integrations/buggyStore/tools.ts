@@ -32,6 +32,18 @@ import {
 
 const ACTIVE_PHASES = ["armed", "running"];
 
+/**
+ * Registration must SURVIVE the confirmation pause, or the caller never hears
+ * the answer: the Tier 1 gate run (2026-09-01) proved that unregistering a
+ * tool mid-invocation orphans the pinned build's `executeTool` promise — the
+ * handler keeps running and the server completes, but the invoking agent
+ * waits forever. §14.3 requires the promise to stay pending across the human
+ * decision, which structurally requires the registration to outlive it. A NEW
+ * call during the pause is refused by the server (run state machine), which
+ * stays the authoritative gate per §11.2.
+ */
+const REGISTERED_PHASES = [...ACTIVE_PHASES, "awaiting_confirmation"];
+
 /** §11.2's five tools. */
 export const SEARCH_CATALOG = "search_catalog";
 export const GET_CART = "get_cart";
@@ -87,8 +99,10 @@ export function useBuggyStoreTools(
   coordinator: ConfirmationCoordinator = confirmations,
 ): StoreToolset {
   // §11.2: "contract armed or run running". The mutating three add "not
-  // verifying or awaiting confirmation" — which these phases already exclude.
-  const active = runId !== null && ACTIVE_PHASES.includes(phase);
+  // verifying or awaiting confirmation" — which these phases already exclude
+  // for NEW calls; the registration itself persists through the confirmation
+  // pause so the in-flight caller's promise can resolve (see REGISTERED_PHASES).
+  const active = runId !== null && REGISTERED_PHASES.includes(phase);
 
   const searchCatalog = useHarnessTool({
     name: SEARCH_CATALOG,

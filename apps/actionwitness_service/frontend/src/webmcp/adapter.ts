@@ -195,7 +195,7 @@ export interface NativeToolDefinition {
    */
   readonly execute: (
     args: Record<string, unknown>,
-    context: { readonly signal: AbortSignal },
+    context: { readonly signal: AbortSignal | undefined },
   ) => Promise<unknown>;
 }
 
@@ -251,11 +251,17 @@ export function useNativeTool(tool: NativeToolDefinition): RegistrationState {
           ...(latest.current.annotations === undefined
             ? {}
             : { annotations: latest.current.annotations }),
-          execute: async (args: unknown, context: { signal: AbortSignal }) => {
+          // context is OPTIONAL at runtime: ADR-0002 recorded that the pinned
+          // Chrome build's executeTool invokes handlers with no context at all
+          // (no per-invocation signal), and the Tier 1 gate run proved an
+          // unguarded `context.signal` crashes every native invocation there.
+          // The signal is a responsiveness improvement when present, never a
+          // precondition.
+          execute: async (args: unknown, context?: { signal?: AbortSignal }) => {
             try {
               return normalizeResult(
                 await latest.current.execute((args ?? {}) as Record<string, unknown>, {
-                  signal: context.signal,
+                  signal: context?.signal,
                 }),
                 limit,
               );

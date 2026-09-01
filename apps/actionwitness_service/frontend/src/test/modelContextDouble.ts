@@ -88,6 +88,24 @@ export class ModelContextDouble extends EventTarget implements WebMCP.ModelConte
     return entry.tool.execute(input, { signal });
   }
 
+  /**
+   * Invoke the way the pinned Chrome build actually does: NO context argument
+   * at all. ADR-0002 recorded that `executeTool` forwards no per-invocation
+   * signal, and the Tier 1 gate run (2026-09-01) proved an adapter that
+   * assumes a context crashes on every native invocation there. Tests that
+   * only ever used `invoke()` reproduced the double's optimism, not the
+   * browser.
+   */
+  async invokeAsPinnedBuild(name: string, input: Record<string, unknown> = {}): Promise<unknown> {
+    const entry = this.#tools.get(name);
+    if (entry === undefined) {
+      throw new Error(`no tool registered as ${name}`);
+    }
+    return (
+      entry.tool.execute as unknown as (args: Record<string, unknown>) => Promise<unknown>
+    )(input);
+  }
+
   get toolNames(): string[] {
     return [...this.#tools.keys()];
   }

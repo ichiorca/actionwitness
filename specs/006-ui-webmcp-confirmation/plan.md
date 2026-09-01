@@ -296,3 +296,38 @@ decision. **If the operator reads M5 as requiring all eleven, T7 grows.**
 - **`ComparisonPanel` is wired with placeholder props** in `App.tsx`. The panel
   and its tests are complete; fetching `GET /runs/{id}/comparison` into it is a
   small follow-up, and it is listed here rather than left to be discovered.
+
+## Tier 1 gate — criterion 1 run (2026-09-01, Claude-driven, operator-directed)
+
+Journeys A and B ran in the real browser (Chrome 151.0.0.0 stable,
+`#enable-webmcp-testing`) against the live service and store. Every criterion 1
+box passed — after three defects the run itself exposed were fixed:
+
+1. **Native invocation crashed on the pinned build.** The adapter's execute
+   wrapper read `context.signal` unguarded; the build passes NO context
+   (ADR-0002's no-signal finding, now a crash rather than a footnote). Every
+   native invocation returned an isError envelope; the jsdom double always
+   supplies a context, so 84 tests were green over a broken browser path.
+   Fixed with optional context; the double gained `invokeAsPinnedBuild` and a
+   regression test.
+2. **The matched comparison was unreachable from every surface.** The API
+   supported `comparison_source_run_id` and served `/runs/{id}/comparison`,
+   but the arm tool's schema was empty and ComparisonPanel had placeholder
+   props (the carried deviation). Wired both; the checklist line "comparison
+   panel shows the original critical classification resolved" now passes:
+   Resolved: false_success_or_state_mismatch, Introduced: nothing.
+3. **Unregistering a tool mid-invocation orphaned the caller.** Confirmation
+   flipped the bridge tools' phase gate, tearing down `proceed_to_checkout`'s
+   registration while its own invocation waited on the human; the pinned
+   build never settles an executeTool promise whose registration vanished —
+   the server completed, the agent waited forever. Registration now survives
+   `awaiting_confirmation` (§14.3 requires the pending promise; the server's
+   run state machine stays the gate for new calls). The test asserting
+   unregistration had its premise corrected, not weakened.
+
+Automation caveats recorded for the manual pass: the ConfigPanel profile
+field's onBlur commit and the dialog's Tab-cycle-onto-buttons behaviour were
+exercised via synthetic events/keys and are inconclusive under automation;
+both are asserted by unit tests and should be confirmed by hand in the
+criterion 2 run. Criterion 2 (no-WebMCP browser) remains open; AC-01 stays
+deferred to M8 per the checklist.

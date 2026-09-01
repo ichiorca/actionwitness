@@ -100,15 +100,24 @@ describe("registration", () => {
     expect(installed?.modelContext.toolNames).toEqual([]);
   });
 
-  it("publishes nothing while a human is deciding", async () => {
+  it("stays registered while a human is deciding", async () => {
+    // Premise corrected by the Tier 1 gate run (2026-09-01): this test used to
+    // assert the tools UNregister during `awaiting_confirmation`, and the real
+    // browser proved that behaviour orphans the in-flight caller — the pinned
+    // build never settles an executeTool promise whose registration was torn
+    // down, so the agent that asked for checkout waits forever while the
+    // server completes without it. §14.3 requires the promise to stay pending
+    // across the decision, so the registration must outlive it. New calls
+    // during the pause are refused by the SERVER's run state machine, which
+    // §11.2 makes the authoritative gate.
     const rendered = renderHook(() =>
       useBuggyStoreTools("run_1", "awaiting_confirmation", noop, new ConfirmationCoordinator()),
     );
     await waitFor(() =>
-      expect(rendered.result.current.states[UPDATE_CART]?.phase).not.toBe("registered"),
+      expect(rendered.result.current.states[UPDATE_CART]?.phase).toBe("registered"),
     );
 
-    expect(installed?.modelContext.toolNames).toEqual([]);
+    expect(installed?.modelContext.toolNames).toContain(PROCEED_TO_CHECKOUT);
   });
 });
 

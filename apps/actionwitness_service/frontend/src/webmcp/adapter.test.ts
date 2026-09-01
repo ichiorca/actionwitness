@@ -118,7 +118,7 @@ describe("registration lifecycle", () => {
 describe("invocation", () => {
   it("hands the handler its own abort signal", async () => {
     installed = installModelContextDouble();
-    let seen: AbortSignal | null = null;
+    let seen: AbortSignal | undefined;
 
     const { result } = renderHook(() =>
       useNativeTool(
@@ -138,6 +138,34 @@ describe("invocation", () => {
     // The identity matters: a fresh signal would never fire when the caller
     // aborts, which is the whole point of the native path.
     expect(seen).toBe(controller.signal);
+  });
+
+  it("survives the pinned build's context-free invocation (ADR-0002)", async () => {
+    // The real Chrome build calls execute(args) with NO context — the Tier 1
+    // gate run proved an unguarded context.signal turned every native
+    // invocation into an isError envelope. The handler must run, and receive
+    // an undefined signal rather than a crash.
+    installed = installModelContextDouble();
+    let seenSignal: AbortSignal | undefined | "never-called" = "never-called";
+
+    const { result } = renderHook(() =>
+      useNativeTool(
+        tool({
+          execute: async (_args, context) => {
+            seenSignal = context.signal;
+            return "ok";
+          },
+        }),
+      ),
+    );
+    await waitFor(() => expect(result.current.phase).toBe("registered"));
+
+    const outcome = (await installed.modelContext.invokeAsPinnedBuild(
+      "get_workspace_status",
+    )) as { isError?: boolean };
+
+    expect(outcome.isError).not.toBe(true);
+    expect(seenSignal).toBeUndefined();
   });
 
   it("normalizes a thrown handler into isError rather than rejecting", async () => {
