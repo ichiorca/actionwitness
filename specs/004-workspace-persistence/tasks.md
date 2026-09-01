@@ -43,7 +43,7 @@ Cite the T-ID in every commit that advances it.
       header; health checks and static assets excluded; stale-workspace and
       eval-workspace cleanup preserving built-in templates; stable 429 that
       never partially commits.
-- [ ] T10 — Adapter registry: a missing or misconfigured optional target
+- [x] T10 — Adapter registry: a missing or misconfigured optional target
       produces a bounded unavailable state, the service starts with Buggy Store
       disabled and reports the adapter unavailable, and one failed integration
       never disables the others (§21.1).

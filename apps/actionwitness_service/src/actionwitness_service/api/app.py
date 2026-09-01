@@ -20,6 +20,7 @@ from contextlib import asynccontextmanager, suppress
 from datetime import datetime
 from pathlib import Path
 
+import httpx
 from actionwitness_core.kernel import CoreError
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -31,6 +32,7 @@ from actionwitness_service.api.middleware import (
     WorkspaceCookieMiddleware,
 )
 from actionwitness_service.api.origins import OriginPolicy
+from actionwitness_service.application.adapter_registry import AdapterRegistry
 from actionwitness_service.application.cleanup import WorkspaceCleaner
 from actionwitness_service.application.rate_limits import RateLimiter
 from actionwitness_service.application.workspaces import WorkspaceStore
@@ -46,10 +48,11 @@ def create_app(
     environ: Mapping[str, str] | None = None,
     database_path: str | Path | None = None,
     clock: Callable[[], datetime] | None = None,
+    target_client: httpx.AsyncClient | None = None,
 ) -> FastAPI:
     """Build the application.
 
-    `environ`, `database_path`, and `clock` are injectable so a test can
+    `environ`, `database_path`, `clock`, and `target_client` are injectable so a test can
     construct the real application rather than a lookalike, and so evaluation
     and replay stay deterministic (constitution §1). Passing none of them reads
     the process environment once, here and nowhere else.
@@ -63,6 +66,17 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.schema_version = await database.initialize()
+
+        # ADR-0001: one lifespan-owned client, injected into the adapters. A
+        # client per request would lose connection reuse; a module-level one
+        # would outlive the loop it was created on. A test that supplied its
+        # own keeps it — closing somebody else's client is not this scope's
+        # business.
+        owned_client = target_client is None
+        client = target_client or httpx.AsyncClient(
+            base_url=settings.buggy_store.base_url if settings.buggy_store else ""
+        )
+        app.state.adapters = AdapterRegistry(settings, client=client)
 
         # FR-009: "at startup and at least hourly". The startup sweep is awaited
         # so a deployment begins with expired data already gone; the hourly one
@@ -84,6 +98,8 @@ def create_app(
                 sweeper.cancel()
                 with suppress(asyncio.CancelledError):
                     await sweeper
+            if owned_client:
+                await client.aclose()
 
     app = FastAPI(title="ActionWitness", version="0.1.0", lifespan=lifespan)
     app.state.settings = settings

@@ -468,3 +468,41 @@ mistaken identifier is inert rather than destructive; M6 calls it.
 
 §29.1 documents the startup commands but not where artifact files live, and
 cleanup cannot remove files without knowing.
+
+### T10 — the integration is imported inside the guard, not at module scope
+
+§21.1 requires the harness to start with the Buggy Store package **absent from
+the environment**, not merely switched off — and a configuration flag cannot
+prove that. A service could honour `BUGGY_STORE_ENABLED=false` while still
+importing the package at startup and dying when it is missing. So the import
+happens inside `_register`'s `try`, and `ImportError` is an expected outcome
+producing a `disabled` slot with "not installed" as its reason. The test that
+matters makes `import integrations.*` genuinely fail and asserts the
+application still completes its lifespan and serves.
+
+Each registration is wrapped individually rather than the loop as a whole, so a
+failure in one integration cannot skip the rest.
+
+### T10 — `disabled` and `misconfigured` stay distinct
+
+`ModuleStatus` already draws that line and the registry preserves it. An
+operator who mistyped a base URL needs to see a mistake, not an absence;
+reporting both as "not available" turns a typo into a mystery. The capability
+report lists unavailable targets too — a bar showing only what works would make
+a misconfiguration look like a feature that was never built.
+
+A broken integration's reason names the exception **type** and not its message.
+An exception's text is where a path or a credential leaks (§20), and a test
+seeds a URL with a password in it to prove neither reaches the reason.
+
+### T10 — `TARGET_UNAVAILABLE`, not a new code
+
+FR-021's existing code already means exactly this, so nothing is
+project-allocated here. It is an `ApiError` subclass so an absent target reaches
+a client as §15.8's envelope rather than as a 500 whose body is a stack trace.
+
+### T10 — one lifespan-owned HTTP client, injected (ADR-0001)
+
+A client per request loses connection reuse; a module-level one outlives the
+loop it was created on. A test that supplies its own keeps ownership of it —
+closing somebody else's client is not the lifespan's business.
