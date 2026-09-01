@@ -630,3 +630,39 @@ forbids it, and copying them would give the project two sources of truth for
 what a contract asserts. Seeding is skipped entirely when the integration is not
 installed — §21.1 requires the harness to run without it, and a startup that
 insisted on seeding its templates would make that impossible.
+
+### T13 — the exit gate is asserted twice, on purpose
+
+Each criterion is already covered by the suite of the task that owns it.
+`tests/integration/test_004_exit_gate.py` asserts all five again through the
+assembled application, because a gate that passes only when each piece is tested
+in isolation is a gate on the pieces rather than on the milestone. Every client
+in that file is a separate `httpx.AsyncClient` with its own cookie jar — a
+single client switching cookies would be testing the cookie, not the isolation.
+
+### T13 — gate 2's run, confirmation, and artifact reads are covered at the guard
+
+§15 defines no read routes for runs, confirmations, or artifacts until M4/M5, so
+the exit-gate file exercises the cross-workspace *contract* read and the
+cross-workspace mutation and reset over HTTP, while the other three kinds are
+covered at `WorkspaceScope` in `test_workspace_authorization.py` — through the
+real middleware, dependency, and envelope, and through the same guard every
+future route will call. Recorded rather than papered over: the HTTP surface for
+those three arrives with the routes.
+
+### T13 — the traceability map is a new architecture module
+
+002's roll-up lives beside the core-only isolation job its first criterion
+depends on. 003's and 004's go in `tests/architecture/test_exit_gate_traceability.py`,
+and later milestones extend the same file. Coverage is checked by parsing the
+named test file and looking for the function definition, not by searching for
+the name in the text — a mention in a docstring is not coverage, and a substring
+search would accept one.
+
+Two further checks make the map harder to satisfy vacuously: every published
+criterion number must appear (so splitting one into parts stays honest while
+dropping one does not), and no criterion may be covered from an opt-in lane,
+because a gate satisfied by a test the default run skips is not a gate.
+
+Writing this map caught four wrong test names in the 003 half — the gate found
+its own first defect.

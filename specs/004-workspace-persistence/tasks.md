@@ -55,7 +55,7 @@ Cite the T-ID in every commit that advances it.
       immutable contract, and select the active contract, atomically selecting
       the target its `target_id` maps to (FR-024). The three templates are the
       ones `integrations.buggy_store` already seeds.
-- [ ] T13 — Verify the full exit gate: two-client isolation across every
+- [x] T13 — Verify the full exit gate: two-client isolation across every
       workspace-owned resource, no partial state under resource/rate/lock
       failure, reset semantics, and a clean start with the Buggy Store disabled.
       Extend the architecture lane's exit-gate traceability map to 004.
