@@ -34,7 +34,14 @@ from typing import Final, NamedTuple
 
 import aiosqlite
 
-__all__ = ["MIGRATIONS", "TIER_ONE_TABLES", "Migration", "apply_migrations", "schema_version"]
+__all__ = [
+    "MIGRATIONS",
+    "TIER_ONE_TABLES",
+    "TIER_TWO_EVAL_TABLES",
+    "Migration",
+    "apply_migrations",
+    "schema_version",
+]
 
 
 class Migration(NamedTuple):
@@ -323,6 +330,114 @@ MIGRATIONS: Final[tuple[Migration, ...]] = (
             """,
         ),
     ),
+    Migration(
+        version=2,
+        name="tier two regression eval case, run, and event tables",
+        statements=(
+            # §17.1 `evaluation_cases`. The unique constraint IS FR-080's
+            # idempotence: "repeating `create_regression_eval` with the same
+            # inputs returns the existing case and `created: false`; it never
+            # mints a duplicate." Enforced by the database rather than by a
+            # read-then-write, which two concurrent generators would both pass.
+            """
+            CREATE TABLE evaluation_cases (
+                id                       TEXT NOT NULL PRIMARY KEY,
+                workspace_id             TEXT NOT NULL,
+                source_run_id            TEXT NOT NULL,
+                contract_content_hash    TEXT NOT NULL,
+                generator_schema_version TEXT NOT NULL,
+                schema_version           TEXT NOT NULL,
+                name                     TEXT NOT NULL,
+                content_hash             TEXT NOT NULL,
+                case_json                TEXT NOT NULL,
+                created_at               TEXT NOT NULL,
+                UNIQUE (source_run_id, contract_content_hash, generator_schema_version),
+                FOREIGN KEY (workspace_id) REFERENCES workspaces (id) ON DELETE CASCADE,
+                FOREIGN KEY (source_run_id) REFERENCES runs (id)
+            )
+            """,
+            """
+            CREATE INDEX evaluation_cases_by_workspace
+                ON evaluation_cases (workspace_id, created_at)
+            """,
+            # §17.1 `evaluation_runs`. Two workspaces, deliberately: the owner
+            # is who asked, the execution workspace is the isolated `kind: eval`
+            # one FR-083 requires, and collapsing them would let a replay mutate
+            # the interactive workspace it was launched from.
+            #
+            # `status` and `overall_result` are separate columns for the same
+            # reason they are separate report fields: §17.1 says status is the
+            # expectation-matching status "while `overall_result` is the actual
+            # evaluated business outcome", and a reproduced failure is `passed`
+            # with `failed`.
+            """
+            CREATE TABLE evaluation_runs (
+                id                            TEXT NOT NULL PRIMARY KEY,
+                owner_workspace_id            TEXT NOT NULL,
+                execution_workspace_id        TEXT NOT NULL,
+                evaluation_case_id            TEXT NOT NULL,
+                evaluation_case_content_hash  TEXT NOT NULL,
+                mode                          TEXT NOT NULL,
+                environment_profile           TEXT NOT NULL,
+                implementation_version        TEXT NOT NULL,
+                build_commit                  TEXT,
+                status                        TEXT NOT NULL,
+                overall_result                TEXT,
+                started_at                    TEXT NOT NULL,
+                completed_at                  TEXT,
+                report_json                   TEXT,
+                FOREIGN KEY (owner_workspace_id) REFERENCES workspaces (id) ON DELETE CASCADE,
+                FOREIGN KEY (execution_workspace_id) REFERENCES workspaces (id),
+                FOREIGN KEY (evaluation_case_id) REFERENCES evaluation_cases (id)
+            )
+            """,
+            """
+            CREATE INDEX evaluation_runs_by_owner
+                ON evaluation_runs (owner_workspace_id, started_at)
+            """,
+            # §17.1 `evaluation_events`. A separate table from `events`, because
+            # §16.1 is explicit that eval events "are append-only and belong
+            # only to their `evaluation_run_id`; they never appear in the source
+            # outcome run" — sharing one table would put a replay's evidence
+            # inside the timeline it was cut from.
+            """
+            CREATE TABLE evaluation_events (
+                id                     TEXT NOT NULL PRIMARY KEY,
+                evaluation_run_id      TEXT NOT NULL,
+                sequence_number        INTEGER NOT NULL,
+                event_type             TEXT NOT NULL,
+                actor                  TEXT NOT NULL,
+                tool_name              TEXT,
+                correlation_id         TEXT,
+                request_id             TEXT,
+                redacted_payload_json  TEXT NOT NULL,
+                status                 TEXT,
+                state_version_before   TEXT,
+                state_version_after    TEXT,
+                state_hash_before      TEXT,
+                state_hash_after       TEXT,
+                duration_ms            INTEGER,
+                created_at             TEXT NOT NULL,
+                UNIQUE (evaluation_run_id, sequence_number),
+                FOREIGN KEY (evaluation_run_id) REFERENCES evaluation_runs (id) ON DELETE CASCADE
+            )
+            """,
+            """
+            CREATE INDEX evaluation_events_by_run
+                ON evaluation_events (evaluation_run_id, sequence_number)
+            """,
+        ),
+    ),
+)
+
+#: §17.1's Tier 2 eval tables, added by migration 2. Named separately from
+#: `TIER_ONE_TABLES` so the M3 gate keeps asserting that nothing from Tier 2
+#: slipped into migration 1 — the check that would otherwise quietly weaken the
+#: moment this milestone landed.
+TIER_TWO_EVAL_TABLES: Final[tuple[str, ...]] = (
+    "evaluation_cases",
+    "evaluation_runs",
+    "evaluation_events",
 )
 
 

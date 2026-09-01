@@ -22,6 +22,7 @@ from actionwitness_service.persistence.database import Database
 from actionwitness_service.persistence.migrations import (
     MIGRATIONS,
     TIER_ONE_TABLES,
+    TIER_TWO_EVAL_TABLES,
     Migration,
     apply_migrations,
     schema_version,
@@ -29,10 +30,11 @@ from actionwitness_service.persistence.migrations import (
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
-#: Tables §17.1 defines but M6/M7 own. Shipping them now would be a placeholder.
-TIER_TWO_TABLES = (
-    "evaluation_cases",
-    "evaluation_runs",
+#: Tables §17.1 defines that no milestone has yet written to. M6 landed the
+#: three eval tables in migration 2, so they moved out of this list and into
+#: `TIER_TWO_EVAL_TABLES`; the benchmark and Shopify tables belong to M7 and
+#: M10 and would still be placeholders today.
+UNBUILT_TABLES = (
     "benchmark_suites",
     "benchmark_trials",
     "shopify_pairings",
@@ -59,15 +61,56 @@ async def test_migrations_create_every_tier_one_table(database: Database) -> Non
         assert set(TIER_ONE_TABLES) <= await _table_names(connection)
 
 
-async def test_no_tier_two_table_ships_early(database: Database) -> None:
-    """A schema no code fills is a wish, not a record (ADR-0003)."""
+async def test_no_table_ships_before_the_code_that_fills_it(database: Database) -> None:
+    """A schema no code fills is a wish, not a record (ADR-0003).
+
+    Narrowed when M6 landed the eval tables: the benchmark and Shopify tables
+    are still unwritten, so shipping them now would be exactly the placeholder
+    this gate forbids.
+    """
     # Arrange / Act
     await database.initialize()
 
     # Assert
     async with database.connect() as connection:
         present = await _table_names(connection)
-    assert present.isdisjoint(TIER_TWO_TABLES)
+    assert present.isdisjoint(UNBUILT_TABLES)
+
+
+async def test_migration_one_still_carries_only_tier_one_tables(database: Database) -> None:
+    """The M3 gate's real property, kept once Tier 2 arrived.
+
+    "Nothing from Tier 2 slipped in early" cannot be checked against the
+    finished database any more, because Tier 2 has legitimately landed. What
+    stays checkable — and stays the thing worth protecting — is that the *first*
+    migration is still exactly the nine tables M3 shipped. A later table quietly
+    edited into migration 1 would change the schema of every database that
+    already ran it, which is the failure ordered migrations exist to prevent.
+    """
+    # Arrange
+    first = MIGRATIONS[0]
+
+    # Act
+    created = {
+        statement.split("CREATE TABLE")[1].split("(")[0].strip()
+        for statement in first.statements
+        if "CREATE TABLE" in statement
+    }
+
+    # Assert
+    assert created == set(TIER_ONE_TABLES)
+    assert created.isdisjoint(TIER_TWO_EVAL_TABLES)
+
+
+async def test_the_eval_tables_arrive_in_their_own_migration(database: Database) -> None:
+    """M6's tables ship in migration 2, applied by the same ordered runner."""
+    # Arrange / Act
+    version = await database.initialize()
+
+    # Assert
+    assert version >= 2
+    async with database.connect() as connection:
+        assert set(TIER_TWO_EVAL_TABLES) <= await _table_names(connection)
 
 
 async def test_applying_migrations_twice_is_a_no_op(database: Database) -> None:

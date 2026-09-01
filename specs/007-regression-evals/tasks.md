@@ -6,7 +6,7 @@ Cite the T-ID in every commit that advances it.
       trajectory, environment expectation, interaction strategy, and eval-report
       models, with their enums registered. Replaces the deliberate tripwire in
       `tests/evals/test_evals_lane.py` with real §24 coverage in the same change.
-- [ ] T2 — Generate a case from a terminal failed or warning-bearing run, and
+- [x] T2 — Generate a case from a terminal failed or warning-bearing run, and
       only from one. Idempotent: the same source run yields the same case, and a
       proposal run is refused with `PROPOSAL_RUN_NOT_ELIGIBLE`.
 - [ ] T3 — Case content per §24.2: embed the source contract verbatim and verify
