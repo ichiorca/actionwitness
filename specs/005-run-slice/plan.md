@@ -341,3 +341,60 @@ target therefore drives the store's own `/demo` surface rather than setting a
 harness column and hoping. Discovered by a failing test: the first version
 selected `pre_fix` on the harness and the store cheerfully applied the discount,
 because nothing had told it to misbehave.
+
+### T4 — redaction happens once, at capture, and the verdict uses the redacted value
+
+§20.3 requires redaction "before persistence, hashing, or export". Evaluation is
+not in that list, which leaves a choice: evaluate against the unredacted
+observation and store the redacted one, or redact once and use that for
+everything.
+
+Redacting once wins, because the alternative produces a verdict a reader of the
+evidence cannot reproduce — and reproducing a verdict from stored evidence is
+what replay (§24) is. A contract that asserts on a redacted path therefore
+fails, which is the right answer: a contract should not be asserting on a
+secret. Verified against the real store payload before wiring it in, so no
+existing assertion path is touched by the default keys.
+
+The policy comes from the contract the run was **armed against** (FR-025), not
+from whatever is selected now — a policy that drifted would redact this run's
+evidence by a rule it was never run under.
+
+### T4 — absent is not null, and unknown is not unchanged
+
+Two distinctions in `effect_evidence`, both of the kind a plausible
+implementation collapses:
+
+* a path that does not resolve is a question the observation cannot answer,
+  while a path resolving to `null` is an answer. Reported as separate
+  `before_present` / `after_present` flags rather than folded into the value.
+* an observation that could not be taken makes every declared path
+  **unknowable**. Reporting `changed: false` there would claim the harness
+  watched something it never saw, and `changed: true` would infer a movement
+  from a failed read. Both are `None`.
+
+The first version of this had a real bug: it checked `resolution.value is
+MISSING`, but `resolve` returns a `Resolution` carrying a `found` flag, so
+absence was never detected and every missing path read as a present `null`.
+Caught by printing the output rather than by a test, which is why the absent
+cases now have their own tests.
+
+### T4 — `changed` is decided on the stored values
+
+Redacted and bounded, not on the originals. A comparison against something that
+was never persisted could not be re-derived by a reader of the evidence, so two
+values differing only beyond the truncation bound compare equal — and a test
+says so, rather than leaving it as an accident of implementation.
+
+### T4 — a broad `except` around the post-call observation, and what makes it safe
+
+An adapter is foreign code and may fail in any way its transport does, so the
+post-call read catches broadly rather than enumerating exception types. That
+breadth hid a real defect during this task: an edit that added a parameter to
+`_observe` did not reach the call inside `_observe_or_none`, and the resulting
+`TypeError` was swallowed as "target unobservable".
+
+The counterpart test caught it — `test_an_honest_mutation_moves_the_observed_state`
+exists precisely so a bug making every observation fail cannot pass silently,
+and it earned its place on its first run. The comment at the catch now names it,
+so a future reader knows what is holding the breadth safe.

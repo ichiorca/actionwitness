@@ -41,11 +41,13 @@ semantics in the harness.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Final
 
+from actionwitness_core.evidence.effects import bounded, effect_evidence, redacted_observation
 from actionwitness_core.journeys.enums import (
     EventActor,
     OutcomeEventType,
@@ -56,6 +58,8 @@ from actionwitness_core.journeys.guidance import derive_guidance
 from actionwitness_core.journeys.transitions import validate_run_transition
 from actionwitness_core.ports.models import Observation, TargetToolSpec, ToolExecutionResult
 from actionwitness_core.ports.schemas import validate_arguments
+from actionwitness_core.security.limits import MAX_TOOL_RESULT_CHARS
+from actionwitness_core.security.redaction import RedactionPolicy, redact
 
 from actionwitness_service.api.errors import ApiError, ApiErrorCode
 from actionwitness_service.application.adapter_registry import AdapterRegistry
@@ -124,6 +128,10 @@ class InvocationService:
         # 1 — the run must be this workspace's and open to actions.
         async with self._database.reading() as work:
             run = await self._invocable_run(work, workspace_id, run_id)
+            # §20.3: the contract's own paths are applied "in addition to
+            # defaults", so the policy is read from the contract this run was
+            # armed against rather than from whatever is selected now.
+            policy = await self._redaction_policy(work, workspace_id, run)
         adapter = self._registry.adapter(str(run["target_adapter_id"]))
         spec = _require_published(adapter, tool_name)
 
@@ -136,7 +144,7 @@ class InvocationService:
         request_id = f"req_{invocation_id}"
 
         # 2 — canonical state before the call. I/O, outside every lock.
-        before = await self._observe(adapter, workspace_id)
+        before = await self._observe(adapter, workspace_id, policy)
 
         # 3 — reserve, transition, and record the start (FR-031, FR-008).
         started_sequence = await self._start_or_trip(
@@ -148,6 +156,8 @@ class InvocationService:
             request_id=request_id,
             tool_identity_hash=tool_identity_hash,
             before=before,
+            policy=policy,
+            arguments=checked,
         )
 
         # 4 and 5 — dispatch, then observe immediately. Both may fail; every
@@ -167,7 +177,7 @@ class InvocationService:
             # details to the agent". The type is recorded; the message is not.
             failure = type(exc).__name__
 
-        after = await self._observe_or_none(adapter, workspace_id)
+        after = await self._observe_or_none(adapter, workspace_id, policy)
         duration_ms = max(0, int((self._clock() - started_at).total_seconds() * 1000))
 
         # 6 — exactly one terminal event.
@@ -184,6 +194,8 @@ class InvocationService:
             result=result,
             failure=failure,
             duration_ms=duration_ms,
+            policy=policy,
+            arguments=checked,
         )
 
     # -- steps ---------------------------------------------------------------
@@ -225,10 +237,42 @@ class InvocationService:
             f"This run is {status} and accepts no further target actions.",
         )
 
-    async def _observe(self, adapter: Any, workspace_id: str) -> Observation:
-        return await adapter.observation_provider().capture(workspace_id)
+    async def _redaction_policy(
+        self, work: UnitOfWork, workspace_id: str, run: Mapping[str, Any]
+    ) -> RedactionPolicy:
+        """The run's redaction policy: defaults plus the contract's own paths.
 
-    async def _observe_or_none(self, adapter: Any, workspace_id: str) -> Observation | None:
+        Read from the contract the run was *armed against*, not from whatever
+        the workspace has selected now — FR-025 locks the armed contract, and a
+        policy that drifted would redact this run's evidence by a rule it was
+        never run under.
+
+        A run without a contract still gets the defaults. §20.3 applies
+        contract paths "in addition to defaults", so there is no configuration
+        that turns redaction off.
+        """
+        contract_id = run.get("contract_id")
+        if not contract_id:
+            return RedactionPolicy()
+        row = await work.fetch_one(
+            "SELECT document_json FROM contracts WHERE id = ?", (str(contract_id),)
+        )
+        if row is None:  # pragma: no cover - the contract is immutable once armed
+            return RedactionPolicy()
+        document = json.loads(row["document_json"])
+        paths = ((document.get("redaction") or {}).get("paths")) or []
+        return RedactionPolicy.from_paths([str(path) for path in paths])
+
+    async def _observe(
+        self, adapter: Any, workspace_id: str, policy: RedactionPolicy
+    ) -> Observation:
+        """Capture, then redact before anything is hashed or stored (§20.3)."""
+        observation = await adapter.observation_provider().capture(workspace_id)
+        return redacted_observation(observation, policy)
+
+    async def _observe_or_none(
+        self, adapter: Any, workspace_id: str, policy: RedactionPolicy
+    ) -> Observation | None:
         """The post-call read, which is allowed to fail.
 
         Constitution §5 makes an observation failure an explicit non-pass rather
@@ -238,8 +282,14 @@ class InvocationService:
         and the verdict deals with it.
         """
         try:
-            return await self._observe(adapter, workspace_id)
+            return await self._observe(adapter, workspace_id, policy)
         except Exception:
+            # Broad on purpose: an adapter may fail in any way its transport
+            # does, and none of those ways should stop the invocation being
+            # recorded as terminated. What makes this safe is the counterpart
+            # test — an honest mutation must report `state_changed: true`, so a
+            # bug that made every observation fail cannot pass silently. It has
+            # already caught one.
             return None
 
     async def _start(
@@ -253,6 +303,8 @@ class InvocationService:
         request_id: str,
         tool_identity_hash: str | None,
         before: Observation,
+        policy: RedactionPolicy,
+        arguments: Mapping[str, Any],
     ) -> int:
         """Reserve the budget, open the run, and record the start (FR-031, FR-008).
 
@@ -304,6 +356,12 @@ class InvocationService:
                         "invocation_id": invocation_id,
                         "side_effect": str(spec.side_effect.value),
                         "retry": str(spec.retry.value),
+                        # FR-032's redacted inputs, recorded on the *start*
+                        # event: they are what the call was made with, and they
+                        # are known before it returns. §20.3 requires the
+                        # redaction to happen before persistence, so it happens
+                        # here rather than to an already-stored row.
+                        "arguments": bounded(redact(dict(arguments), policy)),
                     },
                 },
             )
@@ -323,6 +381,8 @@ class InvocationService:
         result: ToolExecutionResult | None,
         failure: str | None,
         duration_ms: int,
+        policy: RedactionPolicy,
+        arguments: Mapping[str, Any],
     ) -> InvocationOutcome:
         terminal = (
             OutcomeEventType.TOOL_INVOCATION_FAILED if result is None else result.terminal_event
@@ -336,7 +396,17 @@ class InvocationService:
             # The self-report, kept together and labelled. Everything under this
             # key is what the tool said about itself; nothing under it is
             # evidence of what happened (constitution §4).
-            "reported": _reported(result, failure),
+            "reported": _reported(result, failure, policy),
+            # FR-032's declared target-effect evidence, so idempotency and
+            # false-success evidence "do not depend on tool-return text or later
+            # actions". An adapter that declares no effect paths gets an empty
+            # mapping rather than a guess (§12.2).
+            "effects": effect_evidence(
+                spec.effect_paths,
+                before=before.as_context(),
+                after=None if after is None else after.as_context(),
+                policy=policy,
+            ),
             # The independent read. `observed` and `reported` are siblings so a
             # reader cannot mistake one for the other.
             "observed": {
@@ -395,7 +465,11 @@ class InvocationService:
         )
 
 
-def _reported(result: ToolExecutionResult | None, failure: str | None) -> dict[str, Any]:
+def _reported(
+    result: ToolExecutionResult | None,
+    failure: str | None,
+    policy: RedactionPolicy | None = None,
+) -> dict[str, Any]:
     """The tool-reported channel, serialized under one key.
 
     A failure that never produced a result still belongs here: what the harness
@@ -412,7 +486,10 @@ def _reported(result: ToolExecutionResult | None, failure: str | None) -> dict[s
         }
     return {
         "status": None if result.reported_status is None else str(result.reported_status.value),
-        "summary": result.reported_summary,
+        # Bounded and redacted: §23.3 keeps the tool's own text out of storage
+        # at full length, and a self-report is as likely to carry a secret as
+        # any other untrusted string.
+        "summary": bounded(redact(result.reported_summary, policy), limit=MAX_TOOL_RESULT_CHARS),
         "error_code": result.error_code,
         # Deliberately kept: the version the tool *claimed*, beside the version
         # that was observed. A disagreement between them is evidence.

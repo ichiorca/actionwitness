@@ -13,7 +13,7 @@ Cite the T-ID in every commit that advances it.
       adapter's published schema, run-state checks, event-cap reservation
       (FR-008), the start event, adapter dispatch, immediate authoritative effect
       observation, and exactly one terminal event. No branch on a tool name.
-- [ ] T4 — Persist invocation evidence: redacted inputs, bounded output, status,
+- [x] T4 — Persist invocation evidence: redacted inputs, bounded output, status,
       timing, request and correlation IDs, state versions and hashes, and
       effect-path evidence. Redaction happens before persistence, hashing, or
       export (§20.3).

@@ -41,10 +41,12 @@ from typing import Any, Final
 from actionwitness_core.contracts.models import parse_contract
 from actionwitness_core.engine.assertions import evaluate_preconditions
 from actionwitness_core.engine.enums import CheckStatus
+from actionwitness_core.evidence.effects import redacted_observation
 from actionwitness_core.journeys.enums import EventActor, OutcomeEventType, RunState, SnapshotPhase
 from actionwitness_core.journeys.guidance import derive_guidance, phase_for
 from actionwitness_core.ports.models import Observation
 from actionwitness_core.security.canonical import content_hash
+from actionwitness_core.security.redaction import RedactionPolicy
 
 from actionwitness_service.api.errors import ApiError, ApiErrorCode
 from actionwitness_service.application.adapter_registry import AdapterRegistry, TargetUnavailable
@@ -234,7 +236,12 @@ class RunService:
         guess.
         """
         adapter = self._registry.adapter(selected.adapter_id)
-        return await adapter.observation_provider().capture(workspace_id)
+        observation = await adapter.observation_provider().capture(workspace_id)
+
+        # §20.3: redacted before persistence, hashing, or export — and before
+        # evaluation too, so the baseline a verdict rests on is byte-for-byte
+        # the baseline a reader of the evidence can see.
+        return redacted_observation(observation, _policy_of(selected))
 
     # -- phase 3: the write --------------------------------------------------
 
@@ -402,3 +409,9 @@ def _precondition_message(finding: Any) -> str:
     if finding.status is CheckStatus.OBSERVATION_UNAVAILABLE:
         return "the authoritative observation was unavailable for this path"
     return f"expected {finding.expected!r}, observed {finding.actual!r}"
+
+
+def _policy_of(selected: WorkspaceConfiguration) -> RedactionPolicy:
+    """The contract's redaction paths, applied in addition to the defaults."""
+    paths = ((selected.document.get("redaction") or {}).get("paths")) or []
+    return RedactionPolicy.from_paths([str(path) for path in paths])
