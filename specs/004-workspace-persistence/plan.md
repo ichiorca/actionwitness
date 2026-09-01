@@ -391,3 +391,80 @@ The `UPDATE` is workspace-scoped, so a stranger's attempt changes nothing. The
 refusal is the same 404 as any other cross-workspace access rather than an
 `EVENT_LIMIT_EXCEEDED`, which would confirm both that the run exists and how
 much of its budget it has spent.
+
+### T9 — "120 per minute with a burst of 30" fixes two numbers, not one
+
+The refill rate is 2 tokens/second and the capacity is 30. Both plausible
+misreadings pass a naive test: capacity 120 lets a client fire 120 requests
+instantly, which is not a burst of 30; refill 30/minute throttles a compliant
+client to a quarter of its allowance. Separate tests rule out each.
+
+### T9 — a forwarding header is believed only from a configured trusted proxy
+
+§20.1: "never trust an arbitrary client-supplied forwarding header." Believing
+it unconditionally makes the limit opt-out — one header per request and every
+attacker is a fresh client. `HARNESS_TRUSTED_PROXIES` (project-allocated) lists
+the peers whose header may be read, and it is empty by default, so an
+unconfigured deployment ignores the header entirely. When it is honoured, only
+the **last** hop is used: earlier entries were appended upstream of the trusted
+proxy, including by the client.
+
+A request with no peer address — a Unix-socket deployment, and the in-process
+test transport — keys as one shared `"unknown"` client. That limits more than
+strictly necessary, which is the safe direction for a public service.
+
+### T9 — the workspace-creation bucket is spent only when a workspace is created
+
+FR-009's ten-per-hour limit is on *new workspaces*, not page loads. Charging a
+returning visitor would let one user exhaust an hour's allowance in a minute by
+refreshing. The middleware therefore spends it only when the request carries no
+workspace cookie.
+
+### T9 — the 429 commits nothing because there is nothing to commit
+
+The limiter runs before any handler (registered last, so it runs first), which
+makes FR-009's "never partially commit a mutation" true by construction rather
+than by a rollback somebody has to remember. The test proves it against a route
+that would otherwise write a row.
+
+### T9 — `Retry-After` is never zero
+
+A client told to retry immediately fails immediately, which turns one refused
+client into a busy loop.
+
+### T9 — cleanup is cooperative, not cancelled
+
+Cancelling the hourly sweeper mid-sweep interrupts an open transaction and
+leaves the SQLite driver's worker thread unwound, which surfaces later as an
+unhandled thread exception with no connection to the code that caused it —
+observed once as a flaky test before the fix. The loop now waits on a stop
+event, so shutdown lands between sweeps; cancellation remains only as a
+five-second backstop.
+
+### T9 — expiry is the documented exception to append-only
+
+FR-009: "Artifact immutability applies during retention and does not prevent
+documented workspace expiry or an explicit purge." Everything else in this
+project says evidence is never deleted, so the deletion here is deliberately
+narrow — a whole workspace aged out by its own inactivity, via the cascade root
+— rather than a general row-removal capability a later handler would reach for.
+
+Files are unlinked *after* the rows commit. If the process dies between the
+two, the files are orphaned, which is recoverable; the reverse order loses files
+that live rows still claim, which is not. A stored path that resolves outside
+the artifact root is refused: a persisted record is untrusted input
+(constitution §5), and a row carrying `../..` must not turn cleanup into
+arbitrary deletion.
+
+### T9 — eval workspaces are excluded from the 24-hour clock
+
+FR-009 gives them a different rule — mutable state goes "immediately after
+report persistence". Sharing the interactive clock would either delete an eval
+mid-flight or keep one alive long past the report it existed to produce.
+`purge_eval_workspace_state` implements that half and is kind-scoped, so a
+mistaken identifier is inert rather than destructive; M6 calls it.
+
+### T9 — `HARNESS_ARTIFACT_ROOT` (project-allocated)
+
+§29.1 documents the startup commands but not where artifact files live, and
+cleanup cannot remove files without knowing.

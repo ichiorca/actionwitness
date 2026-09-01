@@ -22,6 +22,8 @@ Environment variables, with provenance:
 |---|---|---|
 | `HARNESS_ENV` | harness | project (FR-005) |
 | `HARNESS_DATABASE_PATH` | harness | project |
+| `HARNESS_ARTIFACT_ROOT` | harness | project |
+| `HARNESS_TRUSTED_PROXIES` | harness | project (§20.1) |
 | `HARNESS_PUBLIC_ORIGIN` | shopify | spec §29.1 |
 | `SHOPIFY_STORE_ORIGIN` | shopify | spec §29.1 |
 | `SHOPIFY_TEST_VARIANT_ID` | shopify | spec §29.1 |
@@ -64,6 +66,7 @@ __all__ = [
 
 DEFAULT_BUGGY_STORE_BASE_URL = "http://127.0.0.1:8001"
 DEFAULT_DATABASE_PATH = "actionwitness.sqlite3"
+DEFAULT_ARTIFACT_ROOT = "artifacts"
 _CURRENCY = re.compile(r"^[A-Z]{3}$")
 _TRUE = {"1", "true", "yes", "on"}
 _FALSE = {"0", "false", "no", "off", ""}
@@ -155,6 +158,12 @@ class HarnessSettings(_Frozen):
     #: origin is compared instead — the harness is served same-origin, so a
     #: legitimate page's `Origin` equals what it is posting to.
     public_origin: str | None = None
+    artifact_root: str = DEFAULT_ARTIFACT_ROOT
+    #: Peers whose forwarding header may be believed (§20.1: "explicitly trusted
+    #: platform proxy metadata; never trust an arbitrary client-supplied
+    #: forwarding header"). Empty by default, so an unconfigured deployment
+    #: ignores the header entirely and rate-limits each client as itself.
+    trusted_proxies: frozenset[str] = frozenset()
 
     @property
     def secure_cookies(self) -> bool:
@@ -302,10 +311,19 @@ def _resolve_harness(environ: Mapping[str, str]) -> HarnessSettings:
     except ValueError:
         public_origin = None
 
+    artifact_root = environ.get("HARNESS_ARTIFACT_ROOT", "").strip() or DEFAULT_ARTIFACT_ROOT
+    trusted_proxies = frozenset(
+        part.strip()
+        for part in environ.get("HARNESS_TRUSTED_PROXIES", "").split(",")
+        if part.strip()
+    )
+
     return HarnessSettings(
         environment=environment,
         database_path=database_path,
         public_origin=public_origin,
+        artifact_root=artifact_root,
+        trusted_proxies=trusted_proxies,
     )
 
 

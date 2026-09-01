@@ -30,14 +30,17 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from actionwitness_service.api.errors import ApiError
+from actionwitness_service.api.errors import ApiError, ApiErrorCode
 from actionwitness_service.api.origins import OriginPolicy
+from actionwitness_service.application.rate_limits import RateLimiter, client_key
 from actionwitness_service.application.workspaces import WORKSPACE_COOKIE_NAME, WorkspaceStore
 
 __all__ = [
     "WORKSPACE_COOKIE_MAX_AGE_SECONDS",
     "OriginMiddleware",
+    "RateLimitMiddleware",
     "WorkspaceCookieMiddleware",
+    "is_exempt_path",
     "workspace_id_of",
 ]
 
@@ -48,8 +51,19 @@ __all__ = [
 #: returning visitor keeps their evidence.
 WORKSPACE_COOKIE_MAX_AGE_SECONDS: Final = 7 * 24 * 60 * 60
 
-#: Paths that never create or touch a workspace.
+#: Paths exempt from both workspace creation and rate limiting.
+#:
+#: FR-009 excludes "health checks and static assets" from the limit; they are
+#: excluded from workspace creation for the same underlying reason. A liveness
+#: probe running every second would otherwise consume half a client's request
+#: allowance and mint a workspace per check — taking a deployment down by
+#: monitoring it, and filling the table with rows no human ever visits.
 _EXEMPT_PREFIXES: Final = ("/healthz", "/assets", "/static", "/favicon.ico")
+
+
+def is_exempt_path(path: str) -> bool:
+    """Whether this path is outside both the workspace and the limit (FR-009)."""
+    return path.startswith(_EXEMPT_PREFIXES)
 
 
 def workspace_id_of(request: Request) -> str | None:
@@ -68,7 +82,7 @@ class WorkspaceCookieMiddleware(BaseHTTPMiddleware):
     async def dispatch(
         self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
-        if self._is_exempt(request.url.path):
+        if is_exempt_path(request.url.path):
             return await call_next(request)
 
         presented = request.cookies.get(WORKSPACE_COOKIE_NAME)
@@ -88,10 +102,6 @@ class WorkspaceCookieMiddleware(BaseHTTPMiddleware):
                 secure=self._secure,
             )
         return response
-
-    @staticmethod
-    def _is_exempt(path: str) -> bool:
-        return path.startswith(_EXEMPT_PREFIXES)
 
 
 class OriginMiddleware(BaseHTTPMiddleware):
@@ -120,3 +130,73 @@ class OriginMiddleware(BaseHTTPMiddleware):
         except ApiError as refusal:
             return JSONResponse(status_code=refusal.http_status, content=refusal.as_envelope())
         return await call_next(request)
+
+
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    """FR-009's per-peer token buckets, applied before anything is written.
+
+    Registered last so it runs first (Starlette reverses registration order).
+    That placement is what makes "shall never partially commit a mutation" true
+    by construction rather than by a rollback somebody has to remember: a
+    refused request has not reached a handler, so there is nothing to commit.
+
+    Health checks and static assets are excluded, exactly as FR-009 says. A
+    liveness probe running every second would otherwise consume half a
+    workspace's request allowance and take the deployment down by monitoring it.
+    """
+
+    def __init__(
+        self,
+        app: object,
+        *,
+        limiter: RateLimiter,
+        trusted_proxies: frozenset[str] = frozenset(),
+    ) -> None:
+        super().__init__(app)  # type: ignore[arg-type]
+        self._limiter = limiter
+        self._trusted_proxies = trusted_proxies
+
+    async def dispatch(
+        self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        if is_exempt_path(request.url.path):
+            return await call_next(request)
+
+        key = client_key(
+            request.client.host if request.client else None,
+            request.headers.get("x-forwarded-for"),
+            trusted_proxies=self._trusted_proxies,
+        )
+        request.state.client_key = key
+
+        exhausted = self._limiter.allow_request(key)
+        if exhausted is not None:
+            return _too_many(exhausted.retry_after_seconds())
+
+        # The stricter workspace-creation bucket is spent only when a workspace
+        # would actually be created. A returning visitor must not spend from it
+        # — otherwise one user refreshing a page exhausts an hour's allowance in
+        # a minute.
+        if WORKSPACE_COOKIE_NAME not in request.cookies:
+            creating = self._limiter.allow_workspace_creation(key)
+            if creating is not None:
+                return _too_many(creating.retry_after_seconds())
+
+        return await call_next(request)
+
+
+def _too_many(retry_after: int) -> JSONResponse:
+    """FR-009's "stable 429", in §15.8's envelope.
+
+    `Retry-After` is a whole number of seconds and never zero: a client told to
+    retry immediately would fail immediately, turning one refusal into a loop.
+    """
+    refusal = ApiError(
+        ApiErrorCode.RATE_LIMIT_EXCEEDED,
+        "Too many requests from this client. Retry after the interval given.",
+    )
+    return JSONResponse(
+        status_code=refusal.http_status,
+        content=refusal.as_envelope(),
+        headers={"Retry-After": str(retry_after)},
+    )

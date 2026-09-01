@@ -37,7 +37,7 @@ Cite the T-ID in every commit that advances it.
       three suites of 100 trials, five pairings, 25 artifacts, 10 MiB of
       artifact bytes, two concurrent streams; over-cap creation returns
       `WORKSPACE_LIMIT_EXCEEDED` and commits nothing.
-- [ ] T9 — FR-009's rate limits and garbage collection: 120 requests/minute with
+- [x] T9 — FR-009's rate limits and garbage collection: 120 requests/minute with
       a burst of 30, 10 workspace creations/hour, keyed from the direct peer or
       explicitly trusted proxy metadata and never a client-supplied forwarding
       header; health checks and static assets excluded; stale-workspace and

@@ -13,9 +13,10 @@ against a corrupted database.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import AsyncIterator, Callable, Mapping
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime
 from pathlib import Path
 
@@ -24,8 +25,14 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from actionwitness_service.api.errors import ApiError, ApiErrorCode, error_from_core
-from actionwitness_service.api.middleware import OriginMiddleware, WorkspaceCookieMiddleware
+from actionwitness_service.api.middleware import (
+    OriginMiddleware,
+    RateLimitMiddleware,
+    WorkspaceCookieMiddleware,
+)
 from actionwitness_service.api.origins import OriginPolicy
+from actionwitness_service.application.cleanup import WorkspaceCleaner
+from actionwitness_service.application.rate_limits import RateLimiter
 from actionwitness_service.application.workspaces import WorkspaceStore
 from actionwitness_service.config import ServiceSettings
 from actionwitness_service.persistence.database import Database
@@ -50,17 +57,41 @@ def create_app(
     settings = ServiceSettings.from_env(os.environ if environ is None else environ)
     database = Database(database_path or settings.harness.database_path, clock=clock)
     workspaces = WorkspaceStore(database)
+    limiter = RateLimiter(clock=clock)
+    cleaner = WorkspaceCleaner(database, artifact_root=settings.harness.artifact_root, clock=clock)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.schema_version = await database.initialize()
-        yield
+
+        # FR-009: "at startup and at least hourly". The startup sweep is awaited
+        # so a deployment begins with expired data already gone; the hourly one
+        # is a task this scope owns and cancels, because a background task
+        # nobody owns outlives the application it was serving.
+        stop = asyncio.Event()
+        sweeper = asyncio.create_task(cleaner.run_until(stop))
+        try:
+            yield
+        finally:
+            # Cooperative, not a cancellation: cancelling mid-sweep would
+            # interrupt an open transaction and leave the driver's worker
+            # thread unwound. The cancel below is only the backstop for a
+            # sweep that will not finish.
+            stop.set()
+            try:
+                await asyncio.wait_for(asyncio.shield(sweeper), timeout=5.0)
+            except (TimeoutError, asyncio.CancelledError):
+                sweeper.cancel()
+                with suppress(asyncio.CancelledError):
+                    await sweeper
 
     app = FastAPI(title="ActionWitness", version="0.1.0", lifespan=lifespan)
     app.state.settings = settings
     app.state.database = database
     app.state.workspaces = workspaces
     app.state.locks = WorkspaceLocks()
+    app.state.limiter = limiter
+    app.state.cleaner = cleaner
 
     # Starlette runs middleware in reverse registration order, so the origin
     # check registered last runs first: a mutation from a disallowed origin is
@@ -71,6 +102,11 @@ def create_app(
         secure=settings.harness.secure_cookies,
     )
     app.add_middleware(OriginMiddleware, policy=OriginPolicy(settings.harness.public_origin))
+    app.add_middleware(
+        RateLimitMiddleware,
+        limiter=limiter,
+        trusted_proxies=settings.harness.trusted_proxies,
+    )
 
     @app.exception_handler(ApiError)
     async def deliberate_refusal(request: Request, exc: ApiError) -> JSONResponse:
