@@ -23,6 +23,7 @@ from pathlib import Path
 import httpx
 from actionwitness_core.kernel import CoreError
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from actionwitness_service.api.errors import ApiError, ApiErrorCode, error_from_core
@@ -151,6 +152,35 @@ def create_app(
         cannot widen either.
         """
         return JSONResponse(status_code=exc.http_status, content=exc.as_envelope())
+
+    @app.exception_handler(RequestValidationError)
+    async def malformed_request(request: Request, exc: RequestValidationError) -> JSONResponse:
+        """A rejected path, query, or body reaches the client as §15.8's envelope.
+
+        FastAPI's own 422 body is `{"detail": [...]}`, a second error shape
+        beside the one §15.8 defines. A client would then need two parsers to
+        learn why a call failed, and the one it wrote first would silently
+        mishandle the other.
+
+        Only `loc` and `msg` are forwarded. Pydantic's `input` and `ctx` echo
+        the submitted value back, which for a body carrying a credential would
+        put it in a response and, from there, into whatever logs that response.
+        """
+        details = [
+            {
+                # `loc` starts with the source — "query", "body", "path" — which
+                # is worth keeping: `limit` means something different in each.
+                "path": ".".join(str(part) for part in error.get("loc", ())),
+                "message": str(error.get("msg", "invalid value")),
+            }
+            for error in exc.errors()
+        ]
+        refusal = ApiError(
+            ApiErrorCode.CONTRACT_VALIDATION_FAILED,
+            "The request was not in an acceptable shape.",
+            details=details,
+        )
+        return JSONResponse(status_code=refusal.http_status, content=refusal.as_envelope())
 
     @app.exception_handler(CoreError)
     async def core_failure(request: Request, exc: CoreError) -> JSONResponse:

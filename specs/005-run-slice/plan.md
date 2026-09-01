@@ -862,3 +862,77 @@ plausibly intended (project-relative storage) but it is the kind of default that
 puts evidence-shaped files where release tooling will find them, and the
 definition of done forbids generated debris in release artifacts. A `/artifacts/`
 line is in the working tree's `.gitignore` but **is not committed** — see below.
+
+### T12 — an outcome report had two hashes, and both looked authoritative
+
+Found while testing `GET /runs/{run_id}/report`. §17.2 says an artifact hash
+"covers the complete top-level object except its own top-level `content_hash`
+member", and `OutcomeReport.as_stored_document` embeds exactly that hash. But
+`ArtifactStore.write` hashed the *whole* stored object, embedded member
+included, so the `artifacts` row recorded a different value from the document it
+pointed at — and `report_content_hash` in the verify response was a third view
+of the same thing.
+
+Nothing was wrong with the report; the defect was that a reader comparing the
+row to the document would find them different with no way to tell which was the
+identity. `ArtifactStore.write` now uses `document_content_hash`, which drops
+the member and reduces to the plain content hash for artifact types that carry
+none. `test_the_row_records_the_documents_own_identity` pins it.
+
+### T12 — the report is verified twice before it is served
+
+The content hash alone cannot catch a file rewritten with identical content and
+different bytes — reindented, keys reordered — because such a file hashes the
+same. The artifact *is* the bytes, and a reader recomputing the identity from a
+non-canonical file gets a different answer than the writer did. So the served
+report must satisfy both: its §17.2 identity matches the row, and its bytes are
+the canonical serialization of what was parsed. Each check has its own test.
+
+A failure of either is a **500 refusal**, not a degraded 200. The constitution
+says verification failure "never degrades to success", and a report is where
+degrading would be least visible: a reader who asked what happened would be
+shown a document that still looks like an answer. The refusal names no path, no
+expected hash, and no run beyond the identifier the caller sent — otherwise it
+would hand back the two values needed to forge a replacement.
+
+### T12 — `has_more` is not "the run finished"
+
+`has_more: false` reports only that no further events exist *at this instant*. A
+live run appends more afterwards, so a client that stopped polling there would
+silently lose the rest of the timeline — including, on a failing run, the events
+that matter most. `run_status` therefore travels with every page, and
+`test_the_page_does_not_claim_the_timeline_ended` drains a page mid-run, invokes
+another tool, and polls again, because on a finished run the distinction is
+invisible and any implementation passes.
+
+An empty page echoes the caller's own `after_sequence` back rather than
+resetting to zero; a cursor that rewound would redeliver the whole timeline.
+
+### T12 — bounds are refused, not clamped
+
+§15.3 fixes `limit={1..100}`. A request for 500 is a 422 rather than a silently
+truncated page: a client that asked for 500, received 100, and was told nothing
+would read the short page as the end of the timeline.
+
+### T12 — §15.8's envelope now covers rejected requests (**operator visibility**)
+
+Adding the first query parameters made a gap reachable: FastAPI answers its own
+validation failures with `{"detail": [...]}`, a second error shape beside the
+one §15.8 defines, so a client written against §15.8 could not parse a rejected
+query. A `RequestValidationError` handler now maps them onto the one envelope as
+`CONTRACT_VALIDATION_FAILED` with `details` naming the field.
+
+Two consequences worth an operator's eye. This changes the **body** (not the
+status) of every previously unhandled 422 across the whole API, including body
+validation on routes shipped in 003 and 004 — no test asserted the old shape,
+but a client written against it would notice. And only `loc` and `msg` are
+forwarded: Pydantic's `input` and `ctx` echo the submitted value back, which for
+a body carrying a credential would put it in a response and from there into
+whatever logs that response.
+
+### T12 — the event projection is explicit
+
+The repository returns whole rows. Publishing them would export every column
+added later on the day it is added, including one nobody meant to expose;
+§20.3 puts redaction before export, so the published field list is named in one
+reviewable place and `redacted_payload_json` never reaches a client as itself.

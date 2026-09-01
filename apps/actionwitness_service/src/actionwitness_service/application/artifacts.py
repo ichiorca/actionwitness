@@ -5,11 +5,19 @@ identity, its size, and the workspace it belongs to — which is what lets FR-00
 cap "25 artifacts and 10 MiB of persisted artifact bytes" per workspace and
 FR-009's cleanup find the files when a workspace expires.
 
-**The bytes on disk are the bytes that were hashed.** The document is serialized
-with the core's canonical serializer (§17.2), and that exact text is both hashed
-and written. Writing pretty-printed JSON beside a hash taken over canonical text
-would produce a stored artifact whose own hash a reader could not reproduce,
-which is the failure `as_stored_document` exists to prevent.
+**The recorded hash is the document's own identity, not a second one.** §17.2
+says an artifact hash "covers the complete top-level object except its own
+top-level `content_hash` member", so the row records exactly what a document
+carrying an embedded `content_hash` already claims. Hashing the whole object
+instead would give one report two hashes that both look authoritative — the
+stored document would say one thing and the row pointing at it another, with
+nothing to tell a reader which was the identity. `document_content_hash` drops
+the member; for an artifact type that carries none, it is the plain content
+hash.
+
+**The bytes on disk are canonical.** The document is serialized with the core's
+canonical serializer (§17.2), and that exact text is written, so a reader can
+recompute the identity from the stored file alone.
 
 **The file is written before the row is inserted.** The insert belongs to the
 caller's transaction — for an outcome report, the same one that seals the run —
@@ -32,7 +40,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from actionwitness_core.kernel import JsonValue
-from actionwitness_core.security.canonical import canonical_text, content_hash
+from actionwitness_core.security.canonical import canonical_text, document_content_hash
 
 from actionwitness_service.application.limits import WorkspaceCeilings
 from actionwitness_service.persistence.database import UnitOfWork
@@ -93,7 +101,7 @@ class ArtifactStore:
         return WrittenArtifact(
             relative_path=relative,
             byte_size=len(encoded),
-            content_hash=content_hash(document),
+            content_hash=document_content_hash(document),
             artifact_type=artifact_type,
             schema_version=schema_version,
         )
@@ -143,12 +151,21 @@ class ArtifactStore:
         )
         return artifact_id
 
-    def read_text(self, relative_path: str) -> str:
-        """The stored text, for a reader that wants to verify the hash itself."""
+    def read_bytes(self, relative_path: str) -> bytes:
+        """The stored bytes, exactly as written.
+
+        Verification hashes these rather than a re-encoded string: `write`
+        hashed the canonical bytes, so anything that decodes and re-encodes on
+        the way in has already stopped comparing like with like.
+        """
         target = (self._root / relative_path).resolve()
         if not target.is_relative_to(self._root.resolve()):
             raise ValueError("the stored path escapes the artifact root")
-        return target.read_text(encoding="utf-8")
+        return target.read_bytes()
+
+    def read_text(self, relative_path: str) -> str:
+        """The stored text, for a reader that wants to verify the hash itself."""
+        return self.read_bytes(relative_path).decode("utf-8")
 
 
 def _require_safe(identifier: str, what: str) -> None:

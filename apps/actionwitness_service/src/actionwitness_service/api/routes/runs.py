@@ -6,10 +6,11 @@
 | `POST` | `/runs/{run_id}/target-tools/{tool_name}:invoke`   | 005-T3 |
 | `POST` | `/runs/{run_id}/verify`                           | 005-T6 |
 | `GET`  | `/runs/{run_id}/comparison`                       | 005-T11 |
+| `GET`  | `/runs/{run_id}/events`                           | 005-T12 |
+| `GET`  | `/runs/{run_id}/report`                           | 005-T12 |
 
-The rest of §15.3 — the run read, paged events, confirmation decisions, and the
-report — arrives with the tasks that own it and is deliberately absent rather
-than stubbed.
+The rest of §15.3 — the run read and the confirmation decisions — arrives with
+the tasks that own it and is deliberately absent rather than stubbed.
 
 `POST /runs/{run_id}/verify` wins FR-038's race, captures the final
 observation, evaluates the contract through the core, and seals the run. The
@@ -28,7 +29,7 @@ from __future__ import annotations
 from typing import Annotated, Any
 
 from actionwitness_core.reports.enums import RunMode
-from fastapi import APIRouter, Body, Path
+from fastapi import APIRouter, Body, Path, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from actionwitness_service.api.dependencies import (
@@ -40,7 +41,13 @@ from actionwitness_service.api.dependencies import (
 )
 from actionwitness_service.application.comparison_service import ComparisonService
 from actionwitness_service.application.invocation_service import InvocationService
+from actionwitness_service.application.report_service import ReportService
 from actionwitness_service.application.run_service import RunService
+from actionwitness_service.application.timeline_service import (
+    EVENT_PAGE_DEFAULT,
+    EVENT_PAGE_MAX,
+    TimelineService,
+)
 from actionwitness_service.application.verification_service import VerificationService
 
 __all__ = ["router"]
@@ -219,3 +226,45 @@ async def read_comparison(
     async with database.reading() as work:
         result = await ComparisonService(work, workspace_id).compare(run_id)
     return dict(result.as_document())
+
+
+@router.get("/{run_id}/events")
+async def read_events(
+    run_id: RunId,
+    workspace_id: WorkspaceDependency,
+    database: DatabaseDependency,
+    after_sequence: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=EVENT_PAGE_MAX)] = EVENT_PAGE_DEFAULT,
+) -> dict[str, Any]:
+    """§15.3: "ordered events after a sequence".
+
+    The bounds are declared rather than clamped. A request for `limit=500` is
+    refused with §15.8's envelope instead of being quietly served 100, because a
+    client that asked for 500, received 100, and was told nothing would conclude
+    the timeline had ended.
+
+    Tier 3's SSE variant is explicitly out of scope here; §15.3 keeps this
+    endpoint as the fallback either way, so nothing about it is provisional.
+    """
+    async with database.reading() as work:
+        page = await TimelineService(work, workspace_id).events(
+            run_id, after_sequence=after_sequence, limit=limit
+        )
+    return page.as_document()
+
+
+@router.get("/{run_id}/report")
+async def read_report(
+    run_id: RunId,
+    workspace_id: WorkspaceDependency,
+    database: DatabaseDependency,
+    artifacts: ArtifactsDependency,
+) -> dict[str, Any]:
+    """§15.3's JSON report, read back from the artifact it was sealed into.
+
+    The stored bytes are hash-verified before they are served: a report that
+    fails verification is refused rather than returned with a caveat, because a
+    reader asking what happened would otherwise be shown a corrupted verdict.
+    """
+    async with database.reading() as work:
+        return await ReportService(work, workspace_id, artifacts).report(run_id)
