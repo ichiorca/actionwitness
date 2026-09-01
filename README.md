@@ -8,8 +8,10 @@ and turns every silent failure into a portable regression test.
 
 Built for the [WebMCP Challenge](https://webmcp.devpost.com/) (submission Sep 3, 2026, 1:00 PM PDT).
 
-**Status: scaffold.** Structure, boundaries, and tooling are in place; no product
-behavior is implemented yet.
+**Status: Tier 1 in progress.** The target-neutral core kernel (spec 002) and the
+standalone Buggy Store with its adapter (spec 003) are implemented and tested —
+1,100+ tests including the false-success fault proof. Workspace persistence and
+the run slice (specs 004–005) are next; no deployed journey exists yet.
 
 **Normative sources.** The functional specification is `docs/actionwitness-functional-spec.md`,
 version 1.9; the implementation plan and milestone gates are `docs/BUILD_ORDER.md`.
@@ -119,12 +121,8 @@ person uses when no agent, no harness, and no browser-tool support is present
 | `npm run build` | Vite production bundle |
 | `npm run dev` | Serve the storefront, proxying `/demo` to a local store on port 8001 |
 
-> **`npm ci` is not runnable yet.** The frontend lockfile is committed only after
-> the ADR-0002 WebMCP hook spike pins exactly one package (`docs/adr/0002-webmcp-lifecycle-package.md`).
-> Until then use `npm install` locally and expect the pin to change the tree.
-
-`examples/buggy_store/frontend` builds independently and gains the same four
-commands when its Tier 1 UI lands (spec §29.1).
+Both lockfiles are committed; `npm ci` is the reproducible install path for each
+frontend. The harness tree records the ADR-0002 pin (`use-webmcp-tool@0.2.0`).
 
 ## Version pinning (spec §29.3)
 
