@@ -493,6 +493,69 @@ def test_an_unused_waiver_is_not_recorded_as_applied() -> None:
 
 
 @pytest.mark.unit
+def test_a_precondition_path_declares_a_change() -> None:
+    """§9.10(a) reads "assertion **or precondition** path".
+
+    A path the contract read at arming is a path it cares about. Counting only
+    end-state assertions would make every precondition-only path undeclared, and
+    a contract that checked an opening balance would fail for having checked it.
+    """
+    finding = evaluate_policy(
+        NoUndeclaredChangesPolicy(),
+        PolicyEvidence(
+            contract_paths=(_path("target.cart.subtotal"),),
+            changed_paths=(_path("target.cart.subtotal"),),
+        ),
+    )
+    assert finding.status is CheckStatus.PASSED
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "declared,changed",
+    [
+        ("target.cart", "target.cartridge"),
+        ("target.cart", "target.cart_backup"),
+        ("target.order", "target.orders"),
+    ],
+)
+def test_a_sibling_sharing_a_textual_prefix_is_not_declared(declared: str, changed: str) -> None:
+    """§13.4's dotted-key boundary, which is the whole reason for the resolver.
+
+    `target.cart` textually prefixes `target.cartridge` while naming an unrelated
+    value. A partition written with `str.startswith` passes every other test in
+    this file and silently declares a path nothing covers — the failure mode is
+    a *missed* undeclared change, which is the one this feature exists to catch.
+    """
+    finding = evaluate_policy(
+        NoUndeclaredChangesPolicy(),
+        PolicyEvidence(
+            events=(_start(1, "update_cart"),),
+            effect_map={"update_cart": (_path(declared),)},
+            changed_paths=(_path(changed),),
+        ),
+    )
+    assert finding.status is CheckStatus.FAILED
+    assert [str(path) for path in finding.paths] == [changed]
+
+
+@pytest.mark.unit
+def test_a_waiver_respects_the_same_boundary_rule() -> None:
+    """An `allow_paths` entry is an escape hatch, not a widening.
+
+    Criterion 3 of the 013 gate: a waiver admits declared churn "without widening
+    anything else". A waiver matched by string prefix would silently exempt every
+    sibling whose name it happened to prefix.
+    """
+    finding = evaluate_policy(
+        NoUndeclaredChangesPolicy(allow_paths=(_path("target.cart.updated_at"),)),
+        PolicyEvidence(changed_paths=(_path("target.cart.updated_at_by"),)),
+    )
+    assert finding.status is CheckStatus.FAILED
+    assert finding.applied_exemptions == ()
+
+
+@pytest.mark.unit
 def test_a_run_with_no_effect_metadata_records_that_fact() -> None:
     """§23.1: `effect_metadata_published: false` explains why changes were undeclared."""
     finding = evaluate_policy(
