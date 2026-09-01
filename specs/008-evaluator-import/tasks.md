@@ -8,10 +8,10 @@ Cite the T-ID in every commit that advances it.
 - [x] T2 — Benchmark suite and trial persistence, with the source/derived
       artifact relationships. A derived artifact references its sources; a
       source artifact is never rewritten.
-- [ ] T3 — Enforce the 1 MiB import and 100-trial limits **before** parsing,
+- [x] T3 — Enforce the 1 MiB import and 100-trial limits **before** parsing,
       validate the exact allowlisted schema, and redact **before** persistence
       and hashing.
-- [ ] T4 — Normalize only the required call-selection, arguments, order, error,
+- [x] T4 — Normalize only the required call-selection, arguments, order, error,
       trajectory, and reproducibility fields. Preserve unsupported metadata as
       `null`.
 - [ ] T5 — Require explicit one-to-one trial binding, validated and saved before

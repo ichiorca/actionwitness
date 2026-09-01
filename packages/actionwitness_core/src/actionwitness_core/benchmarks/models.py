@@ -290,6 +290,16 @@ class NormalizedTrial(CoreModel):
     trajectory: tuple[Mapping[str, JsonValue], ...] = ()
     #: Unsupported upstream fields, explicitly `null`.
     metadata: Mapping[str, JsonValue] = Field(default_factory=dict)
+    #: Whether this trial carries a stable address of its own (ADR-0005).
+    #:
+    #: The pinned reporter's `test.name` and `runIndex` are both *optional*, so
+    #: a report may contain trials that nothing can name. Such a trial keeps a
+    #: positional id so it can be stored and shown, but `addressable` is
+    #: `False` and FR-091 then permits binding it only by explicit operator
+    #: selection. Recording this as a field rather than re-deriving it at
+    #: binding time is what stops the id's *shape* from being mistaken for
+    #: evidence that it identifies anything.
+    addressable: bool = True
 
     @model_validator(mode="after")
     def _an_excluded_trial_says_why(self) -> NormalizedTrial:
@@ -325,6 +335,7 @@ class NormalizedTrial(CoreModel):
             "evaluation_run_id": self.evaluation_run_id,
             "trajectory": [dict(step) for step in self.trajectory],
             "metadata": dict(self.metadata),
+            "addressable": self.addressable,
         }
 
 
