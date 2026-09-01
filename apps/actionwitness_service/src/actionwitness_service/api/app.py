@@ -36,6 +36,7 @@ from actionwitness_service.api.routes import contracts as contract_routes
 from actionwitness_service.api.routes import runs as run_routes
 from actionwitness_service.api.routes import workspace as workspace_routes
 from actionwitness_service.application.adapter_registry import AdapterRegistry
+from actionwitness_service.application.artifacts import ArtifactStore
 from actionwitness_service.application.cleanup import WorkspaceCleaner
 from actionwitness_service.application.contract_service import seed_templates
 from actionwitness_service.application.rate_limits import RateLimiter
@@ -121,6 +122,7 @@ def create_app(
     app.state.workspaces = workspaces
     app.state.locks = WorkspaceLocks()
     app.state.limiter = limiter
+    app.state.artifacts = ArtifactStore(settings.harness.artifact_root)
     app.state.cleaner = cleaner
 
     # Starlette runs middleware in reverse registration order, so the origin

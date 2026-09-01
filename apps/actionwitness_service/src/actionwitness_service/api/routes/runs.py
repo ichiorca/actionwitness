@@ -26,17 +26,19 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
+from actionwitness_core.reports.enums import RunMode
 from fastapi import APIRouter, Body, Path
 from pydantic import BaseModel, ConfigDict, Field
 
 from actionwitness_service.api.dependencies import (
+    ArtifactsDependency,
     DatabaseDependency,
     LocksDependency,
     RegistryDependency,
     WorkspaceDependency,
 )
 from actionwitness_service.application.invocation_service import InvocationService
-from actionwitness_service.application.run_service import RunMode, RunService
+from actionwitness_service.application.run_service import RunService
 from actionwitness_service.application.verification_service import VerificationService
 
 __all__ = ["router"]
@@ -49,7 +51,7 @@ class ArmRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    mode: Annotated[str, Field(min_length=1, max_length=32)] = RunMode.VERIFICATION
+    mode: Annotated[str, Field(min_length=1, max_length=32)] = RunMode.VERIFICATION.value
 
 
 #: A frozen module-level default, so a request with no body shares one immutable
@@ -154,6 +156,7 @@ async def verify_run(
     database: DatabaseDependency,
     locks: LocksDependency,
     registry: RegistryDependency,
+    artifacts: ArtifactsDependency,
 ) -> dict[str, Any]:
     """Capture final state and evaluate (§15.3).
 
@@ -165,7 +168,9 @@ async def verify_run(
     and returning a second, differently-shaped view of the same verdict would
     give a client two places to read it from.
     """
-    outcome = await VerificationService(database, registry, locks).verify(workspace_id, run_id)
+    outcome = await VerificationService(database, registry, locks, artifacts).verify(
+        workspace_id, run_id
+    )
     return {
         "run_id": outcome.run_id,
         "status": outcome.status,
@@ -176,5 +181,11 @@ async def verify_run(
             "failed": sum(1 for finding in outcome.findings if finding.failed),
         },
         "final_snapshot": {"state_version": outcome.final_state_version},
+        # §23.1's five layers, and the report's own identity. The full document
+        # is an immutable artifact; this is the summary a caller needs to decide
+        # whether to fetch it.
+        "layers": outcome.report.layers.canonical_document(),
+        "counts": outcome.report.counts.canonical_document(),
+        "report_content_hash": outcome.report.content_hash(),
         "next_action": outcome.next_action,
     }

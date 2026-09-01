@@ -23,7 +23,7 @@ Cite the T-ID in every commit that advances it.
 - [x] T6 — Final observation capture and verification: assertion, trajectory, and
       policy evaluation through the core, findings persisted, and the immutable
       terminal transition. The core owns the verdict; this task owns the I/O.
-- [ ] T7 — The layered outcome report (§23): observed trajectory, execution,
+- [x] T7 — The layered outcome report (§23): observed trajectory, execution,
       business outcome, and model selection, composed through the core's
       `compose_outcome_report`.
 - [ ] T8 — The false-success classifier (§12, §22): the last relevant

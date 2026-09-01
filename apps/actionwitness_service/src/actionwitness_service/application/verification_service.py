@@ -36,6 +36,7 @@ from typing import Any
 from actionwitness_core.contracts.models import OutcomeContract, parse_contract
 from actionwitness_core.contracts.paths import ObservationPath
 from actionwitness_core.engine.assertions import evaluate_assertions
+from actionwitness_core.engine.classification import tool_execution_layer
 from actionwitness_core.engine.findings import Finding, aggregate, primary_failure
 from actionwitness_core.engine.policies import PolicyEvidence, evaluate_policies
 from actionwitness_core.engine.trajectory import evaluate_expected_tools
@@ -47,13 +48,22 @@ from actionwitness_core.journeys.enums import (
     RunState,
     SnapshotPhase,
 )
-from actionwitness_core.journeys.guidance import derive_guidance, phase_for
+from actionwitness_core.journeys.guidance import GuidanceState, derive_guidance, phase_for
 from actionwitness_core.ports.models import Observation
-from actionwitness_core.reports.enums import LayerResult
+from actionwitness_core.reports.enums import LayerResult, RunMode
+from actionwitness_core.reports.models import (
+    ContractReference,
+    GuidanceReference,
+    OutcomeReport,
+    ScenarioReference,
+    TargetReference,
+    compose_outcome_report,
+)
 from actionwitness_core.security.redaction import RedactionPolicy
 
 from actionwitness_service.api.errors import ApiError, ApiErrorCode
 from actionwitness_service.application.adapter_registry import AdapterRegistry
+from actionwitness_service.application.artifacts import OUTCOME_REPORT, ArtifactStore
 from actionwitness_service.application.guidance_service import GuidanceRecorder
 from actionwitness_service.application.verification_gate import VerificationGate
 from actionwitness_service.persistence.database import Database, UnitOfWork
@@ -82,6 +92,7 @@ class VerificationOutcome:
     findings: tuple[Finding, ...]
     primary_failure_check_id: str | None
     final_state_version: str | None
+    report: OutcomeReport
     next_action: Mapping[str, object]
 
 
@@ -93,12 +104,14 @@ class VerificationService:
         database: Database,
         registry: AdapterRegistry,
         locks: WorkspaceLocks,
+        artifacts: ArtifactStore,
         *,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._database = database
         self._registry = registry
         self._locks = locks
+        self._artifacts = artifacts
         self._clock = clock or (lambda: datetime.now(UTC))
 
     async def verify(self, workspace_id: str, run_id: str) -> VerificationOutcome:
@@ -115,24 +128,47 @@ class VerificationService:
         final = await self._capture(adapter, workspace_id, policy)
 
         # 3 — the core decides. Pure, and given only recorded evidence.
-        findings = _evaluate(contract, adapter, events, initial=initial, final=final.as_context())
+        evaluation = _evaluate(contract, adapter, events, initial=initial, final=final.as_context())
+        findings = evaluation.all()
         result = aggregate(findings)
+        terminal = _TERMINAL_STATE[result]
+        guidance = derive_guidance(
+            phase_for(has_contract=True, run_state=terminal), correlation_id=run_id
+        )
+
+        # §23.1's report, derived from the evidence just evaluated. Composed
+        # before the seal so the artifact and the verdict describe the same
+        # moment, and written to disk here because file I/O must not happen
+        # inside the transaction (ADR-0003).
+        report = _compose(run_id, run, contract, evaluation, events, guidance)
+        written = self._artifacts.write(
+            workspace_id,
+            run_id,
+            report.as_stored_document(),
+            artifact_type=OUTCOME_REPORT,
+            schema_version=report.schema_version,
+        )
 
         # 4 — the whole verdict commits together.
         async with self._locks.hold(workspace_id), self._database.transaction() as work:
             await self._seal(work, workspace_id, run_id, final, findings, result)
+            await self._artifacts.record(
+                work,
+                workspace_id,
+                run_id,
+                written,
+                metadata={"overall_result": str(result.value)},
+            )
 
         return VerificationOutcome(
             run_id=run_id,
-            status=str(_TERMINAL_STATE[result].value),
+            status=str(terminal.value),
             overall_result=str(result.value),
             findings=findings,
             primary_failure_check_id=_primary_check_id(findings),
             final_state_version=final.state_version,
-            next_action=derive_guidance(
-                phase_for(has_contract=True, run_state=_TERMINAL_STATE[result]),
-                correlation_id=run_id,
-            ).next_action(),
+            report=report,
+            next_action=guidance.next_action(),
         )
 
     # -- reading the recorded evidence ---------------------------------------
@@ -281,6 +317,26 @@ class VerificationService:
         )
 
 
+@dataclass(frozen=True)
+class Evaluation:
+    """The findings, kept in the groups §23.1's layers are drawn from.
+
+    Separate rather than one flat tuple because the layers are *not* the same
+    question: `business_outcome` aggregates assertions only, `safety_policy`
+    aggregates policies only, and `observed_trajectory` is one finding. Flatten
+    them and a failing policy would drag the business outcome down with it,
+    which is precisely the conflation §23.1's five layers exist to prevent.
+    """
+
+    assertions: tuple[Finding, ...]
+    trajectory: Finding
+    policies: tuple[Finding, ...]
+
+    def all(self) -> tuple[Finding, ...]:
+        """Every finding, for the run-level aggregate and for persistence."""
+        return (*self.assertions, self.trajectory, *self.policies)
+
+
 def _evaluate(
     contract: OutcomeContract,
     adapter: Any,
@@ -288,27 +344,28 @@ def _evaluate(
     *,
     initial: Mapping[str, Any] | None,
     final: Mapping[str, Any] | None,
-) -> tuple[Finding, ...]:
+) -> Evaluation:
     """Every layer the core owns, in one place and in contract order.
 
     Assembled here and decided there: this function chooses *what* to evaluate
     and the engine decides *how* each one turns out.
     """
-    assertion_findings = evaluate_assertions(contract.assertions, initial=initial, final=final)
-    trajectory = evaluate_expected_tools(contract.expected_tools, events)
-    policy_findings = evaluate_policies(
-        contract.policies,
-        PolicyEvidence(
-            events=tuple(events),
-            effect_map=_effect_map(adapter),
-            contract_paths=_contract_paths(contract),
-            # FR-157's full-state diff is not produced yet, and `None` is what
-            # says so: a policy needing it reports `not_evaluated` with a reason
-            # rather than reading as satisfied (§12.2).
-            changed_paths=None,
+    return Evaluation(
+        assertions=evaluate_assertions(contract.assertions, initial=initial, final=final),
+        trajectory=evaluate_expected_tools(contract.expected_tools, events),
+        policies=evaluate_policies(
+            contract.policies,
+            PolicyEvidence(
+                events=tuple(events),
+                effect_map=_effect_map(adapter),
+                contract_paths=_contract_paths(contract),
+                # FR-157's full-state diff is not produced yet, and `None` is
+                # what says so: a policy needing it reports `not_evaluated` with
+                # a reason rather than reading as satisfied (§12.2).
+                changed_paths=None,
+            ),
         ),
     )
-    return (*assertion_findings, trajectory, *policy_findings)
 
 
 def _effect_map(adapter: Any) -> Mapping[str, tuple[ObservationPath, ...]]:
@@ -396,3 +453,51 @@ def _run_event(row: Mapping[str, Any]) -> RunEvent:
 
 def _instant(stored: str) -> datetime:
     return datetime.fromisoformat(stored.replace("Z", "+00:00")).astimezone(UTC)
+
+
+def _compose(
+    run_id: str,
+    run: Mapping[str, Any],
+    contract: OutcomeContract,
+    evaluation: Evaluation,
+    events: Sequence[RunEvent],
+    guidance: GuidanceState,
+) -> OutcomeReport:
+    """§23.1's layered report, from evidence the core has already judged.
+
+    Nothing is re-evaluated: `compose_outcome_report` derives every layer and
+    count from the findings and events it is handed, so a report cannot disagree
+    with the verdict it summarises. `model_tool_selection` is not passed because
+    it cannot be — §23.1 finalizes it as `not_evaluated` in a source report and
+    a Tier 2 import must not update it, so the core offers no parameter for it.
+    """
+    return compose_outcome_report(
+        run_id=run_id,
+        target=TargetReference(id=str(run["target_id"]), adapter_id=str(run["target_adapter_id"])),
+        scenario=ScenarioReference(
+            mode=str(run["scenario_mode"] or "unspecified"),
+            fault_profile=run["failure_profile"],
+            # Recorded by the adapter, not chosen here (§12.2). Still false
+            # until scenario selection reaches the target through the adapter.
+            fault_active=bool(run["fault_active"]),
+        ),
+        contract=ContractReference(
+            id=str(run["contract_id"]),
+            schema_version=contract.schema_version,
+            content_hash=str(run["contract_content_hash"]),
+        ),
+        assertion_findings=evaluation.assertions,
+        policy_findings=evaluation.policies,
+        trajectory_finding=evaluation.trajectory,
+        # §23.1's execution layer: did the calls themselves work, separately
+        # from whether they achieved anything. Derived by the core from the
+        # timeline rather than from any status this service holds.
+        tool_execution=tool_execution_layer(events),
+        events=events,
+        guidance_at_finalization=GuidanceReference(
+            actor=guidance.active_actor,
+            action=str(guidance.action_code.value) if guidance.action_code else "wait",
+            reason=guidance.reason,
+        ),
+        mode=RunMode.VERIFICATION,
+    )

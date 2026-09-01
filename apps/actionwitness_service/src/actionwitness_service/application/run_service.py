@@ -45,6 +45,7 @@ from actionwitness_core.evidence.effects import redacted_observation
 from actionwitness_core.journeys.enums import EventActor, OutcomeEventType, RunState, SnapshotPhase
 from actionwitness_core.journeys.guidance import derive_guidance, phase_for
 from actionwitness_core.ports.models import Observation
+from actionwitness_core.reports.enums import RunMode
 from actionwitness_core.security.canonical import content_hash
 from actionwitness_core.security.redaction import RedactionPolicy
 
@@ -62,28 +63,12 @@ from actionwitness_service.persistence.repositories import (
     new_id,
 )
 
-__all__ = ["ArmedRun", "RunMode", "RunService", "WorkspaceConfiguration"]
+__all__ = ["ArmedRun", "RunService", "WorkspaceConfiguration"]
 
 #: The implementation version copied into every run (§17.1 `runs`). Runs are
 #: comparable only within one implementation, so this is recorded at arming and
 #: never updated afterwards.
 IMPLEMENTATION_VERSION: Final = "0.1.0"
-
-
-class RunMode:
-    """§15.3's `mode`. `proposal` is declared here and refused below.
-
-    BUILD_ORDER §7/M4 scopes this milestone to the verification slice, and
-    proposal mode brings its own three states, candidate derivation, and
-    curation surface. Declaring the value and refusing it explicitly is the
-    003 pattern for an unimplemented option: an unimplemented profile is
-    "refused rather than downgraded", because silently arming a verification run
-    for someone who asked for a proposal is worse than saying no.
-    """
-
-    VERIFICATION: Final = "verification"
-    PROPOSAL: Final = "proposal"
-    ALL: Final = (VERIFICATION, PROPOSAL)
 
 
 @dataclass(frozen=True)
@@ -145,7 +130,7 @@ class RunService:
         self._id_source = id_source or (lambda: new_id("run"))
         self._clock = clock
 
-    async def arm(self, workspace_id: str, *, mode: str = RunMode.VERIFICATION) -> ArmedRun:
+    async def arm(self, workspace_id: str, *, mode: str = RunMode.VERIFICATION.value) -> ArmedRun:
         """FR-030. Three phases, and the boundaries between them are the design.
 
         1. Read the workspace's selected configuration. No lock, no write.
@@ -359,9 +344,21 @@ class RunService:
 
 
 def _require_supported_mode(mode: str) -> None:
-    if mode == RunMode.VERIFICATION:
+    """§15.3's `mode`. `proposal` is refused rather than silently downgraded.
+
+    BUILD_ORDER §7/M4 scopes this milestone to the verification slice, and
+    proposal mode brings its own three run states, candidate derivation, and
+    curation surface. Arming a verification run for someone who asked for a
+    proposal would be worse than saying no — the 003 pattern for an
+    unimplemented option, which is "refused rather than downgraded".
+
+    The vocabulary is the core's `reports.enums.RunMode`, not a second copy: the
+    report already has to name the mode, and two lists of the same two strings
+    would eventually disagree.
+    """
+    if mode == RunMode.VERIFICATION.value:
         return
-    if mode == RunMode.PROPOSAL:
+    if mode == RunMode.PROPOSAL.value:
         raise ApiError(
             ApiErrorCode.CONTRACT_VALIDATION_FAILED,
             "Proposal-mode runs are not available in this build.",
@@ -370,7 +367,12 @@ def _require_supported_mode(mode: str) -> None:
     raise ApiError(
         ApiErrorCode.CONTRACT_VALIDATION_FAILED,
         f"Unknown run mode {mode!r}.",
-        details=[{"path": "mode", "message": f"expected one of {', '.join(RunMode.ALL)}"}],
+        details=[
+            {
+                "path": "mode",
+                "message": f"expected one of {', '.join(m.value for m in RunMode)}",
+            }
+        ],
     )
 
 

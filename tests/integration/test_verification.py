@@ -331,15 +331,15 @@ async def test_the_run_reaches_a_terminal_state_with_its_result(stack: FastAPI) 
 async def test_sealing_releases_the_workspace(stack: FastAPI) -> None:
     """A terminal run must not keep holding the workspace.
 
-    "Released" is asserted through the things a run locks: the active-run
-    pointer clears, and contract selection — refused with `RUN_IN_PROGRESS`
-    while the run was live — works again.
+    "Released" is asserted through the two things a live run locks: the
+    active-run pointer clears, and contract selection — refused with
+    `RUN_IN_PROGRESS` while the run was live — works again. Arming then
+    succeeds against the newly selected contract.
 
-    Arming a *second* run is deliberately not the assertion. The journey left a
-    mug in the cart, so the canonical contract's preconditions no longer hold
-    and arming is refused on its merits. That refusal is checked to be
-    `PRECONDITION_FAILED` rather than a lock, which is what distinguishes a
-    released workspace from a stuck one.
+    The re-selection is not incidental. Arming the *canonical* contract again
+    would be refused on its merits, because the journey left a mug in the cart
+    and its preconditions require an empty one — a legitimate refusal that would
+    make this test unable to tell a released workspace from a stuck one.
     """
     # Arrange
     async with client(stack) as visitor:
@@ -357,8 +357,7 @@ async def test_sealing_releases_the_workspace(stack: FastAPI) -> None:
     # Assert
     assert workspace["active_run"] is None
     assert reselect.status_code == 200
-    assert second_arm.status_code == 409
-    assert second_arm.json()["error"]["code"] == "PRECONDITION_FAILED"
+    assert second_arm.status_code == 201, second_arm.text
 
 
 async def test_guidance_follows_the_verdict(stack: FastAPI) -> None:

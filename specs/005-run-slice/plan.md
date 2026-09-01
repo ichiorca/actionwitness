@@ -553,3 +553,59 @@ whole observation, which would duplicate the snapshot on every invocation row.
 §17.1 distinguishes a single-path finding from a multi-path one, which 004-T3's
 repository already handled; this is the first task that exercises it with real
 findings.
+
+### T7 — five layers, because one verdict would conflate two different failures
+
+The exit gate's sentence is the whole point of §23.1's layering: under the
+discount fault the trajectory is what the contract expected and every call
+worked, and the business outcome still fails. A single pass/fail would collapse
+"the agent did the wrong thing" and "the target lied about doing the right
+thing" into one answer, and a reader needs different responses to each.
+
+`Evaluation` keeps assertions, the trajectory finding, and policies in separate
+groups for the same reason. Flattened into one tuple, a failing policy would
+drag `business_outcome` down with it — the conflation the layers exist to
+prevent — so the flattening happens only for the run-level aggregate and for
+persistence.
+
+### T7 — `model_tool_selection` cannot be set, rather than merely not being set
+
+§23.1 finalizes it as `not_evaluated` in a source report and forbids a Tier 2
+import from updating it. `compose_outcome_report` has no parameter for it, so
+this holds by construction rather than by care — the service could not set it
+wrongly if it tried.
+
+### T7 — the report is an immutable artifact, hashed over the bytes on disk
+
+§25 refers to "the source report hash", which needs a stored referent, and
+§17.1's `artifacts` table is where it goes. The document is serialized with the
+core's canonical serializer and *those exact bytes* are both hashed and written:
+pretty-printed JSON beside a hash taken over canonical text would produce an
+artifact whose own hash a reader could not reproduce. §17.2 excludes the
+top-level `content_hash` member from the hash input, so verification needs only
+the file.
+
+The file is written before the row is inserted, and the row joins the seal
+transaction. File I/O must not happen inside a transaction (ADR-0003), and of
+the two crash windows the safe one is a file with no row: unreachable, and
+replaced by the next write. A row pointing at a missing file is one a reader
+*would* reach.
+
+FR-008's artifact ceilings are checked at the insert rather than before the
+write, because the count and the insert must share a transaction. A refused
+ceiling therefore leaves an unreferenced file, which is the same recoverable
+case.
+
+### T7 — `artifacts.artifact_type` is a project-allocated constant, not an enum yet
+
+§17.1 names the column and enumerates no vocabulary. One value is not a closed
+set worth registering; the eval, benchmark, and regression types arrive with the
+milestones that produce them, and the enum can be introduced when there is a set
+to close.
+
+### T7 — removed the `RunMode` duplication T1 introduced
+
+T1 defined a `RunMode` class of string constants in `run_service`, not realising
+the core already had `reports.enums.RunMode` with exactly those two values. The
+report has to name the mode, so two lists of the same two strings would
+eventually disagree. The service now uses the core's enum.
