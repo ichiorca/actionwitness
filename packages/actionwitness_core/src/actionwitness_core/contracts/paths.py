@@ -35,6 +35,7 @@ __all__ = [
     "ObservationPath",
     "ObservationPathField",
     "Resolution",
+    "is_valid_segment",
     "resolve",
 ]
 
@@ -42,6 +43,20 @@ __all__ = [
 #: that may index a sequence. Leading zeros are refused so that `01` and `1`
 #: cannot name the same element through two spellings.
 _SEGMENT: Final = re.compile(r"^(?:[A-Za-z_][A-Za-z0-9_-]*|0|[1-9][0-9]*)$")
+
+
+def is_valid_segment(text: str) -> bool:
+    """Whether `text` can be one segment of a dotted path.
+
+    Exported so the FR-157 diff can ask before building a path out of document
+    keys it did not choose. It has to be this predicate rather than a second copy
+    of the pattern: `ObservationPathField`'s note about "a second declaration
+    would eventually validate them by a second rule" applies with more force
+    here, because a diff that accepted a key `parse` rejects would emit a path
+    that cannot be read back.
+    """
+    return bool(_SEGMENT.match(text))
+
 
 #: Characters whose presence identifies an expression language rather than a
 #: typo, reported by name so the author is told what was rejected and why.
