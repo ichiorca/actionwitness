@@ -42,6 +42,7 @@ from actionwitness_core.benchmarks.models import (
     BenchmarkManifest,
     BenchmarkReport,
     NormalizedTrial,
+    ScenarioDefinition,
     TrialBinding,
 )
 from actionwitness_core.benchmarks.states import require_transition
@@ -93,6 +94,7 @@ class BenchmarkService:
         source_kind: SourceKind,
         correlation_mode: CorrelationMode,
         manifest_fields: Mapping[str, Any] | None = None,
+        scenarios: Sequence[ScenarioDefinition] = (),
         normalizer_version: str = "1",
     ) -> str:
         """A new suite in `draft` (§16.4's entry state).
@@ -107,6 +109,7 @@ class BenchmarkService:
             source_kind=source_kind,
             correlation_mode=correlation_mode,
             benchmark_id=benchmark_id,
+            scenarios=tuple(scenarios),
             **dict(manifest_fields or {}),
         )
         await self._work.execute(
@@ -138,6 +141,7 @@ class BenchmarkService:
         *,
         source_artifact_id: str,
         trials: Sequence[NormalizedTrial],
+        manifest_fields: Mapping[str, Any] | None = None,
     ) -> ImportedSuite:
         """Store one import's normalized trials against a draft suite.
 
@@ -147,6 +151,12 @@ class BenchmarkService:
         """
         suite = await self._draft(benchmark_id)
         declared = CorrelationMode(str(suite["correlation_mode"]))
+        # §24.7 step 1: the scenario carries the target configuration, not the
+        # evaluator report. Stamped on here so a replay runs against the mode
+        # and fault the benchmark declared rather than whatever the target
+        # happens to default to.
+        scenarios = self._scenarios_of(suite)
+        stamped: list[NormalizedTrial] = []
         for trial in trials:
             if trial.correlation_mode is not declared:
                 # §9.9: the two mode populations "shall never be aggregated into
@@ -156,11 +166,69 @@ class BenchmarkService:
                     f"this suite is {declared.value}; trial "
                     f"{trial.external_trial_id} is {trial.correlation_mode.value}",
                 )
-            await self._insert_trial(benchmark_id, source_artifact_id, trial)
+            configured = self._with_scenario(trial, scenarios)
+            await self._insert_trial(benchmark_id, source_artifact_id, configured)
+            stamped.append(configured)
+        # FR-093's evaluator half is only knowable once a report has been read:
+        # the reporter schema, the normalizer version, and whatever model
+        # metadata the report carried. Merged into the manifest here rather than
+        # at finalization, so the record describes what produced these trials.
+        if manifest_fields:
+            await self._merge_manifest(benchmark_id, suite, manifest_fields)
         return ImportedSuite(
             benchmark_id=benchmark_id,
             source_artifact_id=source_artifact_id,
-            trials=tuple(trials),
+            trials=tuple(stamped),
+        )
+
+    async def _merge_manifest(
+        self, benchmark_id: str, suite: Mapping[str, Any], fields: Mapping[str, Any]
+    ) -> None:
+        """Add what the import learned, without overwriting what was declared.
+
+        The scenarios and the source kind were the operator's decision at
+        creation; the evaluator and model metadata are the report's. A blanket
+        overwrite would let a report rename the populations it was imported
+        into.
+        """
+        stored = json.loads(str(suite["manifest_json"]))
+        declared = {"source_kind", "correlation_mode", "benchmark_id", "scenarios"}
+        stored.update({key: value for key, value in fields.items() if key not in declared})
+        manifest = BenchmarkManifest.model_validate(stored)
+        await self._work.execute(
+            "UPDATE benchmark_suites SET manifest_json = ?, manifest_content_hash = ? "
+            "WHERE id = ? AND workspace_id = ?",
+            (
+                canonical_text(manifest.canonical_document()),
+                manifest.content_hash(),
+                benchmark_id,
+                self._workspace_id,
+            ),
+        )
+
+    def _scenarios_of(self, suite: Mapping[str, Any]) -> Mapping[str, ScenarioDefinition]:
+        manifest = BenchmarkManifest.model_validate(json.loads(str(suite["manifest_json"])))
+        return {scenario.scenario_id: scenario for scenario in manifest.scenarios}
+
+    def _with_scenario(
+        self, trial: NormalizedTrial, scenarios: Mapping[str, ScenarioDefinition]
+    ) -> NormalizedTrial:
+        """A trial plus the target configuration its scenario declares.
+
+        A scenario the manifest does not describe leaves the trial as it is —
+        `null`, never inferred (FR-093). The replay then runs against the
+        target default and the trial says so, rather than being quietly
+        attributed to a configuration nobody chose.
+        """
+        scenario = scenarios.get(trial.scenario_id)
+        if scenario is None:
+            return trial
+        return trial.model_copy(
+            update={
+                "scenario_mode": scenario.scenario_mode,
+                "failure_profile": scenario.failure_profile,
+                "contract_content_hash": scenario.contract_content_hash,
+            }
         )
 
     # -- binding --------------------------------------------------------------

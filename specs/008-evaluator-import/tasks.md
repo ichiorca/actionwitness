@@ -28,7 +28,7 @@ Cite the T-ID in every commit that advances it.
 - [x] T9 — The §15.6 import/binding/replay/finalize APIs.
 - [x] T10 — `BenchmarkPanel` with source kind, mode, coverage, evidence links,
       and interpretation guardrails.
-- [ ] T11 — Check in at least three scenarios with three trials each, including
+- [x] T11 — Check in at least three scenarios with three trials each, including
       a call-level pass / outcome fail trial labeled `silent_outcome_defect`.
 - [ ] T12 — The exit gate: the complete fixture path with Node unavailable and
       no LLM or Shopify credentials; malformed, oversized, unsupported,

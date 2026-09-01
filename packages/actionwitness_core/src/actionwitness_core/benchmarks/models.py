@@ -48,6 +48,7 @@ __all__ = [
     "NormalizedTrial",
     "Population",
     "Rate",
+    "ScenarioDefinition",
     "TrialBinding",
 ]
 
@@ -339,6 +340,35 @@ class NormalizedTrial(CoreModel):
         }
 
 
+class ScenarioDefinition(CoreModel):
+    """§24.7 step 1: "a shared scenario with intent, contract hash, fixture,
+    target build, and failure profile".
+
+    An evaluator report says what the model *called*; it says nothing about the
+    target configuration those calls ran against. That configuration is the
+    benchmark's own, declared once per scenario here and stamped onto each
+    trial at import (§17.1 gives `benchmark_trials` both columns).
+
+    Without it every replay would run against whatever the target defaults to,
+    and a suite meant to exercise an injected fault would quietly measure the
+    corrected implementation instead — reporting no silent defects because none
+    were provoked.
+    """
+
+    scenario_id: Identifier
+    scenario_mode: Annotated[str, StringConstraints(min_length=1, max_length=64)] | None = None
+    failure_profile: Annotated[str, StringConstraints(min_length=1, max_length=64)] | None = None
+    contract_content_hash: ContentHash | None = None
+
+    def canonical_document(self) -> dict[str, JsonValue]:
+        return {
+            "scenario_id": self.scenario_id,
+            "scenario_mode": self.scenario_mode,
+            "failure_profile": self.failure_profile,
+            "contract_content_hash": self.contract_content_hash,
+        }
+
+
 class BenchmarkManifest(CoreModel):
     """FR-093's reproducibility manifest.
 
@@ -353,6 +383,8 @@ class BenchmarkManifest(CoreModel):
     correlation_mode: CorrelationMode
     benchmark_id: Identifier
     scenario_ids: tuple[Identifier, ...] = ()
+    #: The target configuration each scenario runs under (§24.7 step 1).
+    scenarios: tuple[ScenarioDefinition, ...] = ()
     target_fixture: str | None = None
     target_build_commit: str | None = None
     evaluator_name: str | None = None
@@ -377,6 +409,7 @@ class BenchmarkManifest(CoreModel):
             "correlation_mode": self.correlation_mode.value,
             "benchmark_id": self.benchmark_id,
             "scenario_ids": list(self.scenario_ids),
+            "scenarios": [scenario.canonical_document() for scenario in self.scenarios],
             "target_fixture": self.target_fixture,
             "target_build_commit": self.target_build_commit,
             "evaluator_name": self.evaluator_name,

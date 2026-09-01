@@ -1,0 +1,164 @@
+{
+  "config": {
+    "reporterSchema": "webmcp-evals/0.0.4",
+    "evaluatorName": "webmcp-evals",
+    "evaluatorPackage": "webmcp-evals",
+    "evaluatorVersion": "0.0.4",
+    "commandMode": "browser",
+    "modelProvider": "recorded",
+    "modelName": "recorded-fixture",
+    "modelParameters": { "temperature": 0 },
+    "targetBuildCommit": "fixture",
+    "targetFixture": "buggy-store-canonical-empty-cart"
+  },
+  "results": {
+    "results": [
+      {
+        "test": { "name": "SAVE20 on one mug against the faulty build" },
+        "outcome": "pass",
+        "runIndex": 0,
+        "response": "Added one ceramic mug and applied SAVE20.",
+        "trajectory": [
+          {
+            "name": "update_cart",
+            "arguments": {
+              "product_id": "mug-ceramic-001",
+              "quantity": 1,
+              "request_id": "req_fixture_faulty_0"
+            }
+          },
+          { "name": "apply_discount", "arguments": { "code": "SAVE20" } }
+        ]
+      },
+      {
+        "test": { "name": "SAVE20 on one mug against the faulty build" },
+        "outcome": "pass",
+        "runIndex": 1,
+        "response": "Added one ceramic mug and applied SAVE20.",
+        "trajectory": [
+          {
+            "name": "update_cart",
+            "arguments": {
+              "product_id": "mug-ceramic-001",
+              "quantity": 1,
+              "request_id": "req_fixture_faulty_1"
+            }
+          },
+          { "name": "apply_discount", "arguments": { "code": "SAVE20" } }
+        ]
+      },
+      {
+        "test": { "name": "SAVE20 on one mug against the faulty build" },
+        "outcome": "pass",
+        "runIndex": 2,
+        "response": "Added one ceramic mug and applied SAVE20.",
+        "trajectory": [
+          {
+            "name": "update_cart",
+            "arguments": {
+              "product_id": "mug-ceramic-001",
+              "quantity": 1,
+              "request_id": "req_fixture_faulty_2"
+            }
+          },
+          { "name": "apply_discount", "arguments": { "code": "SAVE20" } }
+        ]
+      },
+      {
+        "test": { "name": "SAVE20 on one mug against the corrected build" },
+        "outcome": "pass",
+        "runIndex": 0,
+        "response": "Added one ceramic mug and applied SAVE20.",
+        "trajectory": [
+          {
+            "name": "update_cart",
+            "arguments": {
+              "product_id": "mug-ceramic-001",
+              "quantity": 1,
+              "request_id": "req_fixture_fixed_0"
+            }
+          },
+          { "name": "apply_discount", "arguments": { "code": "SAVE20" } }
+        ]
+      },
+      {
+        "test": { "name": "SAVE20 on one mug against the corrected build" },
+        "outcome": "pass",
+        "runIndex": 1,
+        "response": "Added one ceramic mug and applied SAVE20.",
+        "trajectory": [
+          {
+            "name": "update_cart",
+            "arguments": {
+              "product_id": "mug-ceramic-001",
+              "quantity": 1,
+              "request_id": "req_fixture_fixed_1"
+            }
+          },
+          { "name": "apply_discount", "arguments": { "code": "SAVE20" } }
+        ]
+      },
+      {
+        "test": { "name": "SAVE20 on one mug against the corrected build" },
+        "outcome": "pass",
+        "runIndex": 2,
+        "response": "Added one ceramic mug and applied SAVE20.",
+        "trajectory": [
+          {
+            "name": "update_cart",
+            "arguments": {
+              "product_id": "mug-ceramic-001",
+              "quantity": 1,
+              "request_id": "req_fixture_fixed_2"
+            }
+          },
+          { "name": "apply_discount", "arguments": { "code": "SAVE20" } }
+        ]
+      },
+      {
+        "test": { "name": "SAVE20 on one mug, discount step omitted" },
+        "outcome": "fail",
+        "runIndex": 0,
+        "response": "Added the mug but never applied the discount code.",
+        "trajectory": [
+          {
+            "name": "update_cart",
+            "arguments": {
+              "product_id": "mug-ceramic-001",
+              "quantity": 1,
+              "request_id": "req_fixture_omitted_0"
+            }
+          }
+        ]
+      },
+      {
+        "test": { "name": "SAVE20 on one mug, discount step omitted" },
+        "outcome": "fail",
+        "runIndex": 1,
+        "response": "Searched the catalog and added the mug, then stopped.",
+        "trajectory": [
+          { "name": "search_catalog", "arguments": { "query": "mug" } },
+          {
+            "name": "update_cart",
+            "arguments": {
+              "product_id": "mug-ceramic-001",
+              "quantity": 1,
+              "request_id": "req_fixture_omitted_1"
+            }
+          }
+        ]
+      },
+      {
+        "test": { "name": "SAVE20 on one mug, discount step omitted" },
+        "outcome": "error",
+        "runIndex": 2,
+        "response": "",
+        "browserConsoleErrors": ["evaluator harness lost the page"]
+      }
+    ],
+    "testCount": 9,
+    "passCount": 6,
+    "failCount": 2,
+    "errorCount": 1
+  }
+}

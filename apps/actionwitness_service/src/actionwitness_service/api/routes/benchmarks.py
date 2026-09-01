@@ -32,7 +32,7 @@ import json
 from typing import Annotated, Any
 
 from actionwitness_core.benchmarks.enums import CorrelationMode, SourceKind
-from actionwitness_core.benchmarks.models import TrialBinding
+from actionwitness_core.benchmarks.models import ScenarioDefinition, TrialBinding
 from actionwitness_core.kernel import CoreError
 from fastapi import APIRouter, Body, Path, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
@@ -62,11 +62,24 @@ class _Body(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+class ScenarioRequest(_Body):
+    """§24.7 step 1: the target configuration one scenario runs under.
+
+    Declared by the benchmark rather than read from the evaluator report, which
+    describes what a model called and not what it called it against.
+    """
+
+    scenario_id: Annotated[str, Field(min_length=1, max_length=128)]
+    scenario_mode: Annotated[str, Field(min_length=1, max_length=64)] | None = None
+    failure_profile: Annotated[str, Field(min_length=1, max_length=64)] | None = None
+
+
 class CreateBenchmarkRequest(_Body):
     """§15.6: "create a benchmark suite from a validated manifest"."""
 
     source_kind: SourceKind = SourceKind.RECORDED_FIXTURE
     correlation_mode: CorrelationMode = CorrelationMode.IMPORTED_TRAJECTORY_REPLAY
+    scenarios: tuple[ScenarioRequest, ...] = ()
 
 
 class BindingRequest(_Body):
@@ -102,7 +115,16 @@ async def create_benchmark(
     """§15.6: a new suite, in `draft`."""
     async with locks.hold(workspace_id), database.transaction() as work:
         benchmark_id = await BenchmarkService(work, workspace_id).create(
-            source_kind=request.source_kind, correlation_mode=request.correlation_mode
+            source_kind=request.source_kind,
+            correlation_mode=request.correlation_mode,
+            scenarios=tuple(
+                ScenarioDefinition(
+                    scenario_id=scenario.scenario_id,
+                    scenario_mode=scenario.scenario_mode,
+                    failure_profile=scenario.failure_profile,
+                )
+                for scenario in request.scenarios
+            ),
         )
     return {
         "benchmark_id": benchmark_id,
@@ -174,6 +196,7 @@ async def import_evaluator_report(
             benchmark_id,
             source_artifact_id=source_artifact_id,
             trials=normalized.trials,
+            manifest_fields=normalized.manifest_fields,
         )
 
     return {
