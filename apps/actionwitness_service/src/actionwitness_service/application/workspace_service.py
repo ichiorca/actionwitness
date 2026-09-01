@@ -30,10 +30,11 @@ from dataclasses import dataclass
 from typing import Any, Final
 
 from actionwitness_core.journeys.enums import EventActor, OutcomeEventType, RunState
-from actionwitness_core.journeys.guidance import GuidanceState, derive_guidance, phase_for
+from actionwitness_core.journeys.guidance import GuidanceState
 from actionwitness_core.journeys.transitions import is_terminal
 
 from actionwitness_service.api.errors import ApiError, ApiErrorCode
+from actionwitness_service.application.guidance_service import current_guidance
 from actionwitness_service.persistence.database import UnitOfWork
 from actionwitness_service.persistence.repositories import EventRepository
 
@@ -98,7 +99,7 @@ class WorkspaceService:
             )
             active_run = dict(active) if active else None
 
-        guidance = self.guidance(workspace, active_run)
+        guidance = await self.guidance()
         return {
             "workspace_id": self._workspace_id,
             "selected_target_id": workspace["selected_target_id"],
@@ -116,18 +117,14 @@ class WorkspaceService:
             "next_action": guidance.next_action(),
         }
 
-    def guidance(
-        self, workspace: Mapping[str, Any], active_run: Mapping[str, Any] | None
-    ) -> GuidanceState:
-        """This workspace's current guidance, derived from authoritative state."""
-        run_state = None if active_run is None else RunState(active_run["status"])
-        return derive_guidance(
-            phase_for(
-                has_contract=bool(workspace["selected_contract_id"]),
-                run_state=run_state,
-            ),
-            correlation_id=None if active_run is None else str(active_run["id"]),
-        )
+    async def guidance(self) -> GuidanceState:
+        """This workspace's current guidance (FR-120).
+
+        Delegates to the one projection every surface uses, so the banner a
+        person reads and the `next_action` a tool returns cannot come from two
+        different readings of the same state.
+        """
+        return await current_guidance(self._work, self._workspace_id)
 
     async def active_run(self) -> Mapping[str, Any] | None:
         row = await self._work.fetch_one(

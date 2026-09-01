@@ -296,9 +296,14 @@ class VerificationService:
             "WHERE id = ? AND workspace_id = ?",
             (str(terminal.value), str(result.value), work.now(), run_id, workspace_id),
         )
-        await work.execute(
-            "UPDATE workspaces SET active_run_id = NULL WHERE id = ?", (workspace_id,)
-        )
+        # `active_run_id` is deliberately *not* cleared. §11.5's diagram keeps a
+        # workspace in `Passed`/`PassedWarnings`/`Failed` — showing that run's
+        # findings — and leaves those states only by reset, which is where
+        # FR-013 clears the pointer. Clearing it here made the verify response
+        # say "review the findings" while `GET /workspace` said "arm a run":
+        # two answers to whose turn it is, which is the one thing FR-120
+        # forbids. A terminal run does not block arming another, because the
+        # lease only counts non-terminal states.
 
         await events.append(
             run_id,
@@ -312,7 +317,10 @@ class VerificationService:
                 },
             },
         )
-        await GuidanceRecorder(work, workspace_id).append(
+        # Derived after the terminal transition and the cleared active-run
+        # pointer, so the recorded handoff describes the workspace the caller
+        # is about to see rather than the one it had a moment ago.
+        await GuidanceRecorder(work, workspace_id).transition(
             derive_guidance(
                 phase_for(has_contract=True, run_state=terminal), correlation_id=run_id
             ),

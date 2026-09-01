@@ -54,6 +54,12 @@ async def seed_templates(work: UnitOfWork, templates: Iterable[Any]) -> int:
     rather than a silent rewrite of the one an armed run is pointing at.
     """
     repository = ContractRepository(work, None)
+    # One instant for the whole batch. Stamping each row from its own clock read
+    # gives three rows written in one transaction three different microsecond
+    # timestamps, which makes `ORDER BY created_at, id` depend on how fast the
+    # loop ran — a listing that is stable on one machine and shuffled on
+    # another. They were seeded together, so they are stamped together.
+    seeded_at = work.instant()
     written = 0
     for template in templates:
         document = dict(template.document)
@@ -80,7 +86,7 @@ async def seed_templates(work: UnitOfWork, templates: Iterable[Any]) -> int:
                 schema_version=str(document.get("schema_version", "1.0")),
                 content_hash=digest,
                 document=document,
-                created_at=work.instant(),
+                created_at=seeded_at,
             ),
             source_template_id=template.template_id,
         )

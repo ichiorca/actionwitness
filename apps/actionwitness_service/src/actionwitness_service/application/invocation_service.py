@@ -53,13 +53,7 @@ from actionwitness_core.evidence.effects import (
     effect_evidence,
     redacted_observation,
 )
-from actionwitness_core.journeys.enums import (
-    EventActor,
-    OutcomeEventType,
-    RunState,
-    WorkspacePhase,
-)
-from actionwitness_core.journeys.guidance import derive_guidance
+from actionwitness_core.journeys.enums import EventActor, OutcomeEventType, RunState
 from actionwitness_core.journeys.transitions import validate_run_transition
 from actionwitness_core.ports.models import Observation, TargetToolSpec, ToolExecutionResult
 from actionwitness_core.ports.schemas import validate_arguments
@@ -69,7 +63,7 @@ from actionwitness_core.security.redaction import RedactionPolicy, redact
 from actionwitness_service.api.errors import ApiError, ApiErrorCode
 from actionwitness_service.application.adapter_registry import AdapterRegistry
 from actionwitness_service.application.authorization import WorkspaceScope, not_found
-from actionwitness_service.application.guidance_service import GuidanceRecorder
+from actionwitness_service.application.guidance_service import GuidanceRecorder, current_guidance
 from actionwitness_service.application.limits import WorkspaceCeilings
 from actionwitness_service.persistence.database import Database, UnitOfWork
 from actionwitness_service.persistence.locks import WorkspaceLocks
@@ -371,9 +365,8 @@ class InvocationService:
                     "UPDATE runs SET status = ? WHERE id = ? AND workspace_id = ?",
                     (str(RunState.RUNNING.value), run_id, workspace_id),
                 )
-                await GuidanceRecorder(work, workspace_id).append(
-                    derive_guidance(WorkspacePhase.RUNNING, correlation_id=run_id),
-                    run_id=run_id,
+                await GuidanceRecorder(work, workspace_id).transition(
+                    await current_guidance(work, workspace_id), run_id=run_id
                 )
 
             return await EventRepository(work).append(
@@ -491,6 +484,12 @@ class InvocationService:
                     "redacted_payload": payload,
                 },
             )
+            # FR-121's compact `next_action`, derived from the workspace as it
+            # now stands rather than from the phase this handler assumed. An
+            # invocation that tripped the event ceiling leaves the run in
+            # `error`, and telling the caller to carry on invoking would be a
+            # server inventing a next action no state supports.
+            guidance = await current_guidance(work, workspace_id)
 
         return InvocationOutcome(
             invocation_id=invocation_id,
@@ -506,9 +505,7 @@ class InvocationService:
             duration_ms=duration_ms,
             observed_state_version=None if after is None else after.state_version,
             observed_state_changed=observed_changed,
-            next_action=derive_guidance(
-                WorkspacePhase.RUNNING, correlation_id=run_id
-            ).next_action(),
+            next_action=guidance.next_action(),
         )
 
 

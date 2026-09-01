@@ -329,12 +329,14 @@ async def test_the_run_reaches_a_terminal_state_with_its_result(stack: FastAPI) 
 
 
 async def test_sealing_releases_the_workspace(stack: FastAPI) -> None:
-    """A terminal run must not keep holding the workspace.
+    """A terminal run must not keep *holding* the workspace, but it stays visible.
 
-    "Released" is asserted through the two things a live run locks: the
-    active-run pointer clears, and contract selection — refused with
-    `RUN_IN_PROGRESS` while the run was live — works again. Arming then
-    succeeds against the newly selected contract.
+    §11.5 keeps a workspace in `Passed`/`Failed` showing that run's findings,
+    and leaves those states by reset — so the active-run pointer still names the
+    finished run. "Released" therefore means the locks it held are gone, not
+    that it has been forgotten: contract selection, refused with
+    `RUN_IN_PROGRESS` while the run was live, works again, and arming succeeds
+    against the newly selected contract.
 
     The re-selection is not incidental. Arming the *canonical* contract again
     would be refused on its merits, because the journey left a mug in the cart
@@ -349,13 +351,18 @@ async def test_sealing_releases_the_workspace(stack: FastAPI) -> None:
 
         # Act
         workspace = (await visitor.get(WORKSPACE)).json()
+        # Named rather than "the first one that is not canonical": this
+        # journey leaves a mug in the cart, and two of the three templates
+        # require an empty one. Picking by position would make the test depend
+        # on listing order for a reason that has nothing to do with what it
+        # asserts.
         templates = (await visitor.get(f"{CONTRACTS}/templates")).json()["templates"]
-        other = next(t for t in templates if t["source_template_id"] != CANONICAL)
+        other = next(t for t in templates if t["source_template_id"] == "confirmed_checkout_only")
         reselect = await visitor.post(f"{CONTRACTS}/{other['contract_id']}/select")
         second_arm = await visitor.post(RUNS)
 
     # Assert
-    assert workspace["active_run"] is None
+    assert workspace["active_run"]["status"] in {"passed", "passed_with_warnings", "failed"}
     assert reselect.status_code == 200
     assert second_arm.status_code == 201, second_arm.text
 

@@ -30,7 +30,7 @@ Cite the T-ID in every commit that advances it.
       intended-effect action and its immediate authoritative post-call evidence.
       An adapter that declares no effect map loses causal attribution and nothing
       else.
-- [ ] T9 — Server-derived guidance through the run: `GuidanceState`, append-only
+- [x] T9 — Server-derived guidance through the run: `GuidanceState`, append-only
       guidance events, and the compact `next_action` projection, replacing 004's
       deliberately minimal placeholder rather than sitting beside it.
 - [ ] T10 — Scenario switch and reset through the adapter, reseeding managed

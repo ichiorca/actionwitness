@@ -649,3 +649,60 @@ call ordering that was hard to reason about — it passed, but I could not say
 confidently that it passed for the right reason. The classifier reads the stored
 timeline, so the test now removes `post_call_effect_state` from the stored event
 and verifies. Same branch, no fixture whose ordering has to be argued about.
+
+### T9 — one projection, read after the state change
+
+`current_guidance(work, workspace_id)` is now the only place any surface asks
+"whose turn is it?". FR-120 makes FastAPI the deriving authority and says the
+frontend must not invent a conflicting next action; the same discipline has to
+hold on the server's own side, because a handler that picked a phase itself is a
+second opinion with no more authority than the frontend's.
+
+It is called *after* whatever state change prompted it, inside the same
+transaction, so the recorded handoff describes the workspace the caller is about
+to see. Deriving before would have made arming record `contract_ready` — the
+state the request arrived in — and the audit trail would show a handoff that
+never happened.
+
+### T9 — the bug a hardcoded phase was hiding
+
+T3's invocation response derived `WorkspacePhase.RUNNING` unconditionally. When
+the FR-008 event ceiling trips, the server moves the run to `error` in that same
+request — and the response would still have told the caller to invoke another
+tool, which is the server inventing a next action no state supports. Now derived
+from the workspace as it stands, with a test that trips the ceiling and asserts
+the caller is not told to keep going.
+
+### T9 — append-only is not append-always
+
+`GuidanceRecorder.transition` records only when the phase actually changes.
+FR-122 is about control *moving* between actors; re-recording the same phase on
+every request would bury the real handoffs under repetitions of the state the
+workspace was already in. Four invocations in a row produce one `running`
+transition, and a test says so.
+
+### T9 — verification no longer clears `active_run_id` (**behaviour change**)
+
+Found by the test asserting the verify response and the banner agree: they
+didn't. Verification said "review the findings" while `GET /workspace` said "arm
+a run", because clearing the pointer left the projection seeing a workspace with
+a contract and no run.
+
+§11.5's diagram settles it — a workspace stays in `Passed`/`PassedWarnings`/
+`Failed` showing that run's findings, and leaves those states by **reset**,
+which is where FR-013 already clears the pointer. So the pointer now names the
+finished run until reset. A terminal run does not block arming another, because
+the lease counts only non-terminal states.
+
+### T9 — a latent ordering flake in template seeding, fixed
+
+`seed_templates` stamped `created_at` from its own clock read per template, so
+three rows written in one transaction got three microsecond-apart timestamps.
+`ORDER BY created_at, id` then depended on how fast the loop ran — stable on one
+machine, shuffled on another, and it surfaced here as a test that had been
+passing by luck. They are seeded together, so they are now stamped together.
+
+The test that exposed it also stopped selecting "the first template that is not
+the canonical one": two of the three require an empty cart, so picking by
+position made it depend on listing order for a reason unrelated to what it
+asserts. It names the template it needs.

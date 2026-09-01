@@ -32,13 +32,57 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from actionwitness_core.journeys.enums import EventActor, OutcomeEventType
-from actionwitness_core.journeys.guidance import COPY_VERSION, GuidanceState
+from actionwitness_core.journeys.enums import EventActor, OutcomeEventType, RunState
+from actionwitness_core.journeys.guidance import (
+    COPY_VERSION,
+    GuidanceState,
+    derive_guidance,
+    phase_for,
+)
 
 from actionwitness_service.persistence.database import UnitOfWork
 from actionwitness_service.persistence.repositories import EventRepository, new_id
 
-__all__ = ["GuidanceRecorder"]
+__all__ = ["GuidanceRecorder", "current_guidance"]
+
+
+async def current_guidance(work: UnitOfWork, workspace_id: str) -> GuidanceState:
+    """This workspace's guidance, derived from authoritative state.
+
+    **The one place any surface asks "whose turn is it?"** FR-120 says FastAPI
+    derives the guidance object and "the frontend shall not invent a conflicting
+    next action" — and the same discipline has to hold on this side of the wire.
+    A handler that chose a phase itself would be a second opinion with no more
+    authority than the frontend's, and it would be wrong in exactly the
+    situations guidance exists for: the ones where the run did not end up where
+    the caller assumed.
+
+    Read inside the caller's unit of work, *after* whatever state change
+    prompted it, so the guidance describes the workspace as it now is rather
+    than as it was when the request arrived.
+    """
+    row = await work.fetch_one(
+        "SELECT selected_contract_id, active_run_id FROM workspaces WHERE id = ?",
+        (workspace_id,),
+    )
+    if row is None:  # pragma: no cover - the middleware creates it first
+        return derive_guidance(phase_for(has_contract=False, run_state=None))
+
+    run_state: RunState | None = None
+    correlation: str | None = None
+    if row["active_run_id"]:
+        run = await work.fetch_one(
+            "SELECT id, status FROM runs WHERE id = ? AND workspace_id = ?",
+            (row["active_run_id"], workspace_id),
+        )
+        if run is not None:
+            run_state = RunState(run["status"])
+            correlation = str(run["id"])
+
+    return derive_guidance(
+        phase_for(has_contract=bool(row["selected_contract_id"]), run_state=run_state),
+        correlation_id=correlation,
+    )
 
 
 class GuidanceRecorder:
@@ -114,6 +158,22 @@ class GuidanceRecorder:
             )
 
         return guidance_id
+
+    async def transition(self, guidance: GuidanceState, *, run_id: str | None = None) -> str | None:
+        """Append this guidance only if it is a *change* (FR-122).
+
+        The stream is append-only, which is not the same as append-always: a
+        transition is recorded when control actually moves between actors or
+        actions, and re-recording the same phase on every request would bury
+        the handoffs a reader is looking for under repetitions of the state
+        they were already in.
+
+        Returns the new guidance-event id, or `None` when nothing moved.
+        """
+        latest = await self.latest()
+        if latest is not None and latest["phase"] == str(guidance.phase.value):
+            return None
+        return await self.append(guidance, run_id=run_id)
 
     async def latest(self) -> Mapping[str, Any] | None:
         """The workspace's current guidance row, or `None` before the first.

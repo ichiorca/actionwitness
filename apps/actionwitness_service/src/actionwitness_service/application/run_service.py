@@ -43,7 +43,6 @@ from actionwitness_core.engine.assertions import evaluate_preconditions
 from actionwitness_core.engine.enums import CheckStatus
 from actionwitness_core.evidence.effects import redacted_observation
 from actionwitness_core.journeys.enums import EventActor, OutcomeEventType, RunState, SnapshotPhase
-from actionwitness_core.journeys.guidance import derive_guidance, phase_for
 from actionwitness_core.ports.models import Observation
 from actionwitness_core.reports.enums import RunMode
 from actionwitness_core.security.canonical import content_hash
@@ -52,7 +51,7 @@ from actionwitness_core.security.redaction import RedactionPolicy
 from actionwitness_service.api.errors import ApiError, ApiErrorCode
 from actionwitness_service.application.adapter_registry import AdapterRegistry, TargetUnavailable
 from actionwitness_service.application.authorization import WorkspaceScope
-from actionwitness_service.application.guidance_service import GuidanceRecorder
+from actionwitness_service.application.guidance_service import GuidanceRecorder, current_guidance
 from actionwitness_service.application.limits import WorkspaceCeilings
 from actionwitness_service.application.workspace_service import NONTERMINAL_RUN_STATES
 from actionwitness_service.persistence.database import Database, UnitOfWork
@@ -323,12 +322,12 @@ class RunService:
         # FR-120: arming is a handoff — the operator armed, the agent acts next
         # — so it produces a guidance transition, recorded in the workspace
         # stream and linked into the run timeline by its own id (§12.13).
-        await GuidanceRecorder(work, workspace_id).append(
-            derive_guidance(
-                phase_for(has_contract=True, run_state=RunState.ARMED),
-                correlation_id=run_id,
-            ),
-            run_id=run_id,
+        #
+        # Derived from state *after* the run row and the workspace pointer are
+        # written, so it describes the workspace as it now is rather than as the
+        # request found it.
+        await GuidanceRecorder(work, workspace_id).transition(
+            await current_guidance(work, workspace_id), run_id=run_id
         )
 
         return ArmedRun(
