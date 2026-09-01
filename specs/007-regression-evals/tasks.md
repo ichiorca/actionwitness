@@ -42,7 +42,7 @@ Cite the T-ID in every commit that advances it.
 - [x] T11 — The canonical eval report (FR-088) and §15.4's API routes, plus
       `EvalPanel`. Cleanup of mutable eval-target state happens **after** the
       immutable report is persisted.
-- [ ] T12 — The CLI: `eval validate` and `eval run --environment --report-dir`,
+- [x] T12 — The CLI: `eval validate` and `eval run --environment --report-dir`,
       structured argument parsing, a compact printed result, and FR-088's exit
       codes 0/1/2, replacing the scaffold that exits 2 for everything.
 - [ ] T13 — The exit gate: idempotent, redacted, schema-valid, source-preserving

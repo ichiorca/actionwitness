@@ -170,3 +170,75 @@ So 007 finishing does not close a tier gate on its own, and a `[T2]` acceptance
 criterion passing here (AC-08, AC-12, AC-15) is a milestone result rather than a
 tier result. Worth stating because three Tier 2 ACs going green makes it easy to
 believe the tier is done.
+
+---
+
+## Deviations ledger (implementation)
+
+Recorded as they were taken, anchored to the spec section each departs from.
+`spec.md` is operator-approved and was not edited; every entry below is a
+decision made *under* it, not a change *to* it.
+
+### D1 — `ReplayConfiguration.recorded_decisions` extends §24.1's `replay` block
+
+**§24.1 / §24.5.** §24.5 names three confirmation strategies and forbids
+inferring consent, but §24.1's illustrative `replay` block carries no place to
+put the decision a `recorded_approval` is supposed to replay. Taken literally, a
+case could name the strategy with nothing to honour it, and the only ways to
+resolve that at run time are to synthesise an approval — which §14 and the
+constitution forbid outright — or to fail every such replay.
+
+**Taken:** added `recorded_decisions` to the replay configuration, carrying the
+decisions the source run actually recorded. `recorded_approval` and
+`recorded_denial` replay one; a strategy with no matching recorded decision
+**fails closed** rather than proceeding. `no_confirmation` records no decision
+at all, so correct behaviour blocks the mutation.
+
+**Operator's eye:** this is an addition to the case format, which is a published
+artifact. It is additive and schema-versioned (`1.0`), so nothing that reads a
+case is broken by it, but §24.1's example block in the functional spec no longer
+shows the whole structure.
+
+### D2 — `evaluation_cases.source_run_id` carries no foreign key
+
+**§17.1 / FR-082.** The natural reading of the schema makes `source_run_id` a
+reference to `runs`. FR-082 makes a case portable — replayable from a clean
+checkout, in a database that has never seen the run it was cut from — and the
+CLI (T12) is exactly that situation. A foreign key asserts the opposite. The
+only ways to satisfy it there are to fabricate a `runs` row, which manufactures
+history the harness never observed, or to refuse to record the case, which would
+leave the eval run referencing nothing.
+
+**Taken:** the column stays as recorded provenance with no key through it.
+FR-080's idempotence is unaffected — it rests on the `UNIQUE (source_run_id,
+contract_content_hash, generator_schema_version)` constraint, which remains.
+§24.1 keeps a case self-contained, so no code reads through the column.
+
+### D3 — replay observes after every step, to reproduce a classification
+
+**§24.3.** Replaying only the contract's assertions was enough to produce an
+outcome but not a *classification*, so `reproduce_source` could not reproduce
+the finding set it was asked to match. The fix was to have the replayer observe
+authoritative state after each step and build the same `RunEvent` stream a live
+run produces, then hand that stream to the existing classifier.
+
+**Worth recording because of what it did _not_ require:** the classifier needed
+no change. AC-15 says the engine already treats an `eval` actor like an `agent`,
+and that held — the gap was in what replay fed it, not in how it judged.
+
+### D4 — the CLI runs against a throwaway database
+
+**FR-082 / §24.6.** A case handed to CI must run without the harness's own
+storage. The command creates a temporary SQLite database, records the case it
+was handed into it, runs the service's own `EvalRunService`, and discards the
+database when it exits. The alternative — a second, storage-free execution path
+— would be a copy of the pipeline that could drift from the one under test.
+
+### D5 — pre-existing ADR-0005 gate failures were left alone
+
+`tests/architecture/test_adr_records.py` fails twice on
+`docs/adr/0005-external-evaluator-binding.md`, which is missing its `### Positive`
+/ `### Negative` sections and names no rejected alternative. Both failures
+predate this milestone (verified against a clean tree) and BUILD_ORDER assigns
+"Complete ADR-0005" to **M7**. Fixing it here would be 008 work. Left failing and
+reported rather than quietly repaired.

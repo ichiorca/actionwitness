@@ -334,6 +334,15 @@ MIGRATIONS: Final[tuple[Migration, ...]] = (
         version=2,
         name="tier two regression eval case, run, and event tables",
         statements=(
+            # `source_run_id` carries NO foreign key, deliberately. FR-082 makes
+            # a case portable: it is meant to be replayed from a clean checkout,
+            # in a database that has never seen the run it was cut from. A key
+            # to `runs` would assert the opposite, and the only ways to satisfy
+            # it there are to fabricate a run row — manufacturing history the
+            # harness never observed — or to refuse to record the case at all.
+            # The column stays as recorded provenance; §24.1 keeps the case
+            # self-contained, so nothing reads through it.
+            #
             # §17.1 `evaluation_cases`. The unique constraint IS FR-080's
             # idempotence: "repeating `create_regression_eval` with the same
             # inputs returns the existing case and `created: false`; it never
@@ -352,8 +361,7 @@ MIGRATIONS: Final[tuple[Migration, ...]] = (
                 case_json                TEXT NOT NULL,
                 created_at               TEXT NOT NULL,
                 UNIQUE (source_run_id, contract_content_hash, generator_schema_version),
-                FOREIGN KEY (workspace_id) REFERENCES workspaces (id) ON DELETE CASCADE,
-                FOREIGN KEY (source_run_id) REFERENCES runs (id)
+                FOREIGN KEY (workspace_id) REFERENCES workspaces (id) ON DELETE CASCADE
             )
             """,
             """
