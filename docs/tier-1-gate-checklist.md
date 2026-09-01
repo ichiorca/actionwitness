@@ -110,6 +110,12 @@ protected action repeats the same tool call with the same request_id.
 Deferred to M8 with AC-10, which BUILD_ORDER already schedules there. Recheck
 against the deployed URL once 009 lands.
 
+**009 has landed.** This row is discharged as criterion 3 of
+`docs/release-checklist.md`, which carries the full credential-free procedure
+(private window, WebMCP flag off as well as on, storefront, and a check that
+nothing in the page, network log, or `/healthz` carries a credential). Run it
+there, then tick and date this row too.
+
 - [ ] The live URL loads without credentials and reports WebMCP support status.
 
 Attested by: ______________________  Date: ____________  Build: ____________
