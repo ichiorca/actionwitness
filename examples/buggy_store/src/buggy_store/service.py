@@ -54,9 +54,17 @@ from buggy_store.confirmations import (
 from buggy_store.errors import (
     ConfirmationRequired,
     DiscountNotFound,
+    FaultProfileUnavailable,
     ProductNotFound,
     StoreError,
     ValidationFailed,
+)
+from buggy_store.failure_injection import (
+    IMPLEMENTED_PROFILES,
+    PROFILE_DESCRIPTIONS,
+    FaultProfile,
+    ScenarioConfiguration,
+    ScenarioMode,
 )
 from buggy_store.models import CartLine, Order, StoreState, TargetState, build_cart
 from buggy_store.repository import StoreRepository
@@ -252,6 +260,35 @@ class StoreService:
             async with self._repository.transaction(connection):
                 current = await self._repository.read_state(connection, workspace_id)
                 assert current is not None  # ensured above, inside this transaction
+                scenario = (
+                    await self._repository.read_scenario(connection, workspace_id)
+                ) or ScenarioConfiguration()
+
+                if scenario.injects(FaultProfile.DISCOUNT_REPORTED_BUT_NOT_APPLIED):
+                    # §13.3: "apply_discount returns an apparent success
+                    # response. Canonical cart state retains no discount or
+                    # unchanged total."
+                    #
+                    # The response carries the cart the discount *would* have
+                    # produced, which is what this class of defect looks like in
+                    # the wild: the response is computed optimistically and the
+                    # write never lands. Nothing is persisted and the version
+                    # does not move, matching Appendix B's evidence of an
+                    # unchanged state_version either side of the call.
+                    #
+                    # This is the whole point of the demo. The tool's word says
+                    # 20.00; independent observation says 25.00; the harness is
+                    # what notices.
+                    optimistic = build_cart(dict(current.target_state.cart.items), code)
+                    return MutationOutcome(
+                        {
+                            "status": "success",
+                            "state_version": current.state_version,
+                            "cart": optimistic.canonical_document(),
+                        },
+                        current,
+                        replayed=False,
+                    )
 
                 active = current.target_state.cart.discount
                 if active is not None and active.code == code:
@@ -280,6 +317,75 @@ class StoreService:
                 details={"code": code},
             )
         return code
+
+    # -- scenario selection (FR-011, FR-012, FR-017, FR-018) ------------------
+
+    async def read_scenario(self, workspace_id: str) -> ScenarioConfiguration:
+        """This workspace's scenario selection, seeding the workspace if needed."""
+        async with self._repository.connect() as connection:
+            await self._repository.ensure_workspace(connection, workspace_id)
+            scenario = await self._repository.read_scenario(connection, workspace_id)
+        return scenario or ScenarioConfiguration()
+
+    async def select_scenario(
+        self, workspace_id: str, mode: str, fault_profile: str = FaultProfile.NONE
+    ) -> ScenarioConfiguration:
+        """Choose the scenario mode and fault profile, and reseed mutable state.
+
+        Reseeding is FR-018: switching modes "shall preserve the selected target,
+        contract, fixture, intent variant, and comparison-fault identity, reset
+        mutable target state, and create a new run configuration". A switch that
+        left the old cart in place would carry state built under one
+        implementation into a run of the other, and the matched comparison
+        FR-019 draws between them would be comparing two different journeys.
+
+        An unimplemented profile is refused rather than downgraded to `none`. A
+        store that quietly ran the honest path while a report said a fault was
+        active would be lying about the one thing it exists to demonstrate.
+        """
+        scenario = ScenarioConfiguration(
+            mode=self._require_mode(mode), fault_profile=self._require_profile(fault_profile)
+        )
+        async with self._lock_for(workspace_id), self._repository.connect() as connection:
+            await self._repository.ensure_workspace(connection, workspace_id)
+            await self._repository.reset_workspace(connection, workspace_id)
+            async with self._repository.transaction(connection):
+                await self._repository.write_scenario(connection, workspace_id, scenario)
+        return scenario
+
+    def _require_mode(self, mode: object) -> ScenarioMode:
+        if not isinstance(mode, str):
+            raise ValidationFailed("scenario_mode must be a string")
+        try:
+            return ScenarioMode(mode)
+        except ValueError as exc:
+            raise ValidationFailed(
+                f"{mode!r} is not a scenario mode; FR-017 fixes them at "
+                f"{sorted(item.value for item in ScenarioMode)}",
+                details={"scenario_mode": mode},
+            ) from exc
+
+    def _require_profile(self, profile: object) -> FaultProfile:
+        if not isinstance(profile, str):
+            raise ValidationFailed("fault_profile must be a string")
+        try:
+            recognized = FaultProfile(profile)
+        except ValueError as exc:
+            raise ValidationFailed(
+                f"{profile!r} is not a known fault profile",
+                details={"fault_profile": profile},
+            ) from exc
+        if recognized not in IMPLEMENTED_PROFILES:
+            raise FaultProfileUnavailable(
+                f"the {recognized.value!r} profile is recognised but not implemented in this "
+                "build; it ships with its own injector and acceptance test",
+                details={
+                    "fault_profile": recognized.value,
+                    "description": PROFILE_DESCRIPTIONS[recognized],
+                    "implemented": sorted(item.value for item in IMPLEMENTED_PROFILES),
+                },
+            )
+        return recognized
 
     # -- confirmation lifecycle (§14, §15.5, FR-066) --------------------------
 

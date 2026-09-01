@@ -33,6 +33,7 @@ import aiosqlite
 
 from buggy_store.confirmations import Confirmation, ConfirmationStatus
 from buggy_store.errors import IdempotencyConflict
+from buggy_store.failure_injection import FaultProfile, ScenarioConfiguration, ScenarioMode
 from buggy_store.migrations import apply_migrations
 from buggy_store.models import StoreState, empty_state
 
@@ -280,6 +281,43 @@ class StoreRepository:
             ),
         )
 
+    # -- scenario selection (FR-011, FR-012) ---------------------------------
+
+    async def read_scenario(
+        self, connection: aiosqlite.Connection, workspace_id: str
+    ) -> ScenarioConfiguration | None:
+        """This workspace's scenario selection, or `None` if it has no state yet."""
+        async with connection.execute(
+            "SELECT scenario_mode, fault_profile FROM buggy_store_state WHERE workspace_id = ?",
+            (workspace_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        if row is None:
+            return None
+        # Validated on read like every other persisted value (constitution §4):
+        # an unrecognised mode or profile fails here rather than reaching the
+        # service as a silently honest run.
+        return ScenarioConfiguration(
+            mode=ScenarioMode(row["scenario_mode"]),
+            fault_profile=FaultProfile(row["fault_profile"]),
+        )
+
+    async def write_scenario(
+        self,
+        connection: aiosqlite.Connection,
+        workspace_id: str,
+        scenario: ScenarioConfiguration,
+    ) -> None:
+        """Record a scenario selection for this workspace."""
+        await connection.execute(
+            """
+            UPDATE buggy_store_state
+               SET scenario_mode = ?, fault_profile = ?, updated_at = ?
+             WHERE workspace_id = ?
+            """,
+            (str(scenario.mode), str(scenario.fault_profile), self._now(), workspace_id),
+        )
+
     # -- confirmations -------------------------------------------------------
 
     async def insert_confirmation(
@@ -428,6 +466,10 @@ class StoreRepository:
                     workspace_id,
                 ),
             )
+            # The scenario selection is deliberately untouched. FR-013 resets
+            # mutable target state; FR-012 makes the selection part of the run's
+            # immutable configuration, and a reset that silently reverted it to
+            # `none` would turn a pre-fix run into an honest one mid-journey.
 
     @property
     def clock(self):

@@ -107,6 +107,25 @@ MIGRATIONS: Final[tuple[Migration, ...]] = (
             """,
         ),
     ),
+    Migration(
+        version=3,
+        name="per-workspace scenario selection",
+        statements=(
+            # FR-011/FR-012: the selection is fixed for an armed run, so it is
+            # stored beside the state it governs rather than passed per request.
+            # The defaults are the honest ones - a store nobody has configured
+            # behaves correctly, and `post_fix` with `none` means the mode is
+            # immaterial until a fault is chosen.
+            """
+            ALTER TABLE buggy_store_state
+                ADD COLUMN scenario_mode TEXT NOT NULL DEFAULT 'post_fix'
+            """,
+            """
+            ALTER TABLE buggy_store_state
+                ADD COLUMN fault_profile TEXT NOT NULL DEFAULT 'none'
+            """,
+        ),
+    ),
 )
 
 

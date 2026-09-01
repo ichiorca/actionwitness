@@ -22,7 +22,7 @@ Cite the T-ID in every commit that advances it.
       stable errors; API tests through the real entry point.
 - [ ] T7 — The ordinary human storefront UI, usable with no harness and no
       WebMCP; its own frontend tests and build.
-- [ ] T8 — `pre_fix`/`post_fix` scenario selection and the Tier 1
+- [x] T8 — `pre_fix`/`post_fix` scenario selection and the Tier 1
       `discount_reported_but_not_applied` fault; a direct target API test proves
       the tool reports success while canonical state is unchanged, in `pre_fix`
       only. The other four profiles stay disabled and visibly labelled.

@@ -36,6 +36,7 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from buggy_store.catalog import MAX_SEARCH_RESULTS
 from buggy_store.errors import StoreError
+from buggy_store.failure_injection import IMPLEMENTED_PROFILES, FaultProfile, ScenarioMode
 from buggy_store.money import format_amount
 from buggy_store.repository import StoreRepository
 from buggy_store.service import (
@@ -87,6 +88,18 @@ class ConfirmationRequestBody(StoreRequest):
     expires_in_seconds: Annotated[int, Field(ge=MIN_EXPIRY_SECONDS, le=MAX_EXPIRY_SECONDS)] = (
         DEFAULT_EXPIRY_SECONDS
     )
+
+
+class ScenarioRequest(StoreRequest):
+    """Selecting the scenario mode and fault profile (FR-011, FR-017).
+
+    Both arrive as plain strings and are validated by the service against the
+    closed enums, so an unimplemented-but-recognised profile can be refused with
+    its own code rather than as an unknown value.
+    """
+
+    scenario_mode: Annotated[str, StringConstraints(min_length=1, max_length=32)]
+    fault_profile: Annotated[str, StringConstraints(min_length=1, max_length=64)] = "none"
 
 
 class DecisionRequest(StoreRequest):
@@ -182,6 +195,37 @@ def create_app(*, database_path: Path | str, service: StoreService | None = None
                 for product in products
             ]
         }
+
+    @app.get(f"{API_PREFIX}/store/scenario")
+    async def read_scenario(workspace_id: WorkspaceDependency) -> dict[str, Any]:
+        """The current selection, with its label and description (FR-017).
+
+        FR-017 asks the configuration panel to show "a concise explanation,
+        active fault behavior, and supported modes", so the store publishes all
+        three rather than making every caller carry its own copy of §13.3.
+        """
+        scenario = await resolved.read_scenario(workspace_id)
+        return {
+            **scenario.as_document(),
+            "supported_scenario_modes": [mode.value for mode in ScenarioMode],
+            "implemented_fault_profiles": sorted(item.value for item in IMPLEMENTED_PROFILES),
+            "recognized_fault_profiles": [item.value for item in FaultProfile],
+        }
+
+    @app.post(f"{API_PREFIX}/store/scenario")
+    async def select_scenario(
+        workspace_id: WorkspaceDependency, body: ScenarioRequest
+    ) -> dict[str, Any]:
+        """Select the mode and profile, reseeding mutable state (FR-018).
+
+        Project-allocated: §15.5's endpoint table predates the adapter needing a
+        way to perform `ManagedTargetAdapter.prepare`, which §9.1 defines as
+        restoring a fixture *and* selecting a scenario. Both happen here.
+        """
+        scenario = await resolved.select_scenario(
+            workspace_id, body.scenario_mode, body.fault_profile
+        )
+        return scenario.as_document()
 
     @app.get(f"{API_PREFIX}/store/cart")
     async def read_cart(workspace_id: WorkspaceDependency) -> dict[str, Any]:

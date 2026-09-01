@@ -26,6 +26,7 @@ from typing import Any
 __all__ = [
     "ConfirmationRequired",
     "DiscountNotFound",
+    "FaultProfileUnavailable",
     "IdempotencyConflict",
     "ProductNotFound",
     "StoreError",
@@ -44,6 +45,7 @@ class StoreErrorCode(StrEnum):
     CONFIRMATION_REQUIRED = "CONFIRMATION_REQUIRED"
     CONFIRMATION_NOT_FOUND = "CONFIRMATION_NOT_FOUND"
     CONFIRMATION_NOT_APPROVED = "CONFIRMATION_NOT_APPROVED"
+    FAULT_PROFILE_UNAVAILABLE = "FAULT_PROFILE_UNAVAILABLE"
     WORKSPACE_NOT_FOUND = "WORKSPACE_NOT_FOUND"
 
 
@@ -118,6 +120,19 @@ class IdempotencyConflict(StoreError):
         )
         self.tool_name = tool_name
         self.request_id = request_id
+
+
+class FaultProfileUnavailable(StoreError):
+    """A recognised fault profile that this build does not implement (FR-011).
+
+    Distinct from `VALIDATION_FAILED` on purpose. The name is real and the
+    specification describes it, so refusing it as an unknown value would tell an
+    operator the wrong thing; refusing it as unavailable tells them it exists and
+    is not shipped yet. Either way it is never downgraded to `none`.
+    """
+
+    code = StoreErrorCode.FAULT_PROFILE_UNAVAILABLE
+    http_status = 422
 
 
 class ConfirmationRequired(StoreError):
