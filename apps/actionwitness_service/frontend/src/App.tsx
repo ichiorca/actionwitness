@@ -419,6 +419,16 @@ export default function App(): React.ReactElement {
     <main className="workspace">
       <header className="workspace__header">
         <h1>ActionWitness</h1>
+        {/* What this page is, for somebody who arrived without being told.
+            Deliberately a description of the mechanism rather than a claim about
+            outcomes: §8 requires product copy to state that this complements
+            call-level evaluators and to claim no unverified protection, so the
+            sentence says what the harness *does* — compare two sources — and
+            promises nothing about what that prevents. */}
+        <p className="workspace__tagline">
+          An agent&rsquo;s tool call reports its own result. This compares that report against
+          business state observed independently, and judges the run on the difference.
+        </p>
         {/* A persistent glance at facts the Target and Findings panels already
             show in full — repeated display, never a second source: both values
             arrive from the server responses those panels render. */}
@@ -460,39 +470,7 @@ export default function App(): React.ReactElement {
 
       {status === null ? null : (
         <div className="workspace__panels">
-          <Stage id="setup" step={1} title="Set up" activeStage={activeStage}>
-            <ConfigPanel
-            status={status}
-            busy={busy}
-            onScenarioMode={(mode) => {
-              void act(async () =>
-                request("/workspace/scenario-mode", {
-                  method: "PUT",
-                  body: { scenario_mode: mode },
-                  parse: (value) => value,
-                }),
-              );
-            }}
-            onFailureProfile={(profile) => {
-              void act(async () =>
-                request("/workspace/failure-profile", {
-                  method: "PUT",
-                  body: { failure_profile: profile },
-                  parse: (value) => value,
-                }),
-              );
-            }}
-            onReset={() => {
-              void act(async () =>
-                request("/workspace/reset", { method: "POST", body: {}, parse: (value) => value }),
-              );
-            }}
-          />
-
-            <ToolRegistrationPanel reconciliation={reconciliation} />
-          </Stage>
-
-          <Stage id="contract" step={2} title="Contract" activeStage={activeStage}>
+          <Stage id="contract" step={1} title="Contract" activeStage={activeStage}>
             <ContractForm
             templates={templates}
             onCreated={(contract) => {
@@ -532,6 +510,38 @@ export default function App(): React.ReactElement {
               );
             }}
           />
+          </Stage>
+
+          <Stage id="setup" step={2} title="Set up" activeStage={activeStage}>
+            <ConfigPanel
+            status={status}
+            busy={busy}
+            onScenarioMode={(mode) => {
+              void act(async () =>
+                request("/workspace/scenario-mode", {
+                  method: "PUT",
+                  body: { scenario_mode: mode },
+                  parse: (value) => value,
+                }),
+              );
+            }}
+            onFailureProfile={(profile) => {
+              void act(async () =>
+                request("/workspace/failure-profile", {
+                  method: "PUT",
+                  body: { failure_profile: profile },
+                  parse: (value) => value,
+                }),
+              );
+            }}
+            onReset={() => {
+              void act(async () =>
+                request("/workspace/reset", { method: "POST", body: {}, parse: (value) => value }),
+              );
+            }}
+          />
+
+            <ToolRegistrationPanel reconciliation={reconciliation} />
           </Stage>
 
           <Stage id="run" step={3} title="Run" activeStage={activeStage}>

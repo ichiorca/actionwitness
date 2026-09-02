@@ -319,10 +319,15 @@ export class Workspace {
   }
 
   /** §13.3's profile field commits on blur, so the blur is part of the action. */
+  /**
+   * Choose a fault profile from the ones the adapter advertises.
+   *
+   * A `<select>` since §15.1's controls became adapter-driven. It was a
+   * free-text box, which meant the only way to reach a fault demo was to know
+   * how `discount_reported_but_not_applied` is spelled.
+   */
   async setFailureProfile(profile: string): Promise<void> {
-    const field = this.panel("Configuration").getByRole("textbox", { name: /profile/i });
-    await field.fill(profile);
-    await field.blur();
+    await this.panel("Configuration").locator("#failure-profile").selectOption(profile);
   }
 
   /**

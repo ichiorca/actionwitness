@@ -1,0 +1,328 @@
+/**
+ * The standalone storefront's stylesheet (spec §15.5, §29.1).
+ *
+ * Presentation only, and deliberately *separate* from the harness's. §29.1
+ * builds the two applications independently and §26.7 forbids this one from
+ * importing anything of the harness's — a shared stylesheet would be a runtime
+ * dependency on the very package this frontend must prove it can live without.
+ * The two therefore look like siblings rather than the same page, which is also
+ * honest: they are two applications on one origin, not one product with a tab.
+ *
+ * **Every selector here is an element, an ARIA role, or a `data-testid` the
+ * markup already carried.** `App.tsx` is untouched by this file, so nothing in
+ * the storefront's own test suite moves and no locator changes. That constraint
+ * is why there are no utility classes below: the alternative was editing a
+ * component whose tests assert its structure, to gain nothing a descendant
+ * selector could not.
+ *
+ * **The CSP allows exactly this shape.** `style-src 'self'` admits a
+ * same-origin stylesheet and nothing else — no inline `style`, no CSS-in-JS, no
+ * remote font. `font-src 'self'` is why the stack below is entirely local:
+ * a Google Fonts link would be refused by the browser, not merely discouraged.
+ * `tests/architecture/test_bundle_shape.py` is what keeps that true.
+ *
+ * **Status is never colour alone (§8.4).** The scenario banner already says
+ * "Injected unsafe demo behaviour is active" in words; the red below is a second
+ * channel. Same for the discount row and the order confirmation.
+ */
+
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface-muted: #f0f2f5;
+  --border: #dcdfe6;
+  --text: #1b232e;
+  --text-muted: #5d6875;
+  --accent: #1f6f4a;
+  --accent-soft: #e6f2ec;
+  --danger: #b3312e;
+  --danger-soft: #fbe8e7;
+  --warn-soft: #fdf3df;
+  --warn-border: #e5c37a;
+  --radius: 10px;
+  --shadow: 0 1px 2px rgb(16 24 40 / 0.05), 0 2px 6px rgb(16 24 40 / 0.06);
+  --mono: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14181f;
+    --surface: #1d232d;
+    --surface-muted: #252c38;
+    --border: #333c4a;
+    --text: #e7eaef;
+    --text-muted: #9aa4b2;
+    --accent: #56b98a;
+    --accent-soft: #16301f;
+    --danger: #ec7f77;
+    --danger-soft: #3a1a18;
+    --warn-soft: #332a12;
+    --warn-border: #6d5a2c;
+    --shadow: 0 1px 2px rgb(0 0 0 / 0.4);
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 2rem 1.25rem 4rem;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+main {
+  max-width: 60rem;
+  margin: 0 auto;
+  display: grid;
+  gap: 1.25rem;
+}
+
+/* The masthead: the h1 and the one paragraph that follows it. */
+main > h1 {
+  margin: 0;
+  font-size: 1.6rem;
+  letter-spacing: -0.01em;
+}
+
+main > h1 + p {
+  margin: -0.75rem 0 0;
+  color: var(--text-muted);
+  max-width: 46rem;
+}
+
+main > section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 1.15rem 1.25rem;
+}
+
+main > section > h2 {
+  margin: 0 0 0.9rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* --- the scenario banner (§20.4) ------------------------------------------ */
+
+/* An injected fault is an `alert`; a correct run is a `status`. Both are
+   already labelled in words — this only makes the difference visible at a
+   glance, which is what a reader scanning the page needs. */
+[data-testid="scenario-banner"] {
+  margin: 0;
+  padding: 0.7rem 0.9rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface-muted);
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+[data-testid="scenario-banner"][role="alert"] {
+  border-color: var(--warn-border);
+  background: var(--warn-soft);
+  color: var(--text);
+}
+
+[data-testid="scenario-banner"] code {
+  font-family: var(--mono);
+  font-size: 0.85em;
+  padding: 0.1rem 0.3rem;
+  border-radius: 4px;
+  background: rgb(0 0 0 / 0.06);
+}
+
+/* Transient notices — "Added one Ceramic Mug", or a refusal. */
+main > p[role="status"],
+main > p[role="alert"] {
+  margin: 0;
+  padding: 0.65rem 0.9rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--accent-soft);
+  font-size: 0.9rem;
+}
+
+main > p[role="alert"] {
+  border-color: var(--danger);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-weight: 500;
+}
+
+/* --- catalog and cart lines ----------------------------------------------- */
+
+section ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+section li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
+/* --- the cart totals ------------------------------------------------------ */
+
+/* A two-column grid, so the label and the amount line up instead of stacking
+   into the ragged pairs a bare `dl` produces. */
+section dl {
+  margin: 0.9rem 0 0;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--border);
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.4rem 1rem;
+}
+
+section dt {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+section dd {
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--mono);
+  font-size: 0.9rem;
+}
+
+/* The total is the number a shopper checks, and the number the harness
+   contradicts when the discount fault is active. */
+[data-testid="total"] {
+  font-weight: 700;
+  font-size: 1.05rem;
+}
+
+[data-testid="discount"] {
+  color: var(--accent);
+}
+
+[data-testid="empty-cart"],
+[data-testid="order"] {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+[data-testid="order"] {
+  padding: 0.65rem 0.9rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--accent-soft);
+  color: var(--text);
+  font-weight: 500;
+}
+
+/* --- the checkout confirmation ------------------------------------------- */
+
+[data-testid="confirmation"] {
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--warn-border);
+  border-radius: var(--radius);
+  background: var(--warn-soft);
+}
+
+[data-testid="confirmation"] h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+[data-testid="confirmation"] p {
+  margin: 0;
+}
+
+[data-testid="confirm-total"] {
+  font-family: var(--mono);
+}
+
+/* --- controls ------------------------------------------------------------- */
+
+button {
+  font: inherit;
+  padding: 0.4rem 0.85rem;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+button:hover:not(:disabled) {
+  background: var(--surface-muted);
+  border-color: var(--text-muted);
+}
+
+/* The affirmative controls: add to cart, apply the discount, place the order.
+   Matched by position rather than by class so `App.tsx` stays untouched. */
+section li button,
+section > button,
+[data-testid="confirmation"] button:first-of-type {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #ffffff;
+  font-weight: 500;
+}
+
+section li button:hover:not(:disabled),
+section > button:hover:not(:disabled),
+[data-testid="confirmation"] button:first-of-type:hover:not(:disabled) {
+  filter: brightness(1.08);
+  background: var(--accent);
+}
+
+/* "Remove" sits on a cart line and must not read as the primary action there. */
+[data-testid^="line-"] button {
+  border-color: var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+[data-testid^="line-"] button:hover:not(:disabled) {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: transparent;
+  filter: none;
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Visible focus is not decoration: this storefront is the path AC-09 keeps
+   usable when there is no agent, which means it has to be usable by keyboard. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+  }
+}

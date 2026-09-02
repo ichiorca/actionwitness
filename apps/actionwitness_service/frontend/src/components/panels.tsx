@@ -156,8 +156,6 @@ export interface ConfigPanelProps {
   readonly onReset: () => void;
 }
 
-const SCENARIO_MODES = ["pre_fix", "post_fix"];
-
 export function ConfigPanel({
   status,
   busy,
@@ -180,36 +178,65 @@ export function ConfigPanel({
           configuration it was armed with.
         </p>
       ) : null}
+      {/* Both controls are the *adapter's* lists, never this file's. §9.1 keeps
+          the generic UI from interpreting a target's tokens, and the modes here
+          were a hard-coded pair that happened to match the Buggy Store — a
+          Shopify target advertising only `external_current` would have been
+          offered a pre/post choice it cannot honour. An empty list is rendered
+          as "nothing to offer" rather than as a fallback of our own. */}
       <fieldset disabled={frozen || busy}>
         <legend>Scenario mode</legend>
-        {SCENARIO_MODES.map((mode) => (
-          <label key={mode}>
-            <input
-              type="radio"
-              name="scenario-mode"
-              value={mode}
-              checked={status.scenarioMode === mode}
-              onChange={() => {
-                onScenarioMode(mode);
-              }}
-            />
-            {mode}
-          </label>
-        ))}
+        {status.supportedScenarioModes.length === 0 ? (
+          <p className="panel__note">
+            No target is selected yet, so there are no scenario modes to choose from.
+          </p>
+        ) : (
+          status.supportedScenarioModes.map((mode) => (
+            <label key={mode}>
+              <input
+                type="radio"
+                name="scenario-mode"
+                value={mode}
+                checked={status.scenarioMode === mode}
+                onChange={() => {
+                  onScenarioMode(mode);
+                }}
+              />
+              {mode}
+            </label>
+          ))
+        )}
       </fieldset>
       <fieldset disabled={frozen || busy}>
         <legend>Failure profile</legend>
-        <label>
-          Profile
-          <input
-            type="text"
-            name="failure-profile"
-            defaultValue={status.failureProfile ?? ""}
-            onBlur={(event) => {
-              onFailureProfile(event.target.value);
-            }}
-          />
-        </label>
+        {status.supportedFaultProfiles.length === 0 ? (
+          <p className="panel__note">
+            No target is selected yet, so there are no fault profiles to choose from.
+          </p>
+        ) : (
+          <>
+            <label htmlFor="failure-profile">Profile</label>
+            {/* A select rather than the free-text box this used to be. The
+                tokens are unguessable — reaching the headline demo meant
+                knowing to type `discount_reported_but_not_applied` — and a
+                typo silently selected a profile the target would refuse at
+                arming, long after the mistake. */}
+            <select
+              id="failure-profile"
+              name="failure-profile"
+              value={status.failureProfile ?? ""}
+              onChange={(event) => {
+                onFailureProfile(event.target.value);
+              }}
+            >
+              {status.supportedFaultProfiles.map((profile) => (
+                <option key={profile} value={profile}>
+                  {profile}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
       </fieldset>
       {/* `id`: the banner's "Go to this step" target for `reset_workspace`. */}
       <button type="button" id="action-reset-workspace" onClick={onReset} disabled={busy}>

@@ -58,6 +58,18 @@ function workspace(overrides: Record<string, unknown> = {}) {
     selected_contract_id: "con_1",
     scenario_mode: "pre_fix",
     failure_profile: "discount_reported_but_not_applied",
+    // §15.1's adapter-supported controls. The panel offers exactly these and
+    // holds no list of its own, so a fixture that omitted them would render an
+    // empty configuration — which is the correct behaviour for a workspace with
+    // no target, and the wrong premise for these tests.
+    supported_scenario_modes: ["pre_fix", "post_fix"],
+    supported_fault_profiles: [
+      "none",
+      "discount_reported_but_not_applied",
+      "duplicate_on_retry",
+      "undeclared_side_effect",
+      "tool_surface_poisoned",
+    ],
     active_run: null,
     guidance: GUIDANCE,
     next_action: {
@@ -966,5 +978,97 @@ describe("RunTimeline", () => {
     );
 
     expect(screen.getByText(/reported: success/)).toBeDefined();
+  });
+});
+
+describe("ConfigPanel offers only what the adapter supports (§15.1, §9.1)", () => {
+  const noop = (): void => undefined;
+
+  function config(overrides: Record<string, unknown> = {}) {
+    return parseWorkspace({
+      workspace_id: "ws_1",
+      selected_target_id: "buggy-store",
+      selected_contract_id: "con_1",
+      scenario_mode: "pre_fix",
+      failure_profile: "none",
+      supported_scenario_modes: ["pre_fix", "post_fix"],
+      supported_fault_profiles: ["none", "discount_reported_but_not_applied"],
+      active_run: null,
+      guidance: GUIDANCE,
+      next_action: {
+        actor: "operator",
+        action_code: "arm_run",
+        instruction: "Arm the contract.",
+        requires_human_input: true,
+      },
+      capabilities: {},
+      ...overrides,
+    });
+  }
+
+  it("offers the fault profiles as a choice rather than a free-text box", () => {
+    // These tokens are unguessable from the page: reaching the headline demo
+    // meant knowing to type `discount_reported_but_not_applied`, and a typo
+    // selected a profile the target would refuse at arming, long afterwards.
+    render(
+      <ConfigPanel
+        status={config()}
+        busy={false}
+        onScenarioMode={noop}
+        onFailureProfile={noop}
+        onReset={noop}
+      />,
+    );
+
+    const select = screen.getByLabelText<HTMLSelectElement>("Profile");
+    expect(select.tagName).toBe("SELECT");
+    expect([...select.options].map((option) => option.value)).toEqual([
+      "none",
+      "discount_reported_but_not_applied",
+    ]);
+  });
+
+  it("renders a mode the adapter did not advertise nowhere at all", () => {
+    // A Shopify target advertises only `external_current`. The pre/post pair
+    // used to be a constant in this file, so it would have been offered a
+    // choice it cannot honour.
+    render(
+      <ConfigPanel
+        status={config({
+          scenario_mode: "external_current",
+          supported_scenario_modes: ["external_current"],
+          supported_fault_profiles: [],
+        })}
+        busy={false}
+        onScenarioMode={noop}
+        onFailureProfile={noop}
+        onReset={noop}
+      />,
+    );
+
+    expect(screen.getByRole("radio", { name: "external_current" })).toBeDefined();
+    expect(screen.queryByRole("radio", { name: "pre_fix" })).toBeNull();
+    // And an adapter that injects nothing says so, rather than showing an empty
+    // control that looks broken.
+    expect(screen.getByText(/no fault profiles to choose from/)).toBeDefined();
+  });
+
+  it("says why there is nothing to choose before a target is selected", () => {
+    render(
+      <ConfigPanel
+        status={config({
+          selected_target_id: null,
+          supported_scenario_modes: [],
+          supported_fault_profiles: [],
+        })}
+        busy={false}
+        onScenarioMode={noop}
+        onFailureProfile={noop}
+        onReset={noop}
+      />,
+    );
+
+    expect(screen.getByText(/no scenario modes to choose from/)).toBeDefined();
+    expect(screen.queryByLabelText("Profile")).toBeNull();
   });
 });

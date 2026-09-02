@@ -188,6 +188,32 @@ class AdapterRegistry:
             return ()
         return tuple(slot.factory().descriptor.supported_scenario_modes)
 
+    def supported_fault_profiles(self, identifier: str | None) -> tuple[str, ...]:
+        """What the named target advertises it can inject (§13.3, 012-T8).
+
+        The read-only companion to `injects_fault_profile`, which answers the
+        same question one profile at a time and is the *gate*. This one exists so
+        a caller can offer the list rather than make somebody guess a token: the
+        panel that chooses a profile had no way to know what the target supports,
+        so it shipped a free-text field and the operator had to read the adapter
+        source to find `discount_reported_but_not_applied`.
+
+        Publishing the list interprets nothing. These are opaque tokens the core
+        compares and never reads, exactly as the scenario modes above are — the
+        harness still cannot say what any of them *mean*, only which ones this
+        target claims.
+
+        An unresolvable target advertises nothing. That is deliberately not the
+        same answer `injects_fault_profile` gives it: refusing to *offer* a
+        choice costs an operator a dropdown, while refusing to *record* one
+        before the target is known would forbid FR-011's legitimate order of
+        work. Offering nothing is the safe direction here; refusing early is not.
+        """
+        slot = self.resolve(identifier)
+        if slot is None or slot.factory is None:
+            return ()
+        return tuple(slot.factory().descriptor.supported_fault_profiles)
+
     #: The one profile that needs no injector, and therefore no target.
     NO_FAULT: ClassVar[str] = "none"
 

@@ -16,6 +16,11 @@ import { createRoot } from "react-dom/client";
 
 import { App } from "./App";
 import { StoreClient } from "./api";
+// A same-origin stylesheet, which is all `style-src 'self'` admits. Imported
+// here rather than linked from `index.html` so Vite hashes it like every other
+// asset — a `<link>` to an unhashed path is the one shape the CSP would still
+// allow and caching would then get wrong.
+import "./styles.css";
 
 const WORKSPACE_KEY = "buggy-store.workspace-id";
 

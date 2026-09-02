@@ -80,6 +80,21 @@ async def read_workspace(
     """§15.1: target, scenario configuration, contract, active run, capability."""
     async with database.reading() as work:
         status = dict(await WorkspaceService(work, workspace_id).status())
+
+    # §15.1: "the configuration panel exposes only adapter-supported scenario
+    # controls". Added here rather than in `WorkspaceService` for the same reason
+    # `capabilities` is: the registry is the composition root's, and the service
+    # layer has no business holding a handle to it.
+    #
+    # Both lists come from the selected target's own descriptor and are opaque
+    # tokens to everything above the adapter. Publishing them interprets nothing
+    # — it only stops the UI having to. Until it did, the failure-profile control
+    # was a free-text box, and reaching the demo meant reading the adapter source
+    # to find the exact spelling of a token nobody could discover from the page.
+    target = status["selected_target_id"]
+    status["supported_scenario_modes"] = list(registry.supported_scenario_modes(target))
+    status["supported_fault_profiles"] = list(registry.supported_fault_profiles(target))
+
     status["capabilities"] = registry.capability_report()
     # Additive alongside `capabilities`, which stays the target list the UI's
     # capability bar renders. `modules` is the wider view a judge needs: a feature

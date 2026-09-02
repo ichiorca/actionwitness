@@ -731,3 +731,97 @@ label {
     grid-template-columns: 1fr;
   }
 }
+
+/* ---- Header tagline ---------------------------------------------------- */
+
+/* Takes the whole second row of the header flex line, so the run chip stays
+   beside the title rather than being pushed under a sentence. */
+.workspace__tagline {
+  flex-basis: 100%;
+  order: 3;
+  margin: 0.15rem 0 0;
+  max-width: 62ch;
+  color: var(--text-muted);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+/* ---- The contract list ------------------------------------------------- */
+
+/* The built-in contracts are a set of choices, so they read as a set of
+   choices. They were native `<ul>` bullets holding bare `snake_case` ids, which
+   looked like debug output rather than the first decision a run asks for. The
+   markup is untouched: `aria-pressed` was already there, and it is the thing
+   worth showing. */
+[aria-label="Contract"] ul {
+  list-style: none;
+  padding-left: 0;
+  display: grid;
+  gap: 0.4rem;
+}
+
+[aria-label="Contract"] li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+}
+
+[aria-label="Contract"] li button {
+  flex: 1;
+  text-align: left;
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  padding: 0.5rem 0.7rem;
+}
+
+/* The selection is already stated in words — the panel prints "— selected"
+   beside it — so this is the second channel, not the only one. */
+[aria-label="Contract"] li button[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* ---- The verdict ------------------------------------------------------- */
+
+/* A failing check sat in the same plain bullet as the five that passed, which
+   on a six-row list means reading every row to find the one that decided the
+   run. `:has()` keeps the hook in CSS rather than adding a second class the
+   component would have to keep in step with `data-status`; a browser without
+   it simply renders the list as before, which is the pre-existing behaviour
+   rather than a broken one. */
+[aria-label="Findings"] ul {
+  list-style: none;
+  padding-left: 0;
+  display: grid;
+  gap: 0.4rem;
+}
+
+[aria-label="Findings"] li {
+  margin: 0;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-muted);
+}
+
+[aria-label="Findings"] li:has([data-status="failed"]) {
+  border-color: var(--bad);
+  border-left-width: 4px;
+  background: var(--bad-soft);
+}
+
+[aria-label="Findings"] li:has([data-status="passed"]) {
+  border-left-color: var(--ok);
+}
+
+/* `observation_unavailable` and `not_evaluated` are neither a pass nor a
+   failure, and §16.1 exists so they never read as either. */
+[aria-label="Findings"] li:has([data-status="observation_unavailable"]),
+[aria-label="Findings"] li:has([data-status="not_evaluated"]) {
+  border-left-color: var(--warn);
+  background: var(--warn-soft);
+}

@@ -493,3 +493,49 @@ describe("a refused submission", () => {
     expect(onCreated).not.toHaveBeenCalled();
   });
 });
+
+describe("the template list arrives after the first render", () => {
+  it("adopts the first template once it exists", async () => {
+    // `App` fetches the templates, so the first render always sees `[]`. The
+    // initialiser therefore ran with `""` and nothing revised it: the `<select>`
+    // fell back to displaying option zero while the component believed nothing
+    // was selected, so every parameter read as unaccepted. The form *looked*
+    // correct and would have posted an empty `template_id`.
+    const { rerender } = render(<ContractForm templates={[]} onCreated={vi.fn()} />);
+
+    // Nothing to offer yet, so nothing is claimed about parameters.
+    expect(screen.getByLabelText("Quantity").hasAttribute("disabled")).toBe(true);
+
+    rerender(<ContractForm templates={TEMPLATES} onCreated={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(screen.getByLabelText<HTMLSelectElement>("Template").value).toBe(
+        "one_mug_save20_no_checkout",
+      );
+    });
+    // The template accepts both scalars, so both controls are live and the notes
+    // say what the bounds are rather than denying the parameter exists.
+    expect(screen.getByLabelText("Quantity").hasAttribute("disabled")).toBe(false);
+    expect(screen.getByText("Between 1 and 5.")).toBeDefined();
+    expect(screen.getByLabelText("Discount code").hasAttribute("disabled")).toBe(false);
+  });
+
+  it("keeps a choice the person already made", async () => {
+    // Only the empty-to-loaded transition adopts a default. A later list — a
+    // refetch, a reset — must not move a selection out from under somebody.
+    render(<ContractForm templates={TEMPLATES} onCreated={vi.fn()} />);
+
+    fireEvent.change(screen.getByLabelText("Template"), {
+      target: { value: "confirmed_checkout_only" },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText<HTMLSelectElement>("Template").value).toBe(
+        "confirmed_checkout_only",
+      );
+    });
+    // And that template allowlists no scalars, so the controls say so.
+    expect(screen.getByLabelText("Quantity").hasAttribute("disabled")).toBe(true);
+    expect(screen.getByText("This template does not use a quantity.")).toBeDefined();
+  });
+});

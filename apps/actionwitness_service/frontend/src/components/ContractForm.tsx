@@ -33,7 +33,7 @@
  * courtesy; what the server refuses is the rule.
  */
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ApiError } from "../api/client";
 import {
   type ContractTemplateSummary,
@@ -95,6 +95,26 @@ export function ContractForm({ templates, onCreated }: ContractFormProps): React
   const first = templates[0];
   const [templateId, setTemplateId] = useState<string>(first?.sourceTemplateId ?? "");
   const [submission, setSubmission] = useState<Submission>({ kind: "idle" });
+
+  /**
+   * Adopt the first template once the list arrives.
+   *
+   * `templates` is empty on the first render — `App` fetches it — so the
+   * initialiser above always ran with `""`, and nothing ever revised it. The
+   * result was a form that *looked* correct and was not: the `<select>` fell
+   * back to displaying option zero, while `selected` stayed `undefined`, so
+   * every parameter read as unaccepted. Quantity and Discount sat disabled
+   * under the words "This template does not use a quantity" — for a template
+   * that does — and a submission would have posted an empty `template_id`.
+   *
+   * Only when the current value names nothing. A person who has chosen a
+   * template keeps it; this is the empty-to-loaded transition, not a sync.
+   */
+  useEffect(() => {
+    if (templateId === "" && first !== undefined) {
+      setTemplateId(first.sourceTemplateId);
+    }
+  }, [first, templateId]);
 
   const selected = useMemo(
     () => templates.find((template) => template.sourceTemplateId === templateId),

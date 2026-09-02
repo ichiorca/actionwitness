@@ -53,6 +53,18 @@ export interface WorkspaceStatus {
   readonly selectedContractId: string | null;
   readonly scenarioMode: string | null;
   readonly failureProfile: string | null;
+  /**
+   * §15.1's adapter-supported scenario controls, as the server published them.
+   *
+   * Opaque tokens all the way here: the panel offers them and never reads them.
+   * Empty means the selected target advertises nothing — or that no target is
+   * selected yet — which the panel must render as "no choice to offer" rather
+   * than falling back to a list of its own. A hard-coded fallback here would be
+   * the generic UI claiming to know a target's semantics, which is the one thing
+   * §9.1 keeps it from doing.
+   */
+  readonly supportedScenarioModes: readonly string[];
+  readonly supportedFaultProfiles: readonly string[];
   /** The run in flight, if any. Absent rather than empty when there is none. */
   readonly activeRun: {
     readonly runId: string;
@@ -114,6 +126,8 @@ export function parseWorkspace(value: unknown): WorkspaceStatus {
     selectedContractId: optionalString(record["selected_contract_id"]),
     scenarioMode: optionalString(record["scenario_mode"]),
     failureProfile: optionalString(record["failure_profile"]),
+    supportedScenarioModes: stringList(record["supported_scenario_modes"]),
+    supportedFaultProfiles: stringList(record["supported_fault_profiles"]),
     activeRun: isRecord(activeRun)
       ? {
           runId: requireString(activeRun["id"], "active_run.id"),

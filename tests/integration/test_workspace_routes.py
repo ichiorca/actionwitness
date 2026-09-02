@@ -171,6 +171,51 @@ async def test_the_status_reports_capability_state(app: FastAPI) -> None:
     assert capabilities["buggy_store"]["status"] in {"enabled", "disabled", "misconfigured"}
 
 
+async def test_the_status_offers_only_the_controls_the_adapter_supports(app: FastAPI) -> None:
+    """§15.1: "the configuration panel exposes only adapter-supported scenario controls".
+
+    The panel had no way to know what the target accepts, so the failure-profile
+    control shipped as a free-text box and choosing one meant reading the
+    adapter's source for the exact spelling of a token. Both lists come from the
+    selected target's own descriptor; publishing them interprets nothing.
+    """
+    # Arrange — a selected contract is what selects the target (§15.2).
+    async with client(app) as visitor:
+        templates = (await visitor.get(f"{API_PREFIX}/contracts/templates")).json()["templates"]
+        contract = templates[0]["contract_id"]
+        await visitor.post(f"{API_PREFIX}/contracts/{contract}/select")
+
+        # Act
+        body = (await visitor.get(WORKSPACE)).json()
+
+    # Assert — the Buggy Store's own descriptor, not a constant in the UI.
+    assert body["supported_scenario_modes"] == ["pre_fix", "post_fix"]
+    profiles = body["supported_fault_profiles"]
+    assert "none" in profiles
+    assert "discount_reported_but_not_applied" in profiles
+    # A profile §13.3 recognises but this build never implemented must not be
+    # offered: a control that lists it would arm a run whose report names an
+    # active fault while the target behaves honestly (012-T8).
+    assert "checkout_without_confirmation" not in profiles
+
+
+async def test_the_status_offers_no_scenario_controls_without_a_target(app: FastAPI) -> None:
+    """Nothing selected advertises nothing, rather than defaulting to a guess.
+
+    Deliberately not the answer `injects_fault_profile` gives the same question:
+    refusing to *offer* a choice costs a dropdown, while refusing to *record* one
+    before the target is known would forbid FR-011's legitimate order of work.
+    """
+    # Arrange / Act — a fresh workspace has selected no contract, so no target.
+    async with client(app) as visitor:
+        body = (await visitor.get(WORKSPACE)).json()
+
+    # Assert
+    assert body["selected_target_id"] is None
+    assert body["supported_scenario_modes"] == []
+    assert body["supported_fault_profiles"] == []
+
+
 async def test_two_clients_see_only_their_own_workspace(app: FastAPI) -> None:
     """AC-11 at the status route."""
     # Arrange
