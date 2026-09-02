@@ -17,8 +17,14 @@ tool is the failure this milestone exists to prevent.
       green through the real boundary. First in the order because it turns
       idempotency from a property the code asserts about itself into one
       observed under a fault.
-- [ ] T2 — `checkout_without_confirmation` injector; AC-07 green. The consent
-      rail, observed rather than assumed.
+- [~] T2 — **CUT** (see plan.md D1). `checkout_without_confirmation` cannot
+      produce AC-07's `missing_confirmation`: the harness's confirmation gate
+      and the `requires_confirmation` policy read the same contract policy, so a
+      protected tool either pauses for a human and passes, or is unprotected and
+      passes vacuously. No store-side fault reaches that classification. The
+      profile stays unimplemented and refused by name — M11's required cut
+      posture — and no test claims AC-07. Needs a specification decision, not
+      more code.
 - [ ] T3 — Observed-trajectory edge cases; AC-13 green.
 - [ ] T4 — Invocation `AbortSignal` propagation; AC-14 green. A cancelled
       invocation leaves a clean refusal rather than a half-finished mutation,

@@ -90,4 +90,43 @@ rather than route around it.
 Each departure from the spec, anchored to the section it departs from, with what
 was taken and why.
 
-_No entries: implementation has not begun._
+### D1 — AC-07 is unreachable through a store-side injector (T2 cut)
+
+**FR-060/§13.3/AC-07.** AC-07 asks that "when an order is created without
+approval, verification reports `missing_confirmation`". That classification is
+produced only by `requires_confirmation`, which flags a *successful completion of
+the protected tool with no approval event preceding it on the same correlation*.
+
+The harness's confirmation gate and that policy read **the same source**:
+`invocation_service` calls `confirmation_requirement(document, tool_name)`, and
+`_evaluate_requires_confirmation` reads the same contract policy. So:
+
+- if the armed contract protects `proceed_to_checkout`, the harness pauses for a
+  human, records an approval, and the policy passes — the store is never reached
+  without consent, and the adapter's own bridge refuses anyway
+  (`MissingHumanConsent`);
+- if it does not protect it, `_starts_for(policy.tool)` finds no attempts and
+  FR-060 passes *vacuously*.
+
+Neither branch can produce `missing_confirmation`, and no behaviour injected into
+the Buggy Store changes that: a fault that created the order during some other
+tool leaves `proceed_to_checkout` unattempted, and one that created it at
+confirmation-request time fails the `order-not-created` assertion as
+`assertion_mismatch` instead.
+
+**Taken: T2 is cut, not faked.** `checkout_without_confirmation` stays
+unimplemented and is still refused by name with its description, which is
+already M11's required cut posture — the control is visibly disabled rather than
+half-built. No test claims AC-07.
+
+**This is arguably the product working.** The harness *prevents* the unsafe
+checkout rather than merely detecting it, and §23.1's `blocked_safely` exists to
+report exactly that. AC-07 appears to assume a path where the protected tool can
+complete unconsented, which this design does not have.
+
+**What would settle it, for the operator.** Either (a) AC-07 is satisfied by the
+harness blocking the action, and the criterion should be restated in those terms;
+or (b) the demonstration wants a target reached *outside* the harness gate — an
+external caller hitting the store's `/checkout` directly — which is a different
+journey than the one FR-060 evaluates and needs its own contract. Both are
+specification decisions rather than implementation choices.
