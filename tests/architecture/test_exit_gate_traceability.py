@@ -587,6 +587,77 @@ EXIT_GATE_013: dict[str, tuple[str, str]] = {
     ),
 }
 
+#: 014's exit gate, in the spec's own words.
+#:
+#: Criterion 6 is the same shape as 013's — "full suite, architecture lane, both
+#: frontend gates green" is not something a suite can assert about itself — so it
+#: is carried by the lane gate that fails when a lane stops selecting tests.
+EXIT_GATE_014: dict[str, tuple[str, str]] = {
+    "1. arming a run persists a surface baseline whose hash is reproducible from "
+    "the recorded definitions": (
+        "tests/integration/test_014_exit_gate.py",
+        "test_gate_1_arming_persists_a_reproducible_baseline",
+    ),
+    "1b. …the canonicalisation that hash rests on does not invent a delta (§17.2)": (
+        "tests/unit/test_tool_surface.py",
+        "test_order_insensitive_keywords_hash_identically",
+    ),
+    "1c. …and does not erase one either": (
+        "tests/unit/test_tool_surface.py",
+        "test_a_real_schema_difference_survives_canonicalisation",
+    ),
+    "2. a mid-run registration change produces `tool_surface_changed` with the "
+    "correct §9.5 delta kind": (
+        "tests/integration/test_014_exit_gate.py",
+        "test_gate_2_a_mid_run_change_records_the_correct_kind",
+    ),
+    "2b. …declared churn produces no failure": (
+        "tests/integration/test_014_exit_gate.py",
+        "test_gate_2_declared_churn_produces_no_failure",
+    ),
+    "2c. …and the browser re-captures on every `toolchange` (FR-167)": (
+        "apps/actionwitness_service/frontend/src/webmcp/surface.test.ts",
+        "re-captures after a toolchange",
+    ),
+    "3. `stable_tool_surface` passes on a quiet surface, fails with "
+    "`tool_surface_mutation` on an undeclared delta, and still fails closed when "
+    "capture never ran": (
+        "tests/integration/test_014_exit_gate.py",
+        "test_gate_3_the_policy_fails_closed_without_a_baseline",
+    ),
+    "3b. …an undeclared delta of a configured kind fails": (
+        "tests/unit/test_trajectory_and_policies.py",
+        "test_a_delta_in_the_failing_set_fails_the_policy",
+    ),
+    "3c. …and a harness-partition delta does not (§9.11)": (
+        "tests/unit/test_trajectory_and_policies.py",
+        "test_a_harness_partition_delta_does_not_fail_the_policy",
+    ),
+    "4. the poisoned-profile journey fails on the definition diff while every "
+    "business assertion passes": (
+        "tests/integration/test_014_exit_gate.py",
+        "test_gate_4_the_poisoned_journey_fails_on_the_definition_diff",
+    ),
+    "4b. …and the failure carries FR-169's side-by-side definitions": (
+        "tests/integration/test_014_exit_gate.py",
+        "test_gate_4_the_failure_carries_the_side_by_side_diff",
+    ),
+    "4c. …a pre-invocation identity mismatch is refused and recorded (FR-169)": (
+        "tests/integration/test_tool_surface_capture.py",
+        "test_a_changed_definition_refuses_the_invocation",
+    ),
+    "5. replay of a case carrying surface evidence reproduces the classification": (
+        "tests/integration/test_014_exit_gate.py",
+        "test_gate_5_a_case_with_surface_evidence_reproduces_the_classification",
+    ),
+    "6. full suite, architecture lane, and both frontend gates green (DISCHARGED "
+    "BY RUNNING THEM; the covering test is the lane gate that fails if one "
+    "stops selecting tests)": (
+        "tests/architecture/test_test_lanes.py",
+        "test_every_lane_selects_at_least_one_test",
+    ),
+}
+
 MAPS = {
     "003": EXIT_GATE_003,
     "004": EXIT_GATE_004,

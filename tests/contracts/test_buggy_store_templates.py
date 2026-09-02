@@ -19,7 +19,13 @@ from actionwitness_core.contracts.enums import PolicyType
 from actionwitness_core.contracts.models import parse_contract
 from actionwitness_core.ports.enums import SideEffectClass
 from actionwitness_core.security.canonical import content_hash
-from integrations.buggy_store.templates import TEMPLATES, template_for, template_ids
+from integrations.buggy_store.templates import (
+    ALLOWED_DISCOUNT_CODES,
+    FORM_PARAMETERS,
+    TEMPLATES,
+    template_for,
+    template_ids,
+)
 
 from integrations.buggy_store import TARGET_ID, TOOL_SPECS
 
@@ -43,6 +49,8 @@ def test_at_least_three_templates_are_published() -> None:
         # 013-T5. Appended rather than inserted: template order is publication
         # order and a reordering would change what a UI lists first for no reason.
         "one_mug_no_side_effects",
+        # 014-T5/T6. Appended, for the same reason 013 appended.
+        "one_mug_stable_surface",
     )
 
 
@@ -165,13 +173,45 @@ def test_every_template_is_written_in_its_own_canonical_form(template) -> None:
 
 
 @pytest.mark.contracts
-def test_no_template_carries_a_declarative_parameter_yet() -> None:
-    """FR-021 keeps the flat form to allowlisted scalars; Tier 1 needs none.
+def test_every_declared_parameter_is_one_the_form_can_carry() -> None:
+    """FR-021 keeps the flat form to allowlisted scalars (012-T5).
 
-    Expanding with no caller input at all is the safest reading of "the template
-    is trusted, the input is not".
+    Tier 1 declared none — "expanding with no caller input" was the safest
+    reading of "the template is trusted, the input is not" while nothing could
+    submit one. Tier 3 ships the declarative form, so the templates now name
+    what they accept, and the rule becomes the stronger one: a template may
+    allowlist only scalars §25.2 actually puts on the form.
+
+    A template naming anything else would allowlist a control that does not
+    exist — the expansion would accept a parameter no caller can send, which
+    reads as a supported option and is not one.
     """
-    assert all(template.parameters == () for template in TEMPLATES)
+    for template in TEMPLATES:
+        assert set(template.parameters) <= set(FORM_PARAMETERS), (
+            f"{template.template_id} allowlists a scalar the declarative form "
+            f"does not carry: {sorted(set(template.parameters) - set(FORM_PARAMETERS))}"
+        )
+
+
+@pytest.mark.contracts
+def test_a_template_allowlists_only_scalars_its_own_terms_use() -> None:
+    """The allowlist has to match the document, in both directions.
+
+    A template accepting `discount_code` with no discount term would let a
+    person pick a code and create a contract that never checks one. A template
+    that *has* a discount term but does not accept the scalar is the milder
+    error, and still a surprise — the control is disabled for a contract that
+    plainly involves a discount.
+    """
+    for template in TEMPLATES:
+        # Named the code rather than said the word: a contract whose outcome
+        # depends on a discount has to state which one, so its presence in the
+        # document is the honest signal. Matching on "discount" anywhere would
+        # fail the moment somebody wrote the word in a description.
+        names_a_code = any(code in str(template.document) for code in ALLOWED_DISCOUNT_CODES)
+        assert ("discount_code" in template.parameters) == names_a_code, (
+            f"{template.template_id}'s discount allowlist disagrees with its terms"
+        )
 
 
 # --- the canonical example (§10.1) ------------------------------------------

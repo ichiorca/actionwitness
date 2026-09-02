@@ -322,8 +322,16 @@ class EvalCaseService:
         for row in rows:
             payload = json.loads(row["redacted_payload_json"] or "{}")
             if str(row["event_type"]) == str(OutcomeEventType.TOOL_SURFACE_CAPTURED.value):
-                tools = payload.get("tools") or []
-                baseline = tuple(str(tool) for tool in tools)
+                # 014-T1 records the whole surface under `surface`, so the
+                # baseline names are read out of the definitions rather than
+                # from a parallel list. §24.3a stores names only: a case carries
+                # what replay needs to reproduce the *classification*, and the
+                # definitions are evidence for a human reading the source run.
+                captured = payload.get("surface") or {}
+                tools = captured.get("tools") if isinstance(captured, dict) else None
+                baseline = tuple(
+                    str(tool.get("name", "")) for tool in (tools or []) if isinstance(tool, dict)
+                )
                 continue
             deltas.append(
                 SurfaceDelta(
@@ -331,7 +339,12 @@ class EvalCaseService:
                     # to reconstruct an ordering from row order alone.
                     sequence=int(payload.get("recorded_sequence") or row["sequence_number"] or 1),
                     kind=str(payload.get("kind") or "unknown"),
-                    partition=str(payload.get("partition") or "target"),
+                    # `namespace` is the field 014-T1 writes; §24.3a calls the
+                    # same thing `partition`. Read explicitly rather than
+                    # defaulted, so a harness-partition delta is never recorded
+                    # as a target one — which would make a replay fail a policy
+                    # the source run passed.
+                    partition=str(payload.get("namespace") or "target"),
                     tool=_optional(row["tool_name"]),
                 )
             )
