@@ -8,7 +8,10 @@ and turns every silent failure into a portable regression test.
 
 Built for the [WebMCP Challenge](https://webmcp.devpost.com/) (submission Sep 3, 2026, 1:00 PM PDT).
 
-**Live demo:** _deployed URL pending (see [Deployment](#deployment))._
+**Live demo:** <https://actionwitness.onrender.com> — the workspace at `/`, the
+Buggy Store at [`/demo`](https://actionwitness.onrender.com/demo), health at
+[`/healthz`](https://actionwitness.onrender.com/healthz). No credentials, no
+login; see [Deployment](#deployment).
 
 **Status.** Tier 1 and Tier 2 are implemented and tested: the target-neutral core
 kernel, the standalone Buggy Store and its adapter, workspace persistence, the run
