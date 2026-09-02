@@ -101,10 +101,15 @@ _Recorded per task, anchored to spec sections — the 002–007 convention._
   instead. An **unmatched** path is logged as `<unmatched>` rather than raw: every
   segment of it is caller-chosen, and there is no template to reduce it to.
 
-- **T5 — no `Content-Security-Policy` header.** §20.1 does not require one, and the
-  bundle has no inline script, but a CSP that nothing asserts is a header that
-  breaks the page on a Friday. Named in the README's known limitations. **Open for
-  an operator decision** if the deployment is expected to outlive the submission.
+- **T5 — no `Content-Security-Policy` header. CLOSED 2026-09-01.** The original
+  objection was not to the policy but to its absence of a gate: "a CSP that
+  nothing asserts is a header that breaks the page on a Friday". So the gate came
+  first. `tests/architecture/test_bundle_shape.py` asserts what the policy
+  assumes — no inline script, no inline style, no `style={{}}`, no CSS-in-JS, no
+  `eval`, no off-origin asset, in either frontend — and
+  `CONTENT_SECURITY_POLICY` then ships at `default-src 'none'` with no
+  `'unsafe-inline'` and no `'unsafe-eval'`. §20.1 still does not require one;
+  this is ordinary hardening, and it is now testable rather than hopeful.
 
 - **T5 — no CORS middleware at all.** §20.1 permits cross-origin access only for the
   Shopify bridge routes, which are not mounted. Asserted as an absence

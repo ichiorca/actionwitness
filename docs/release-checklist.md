@@ -24,6 +24,7 @@ Do not re-check these by hand. They run on every `uv run pytest -q`:
 | 6 — no secrets, local paths, private fixtures, or build debris | `tests/architecture/test_release_artifact_hygiene.py`, and the CI `image` job |
 | §25.11 — co-location does not bypass the versioned target API | `tests/integration/test_one_origin_composition.py` |
 | Production cookie, origin policy, `Permissions-Policy`, CORS, trusted proxies | `tests/integration/test_production_security_posture.py` |
+| `Content-Security-Policy` is served, and the bundle stays the shape it assumes | `tests/integration/test_production_security_posture.py`, `tests/architecture/test_bundle_shape.py` |
 
 ## Before you deploy
 
@@ -39,6 +40,27 @@ docker build -t actionwitness .
 The image must build from a **clean checkout**, not from your working tree. If
 `docker build` succeeds locally but the CI `image` job fails, the difference is
 almost always a file `.dockerignore` excludes and your tree has.
+
+---
+
+## Before you call the deploy good — the one-minute console check
+
+The automated gates prove the policy is served and that the bundle needs nothing
+the policy forbids. What they cannot prove is that the *deployed* page loads
+under it, because no test in this repository runs a browser against the live URL.
+
+Open the deployed URL with DevTools on the Console tab and confirm:
+
+- [ ] The workspace renders — not a blank page with a `Refused to ...` line.
+- [ ] `/demo` renders too. One policy covers both bundles.
+- [ ] No `Content Security Policy` violation appears in the console during a full
+      Journey A run, including the run timeline's `EventSource` connection.
+- [ ] If a violation *does* appear: do not add `'unsafe-inline'`. The directive it
+      names tells you what the bundle grew, and
+      `tests/architecture/test_bundle_shape.py` is where that should have failed —
+      fix the gate first, so the next person is told at commit time.
+
+Attested by: ______________________  Date: ____________
 
 ---
 

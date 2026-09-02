@@ -23,11 +23,23 @@ adding one "just in case" would be handing out access nobody asked for. A
 cross-origin caller gets the browser's default refusal, which is the correct
 answer.
 
-`Content-Security-Policy` is deliberately absent for now: the workspace UI is a
-Vite bundle with hashed assets and no inline script, so a policy would be easy to
-write and easy to get subtly wrong against a build whose output shape is not
-asserted anywhere. Recorded as an open item in the 009 deviations rather than
-shipped untested.
+**`Content-Security-Policy`**, and the reason it took until now. The 009
+deviations recorded it as an open item with a specific objection: a policy is
+easy to write and easy to get subtly wrong "against a build whose output shape is
+not asserted anywhere", and an untested CSP is a header that breaks the page on a
+Friday. The objection was about the *absence of a gate*, not about the policy —
+so the gate came first. `tests/architecture/test_bundle_shape.py` asserts what
+`CONTENT_SECURITY_POLICY` assumes: no inline script, no inline style, no
+`style={{}}` attribute, no CSS-in-JS, no `eval`, and no off-origin asset in
+either frontend. The policy below is safe precisely as long as that test passes,
+and it fails the moment somebody adds the thing that would have broken the page.
+
+The policy itself starts from `default-src 'none'` and names what is actually
+used, which today is very little: same-origin module scripts, same-origin fetch
+and `EventSource`, and nothing else. `form-action` is `'self'` rather than
+`'none'` because the declarative contract form is a real form element;
+`frame-ancestors 'none'` restates `X-Frame-Options` for browsers that prefer it,
+and the two must not disagree.
 """
 
 from __future__ import annotations
@@ -39,9 +51,49 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
-__all__ = ["SECURITY_HEADERS", "SecurityHeadersMiddleware"]
+__all__ = ["CONTENT_SECURITY_POLICY", "SECURITY_HEADERS", "SecurityHeadersMiddleware"]
+
+#: A strict policy, written against a bundle whose shape is asserted.
+#:
+#: Every directive is either "the thing the page genuinely does" or `'none'`.
+#: There is no `'unsafe-inline'` and no `'unsafe-eval'`: the frontends contain no
+#: inline script, no inline style, no stylesheet at all, and no dynamic code, and
+#: `tests/architecture/test_bundle_shape.py` is what keeps that true.
+#:
+#: `img-src` admits `data:` because a data-URI image cannot execute and a favicon
+#: or an inlined icon is the one asset likely to arrive that way later. Every
+#: other fetch — script, style, font, frame, worker, object — falls through to
+#: `default-src 'none'`.
+CONTENT_SECURITY_POLICY: Final[str] = "; ".join(
+    (
+        "default-src 'none'",
+        # The Vite bundle: hashed module scripts under /assets and /demo/assets.
+        "script-src 'self'",
+        # A stylesheet if one is ever added. Never inline.
+        "style-src 'self'",
+        "img-src 'self' data:",
+        "font-src 'self'",
+        # /api/v1, /demo/api/v1, and the run timeline's EventSource. All same-origin
+        # by construction (§29.1), so this needs no exception.
+        "connect-src 'self'",
+        # The declarative contract form is a real form; it must not be able to
+        # post anywhere but here.
+        "form-action 'self'",
+        # Nothing may frame this, restating X-Frame-Options for browsers that
+        # prefer the CSP form. The two must agree.
+        "frame-ancestors 'none'",
+        # No <base> injection can retarget a relative asset path.
+        "base-uri 'none'",
+        # Redundant under default-src 'none', stated because it is the directive
+        # a reader looks for and older browsers do not all fall through.
+        "object-src 'none'",
+    )
+)
 
 SECURITY_HEADERS: Final[Mapping[str, str]] = {
+    # Ordinary hardening rather than a §20.1 directive; see the module docstring
+    # for why it ships now and did not ship in 009.
+    "Content-Security-Policy": CONTENT_SECURITY_POLICY,
     # §20.1, verbatim.
     "Permissions-Policy": "tools=(self)",
     # §20.1: explicitly `?1`, never `?0`.

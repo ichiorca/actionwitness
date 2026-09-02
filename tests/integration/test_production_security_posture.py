@@ -84,6 +84,79 @@ async def test_the_permissions_policy_is_the_specs_directive_verbatim(
     )
 
 
+def _directives(policy: str) -> dict[str, list[str]]:
+    """The policy as `{name: sources}`, so tests assert meaning rather than bytes."""
+    parsed: dict[str, list[str]] = {}
+    for directive in policy.split(";"):
+        name, *sources = directive.split()
+        parsed[name] = sources
+    return parsed
+
+
+async def test_the_content_security_policy_admits_no_inline_or_dynamic_code(
+    deployed: FastAPI,
+) -> None:
+    """The two keywords whose absence is the whole point of shipping a policy.
+
+    `'unsafe-inline'` re-admits injected `<script>` and injected `style=`;
+    `'unsafe-eval'` re-admits a string compiled into code. Either would make the
+    header decorative. Asserted against the served response rather than the
+    constant, because a middleware that never runs also serves no policy.
+
+    They are safe to forbid only because `tests/architecture/test_bundle_shape.py`
+    holds the bundle to a shape that needs neither.
+    """
+    async with visitor(deployed) as client:
+        response = await client.get("/api/v1/workspace")
+
+    policy = response.headers["Content-Security-Policy"]
+
+    assert "unsafe-inline" not in policy
+    assert "unsafe-eval" not in policy
+    assert _directives(policy)["default-src"] == ["'none'"], (
+        "the policy no longer starts closed; a directive nobody listed is now allowed"
+    )
+
+
+async def test_the_content_security_policy_allows_only_this_origin(
+    deployed: FastAPI,
+) -> None:
+    """Everything the page fetches is same-origin by construction (§29.1).
+
+    A wildcard or a host name creeping into any of these is the moment the
+    deployment starts trusting somebody else's server, so the check is that each
+    directive names `'self'` and nothing but `'self'` — `data:` for images
+    excepted, which cannot execute.
+    """
+    async with visitor(deployed) as client:
+        response = await client.get("/api/v1/workspace")
+
+    directives = _directives(response.headers["Content-Security-Policy"])
+
+    assert directives["script-src"] == ["'self'"]
+    assert directives["connect-src"] == ["'self'"]
+    assert directives["style-src"] == ["'self'"]
+    assert directives["font-src"] == ["'self'"]
+    assert directives["img-src"] == ["'self'", "data:"]
+    assert "*" not in response.headers["Content-Security-Policy"]
+
+
+async def test_the_framing_rules_do_not_contradict_each_other(
+    deployed: FastAPI,
+) -> None:
+    """`frame-ancestors` and `X-Frame-Options` both answer "who may frame this".
+
+    A browser that honours the CSP form ignores the header form, so two rules
+    that disagreed would mean the answer depended on the browser — and §20.1
+    defers iframe embedding entirely, which is one answer, not two.
+    """
+    async with visitor(deployed) as client:
+        response = await client.get("/healthz")
+
+    assert _directives(response.headers["Content-Security-Policy"])["frame-ancestors"] == ["'none'"]
+    assert response.headers["X-Frame-Options"] == "DENY"
+
+
 async def test_a_refusal_built_in_middleware_still_carries_the_headers(
     deployed: FastAPI,
 ) -> None:
@@ -102,6 +175,7 @@ async def test_a_refusal_built_in_middleware_still_carries_the_headers(
     assert response.status_code == 403
     assert response.headers["Permissions-Policy"] == "tools=(self)"
     assert response.headers["X-Content-Type-Options"] == "nosniff"
+    assert "default-src 'none'" in response.headers["Content-Security-Policy"]
 
 
 async def test_no_cors_headers_are_offered_to_a_cross_origin_caller(

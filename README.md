@@ -479,6 +479,11 @@ runtime.
   normalization — no prefix or suffix matching.
 - **`Permissions-Policy: tools=(self)`** and `Origin-Agent-Cluster: ?1` (spec §20.1).
   No CORS is offered to any origin; the frontend and API are same-origin by design.
+- **A strict `Content-Security-Policy`** — `default-src 'none'` with `'self'` for
+  scripts, fetches, styles and fonts, and no `'unsafe-inline'` or `'unsafe-eval'`.
+  It is safe to be that strict because the bundle shape it assumes is asserted:
+  `tests/architecture/test_bundle_shape.py` fails if either frontend gains an
+  inline script, an inline style, CSS-in-JS, `eval`, or an off-origin asset.
 - **Rate limits** keyed on the direct peer, or on trusted-proxy metadata only when
   the peer is an operator-configured proxy. An arbitrary client-supplied forwarding
   header is ignored.
@@ -510,9 +515,6 @@ Other known limitations:
 - **SQLite, single worker, single instance.** Correct for the MVP and stated as a
   constraint rather than a default. Horizontal scaling needs a different store.
 - **Ephemeral demo data.** A redeploy restarts from a seeded state.
-- **No `Content-Security-Policy` header yet.** The bundle has no inline script and
-  a policy would be easy to write, but it is not asserted anywhere, and an untested
-  CSP is a header that breaks the page on a Friday.
 - **Declarative WebMCP annotation is unused.** Registration is imperative.
 - **The `/demo` proxy buffers**, capping a storefront request body at 64 KiB.
 - **Screenshots and demo video are not yet in this README.** They are captured
