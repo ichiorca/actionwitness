@@ -29,6 +29,7 @@ import {
   ComparisonPanel,
   ConfigPanel,
   EvalPanel,
+  ToolSurfacePanel,
   UndeclaredChangesPanel,
   FindingsPanel,
 } from "./panels";
@@ -210,6 +211,8 @@ describe("FindingsPanel", () => {
             path: "target.cart.total",
             paths: [],
             appliedExemptions: [],
+            surfaceDeltas: [],
+            identityMismatches: [],
             expected: "20.00",
             actual: "25.00",
           },
@@ -461,6 +464,8 @@ describe("UndeclaredChangesPanel", () => {
     path: null,
     paths: ["target.preferences.delivery_note"],
     appliedExemptions: [],
+    surfaceDeltas: [],
+    identityMismatches: [],
     expected: null,
     actual: null,
     ...over,
@@ -528,5 +533,93 @@ describe("UndeclaredChangesPanel", () => {
     );
 
     expect(screen.getByText(/target.cart.updated_at/)).toBeDefined();
+  });
+});
+
+/**
+ * 014-T6 — FR-169's side-by-side tool-definition diff.
+ *
+ * "The `stable_tool_surface` policy shall fail a run on any undeclared delta of
+ * a configured kind... with a side-by-side diff of the tool definition before
+ * and after as evidence."
+ *
+ * The diff is the evidence. A reader told only that a schema changed cannot see
+ * what it changed to, and this feature's whole claim is that a person can look
+ * at the two definitions and recognise the second as an impersonation.
+ */
+describe("ToolSurfacePanel", () => {
+  const surfaceFinding = (over: Partial<Finding> = {}): Finding => ({
+    checkId: "stable_tool_surface",
+    checkType: "policy",
+    status: "failed",
+    severity: "critical",
+    classification: "tool_surface_mutation",
+    path: null,
+    paths: [],
+    appliedExemptions: [],
+    surfaceDeltas: [
+      {
+        toolName: "apply_discount",
+        kind: "description_change",
+        before: '{"description": "Apply a discount code to the cart."}',
+        after: '{"description": "[injected unsafe demo behaviour]"}',
+      },
+    ],
+    identityMismatches: [],
+    expected: null,
+    actual: null,
+    ...over,
+  });
+
+  it("shows both definitions side by side", () => {
+    render(<ToolSurfacePanel findings={[surfaceFinding()]} />);
+
+    expect(screen.getByText(/Apply a discount code to the cart/)).toBeDefined();
+    expect(screen.getByText(/injected unsafe demo behaviour/)).toBeDefined();
+  });
+
+  it("names the delta kind and the tool it concerns", () => {
+    render(<ToolSurfacePanel findings={[surfaceFinding()]} />);
+
+    expect(screen.getByText("description_change")).toBeDefined();
+    expect(screen.getByText(/apply_discount/)).toBeDefined();
+  });
+
+  it("reports an identity mismatch that produced no delta at all", () => {
+    // FR-169 fails the policy on a mismatch "even if no toolchange event was
+    // observed". A page that swapped a definition without announcing it is the
+    // interesting case, and a panel showing an empty delta list would read as
+    // a quiet surface.
+    render(
+      <ToolSurfacePanel
+        findings={[surfaceFinding({ surfaceDeltas: [], identityMismatches: ["apply_discount"] })]}
+      />,
+    );
+
+    expect(screen.getByText(/did not match the armed baseline/)).toBeDefined();
+  });
+
+  it("distinguishes an unrecorded baseline from a quiet surface", () => {
+    render(
+      <ToolSurfacePanel
+        findings={[
+          surfaceFinding({
+            status: "observation_unavailable",
+            classification: "observation_unavailable",
+            surfaceDeltas: [],
+          }),
+        ]}
+      />,
+    );
+
+    expect(screen.getByText(/no surface baseline was recorded/)).toBeDefined();
+  });
+
+  it("renders nothing when the contract carried no surface policy", () => {
+    const { container } = render(
+      <ToolSurfacePanel findings={[surfaceFinding({ checkId: "idempotent_by_request_id" })]} />,
+    );
+
+    expect(container.querySelector("section")).toBeNull();
   });
 });

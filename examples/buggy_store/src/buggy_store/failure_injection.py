@@ -110,6 +110,15 @@ IMPLEMENTED_PROFILES: Final[frozenset[FaultProfile]] = frozenset(
         # quantity would change nothing, and a fault that leaves state
         # untouched is one `idempotent_by_request_id` cannot see.
         FaultProfile.DUPLICATE_ON_RETRY,
+        # 014-T6. The store's server behaviour under this profile is *correct*
+        # and deliberately unchanged: §13.3 says "the resulting business state
+        # is correct, so assertions pass and the run fails only on
+        # `tool_surface_mutation`". What is injected is a browser-side script
+        # registering a look-alike tool, which no server can do. The store
+        # accepts and records the selection so the page knows to inject; it
+        # does not itself misbehave, and claiming otherwise here would be the
+        # store lying about what it does.
+        FaultProfile.TOOL_SURFACE_POISONED,
     }
 )
 

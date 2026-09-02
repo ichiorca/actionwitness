@@ -104,7 +104,7 @@ def test_every_profile_is_described_so_a_report_can_label_it() -> None:
 
 
 @pytest.mark.integration
-def test_this_build_implements_the_honest_path_and_three_faults() -> None:
+def test_this_build_implements_the_honest_path_and_four_faults() -> None:
     """Extended, never widened: each injector arrives with its own tests.
 
     003 shipped the honest path and the discount fault; 013-T5 added
@@ -119,6 +119,7 @@ def test_this_build_implements_the_honest_path_and_three_faults() -> None:
                 DISCOUNT_FAULT,
                 FaultProfile.UNDECLARED_SIDE_EFFECT,
                 FaultProfile.DUPLICATE_ON_RETRY,
+                FaultProfile.TOOL_SURFACE_POISONED,
             }
         )
         == IMPLEMENTED_PROFILES
@@ -197,7 +198,6 @@ async def test_a_selection_is_scoped_to_its_workspace(service: StoreService) -> 
     "profile",
     [
         FaultProfile.CHECKOUT_WITHOUT_CONFIRMATION,
-        FaultProfile.TOOL_SURFACE_POISONED,
     ],
 )
 async def test_an_unimplemented_profile_is_refused_rather_than_downgraded(
@@ -395,6 +395,7 @@ async def test_the_scenario_endpoint_publishes_what_the_panel_needs(
         "discount_reported_but_not_applied",
         "duplicate_on_retry",
         "none",
+        "tool_surface_poisoned",
         "undeclared_side_effect",
     ]
     assert body["description"] == PROFILE_DESCRIPTIONS[FaultProfile.NONE]

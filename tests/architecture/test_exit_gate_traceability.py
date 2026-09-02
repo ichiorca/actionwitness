@@ -577,7 +577,7 @@ EXIT_GATE_013: dict[str, tuple[str, str]] = {
     ),
     "5b. …and the template-honesty test now covers three profiles": (
         "tests/integration/test_013_exit_gate.py",
-        "test_gate_5_the_template_honesty_gate_now_covers_three_profiles",
+        "test_gate_5_the_template_honesty_gate_covers_the_profile_013_added",
     ),
     "6. full suite, architecture lane, and both frontend gates green (DISCHARGED "
     "BY RUNNING THEM; the covering test is the lane gate that fails if one "

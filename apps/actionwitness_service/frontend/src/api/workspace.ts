@@ -215,6 +215,14 @@ export function parseEventPage(value: unknown): EventPage {
   };
 }
 
+export interface SurfaceDeltaView {
+  readonly toolName: string;
+  readonly kind: string;
+  /** Canonical JSON text, already rendered by the server. Displayed as text. */
+  readonly before: string | null;
+  readonly after: string | null;
+}
+
 export interface Finding {
   readonly checkId: string;
   readonly checkType: string;
@@ -233,6 +241,10 @@ export interface Finding {
   readonly paths: readonly string[];
   /** Every `allow_paths` waiver applied to this finding (§9.5). */
   readonly appliedExemptions: readonly string[];
+  /** FR-169's side-by-side tool-definition diff, when this finding carries one. */
+  readonly surfaceDeltas: readonly SurfaceDeltaView[];
+  /** Tools whose identity at invocation disagreed with the baseline (FR-169). */
+  readonly identityMismatches: readonly string[];
   readonly expected: unknown;
   readonly actual: unknown;
 }
@@ -264,6 +276,18 @@ export function parseFindings(value: unknown): FindingsPage {
         path: optionalString(finding["path"]),
         paths: stringList(finding["paths"]),
         appliedExemptions: stringList(finding["applied_exemptions"]),
+        surfaceDeltas: requireArray(finding["surface_deltas"] ?? [], "surface_deltas").map(
+          (entry) => {
+            const delta = requireRecord(entry, "surface_delta");
+            return {
+              toolName: requireString(delta["tool_name"], "tool_name"),
+              kind: requireString(delta["kind"], "kind"),
+              before: optionalString(delta["before"]),
+              after: optionalString(delta["after"]),
+            };
+          },
+        ),
+        identityMismatches: stringList(finding["identity_mismatches"]),
         expected: finding["expected"],
         actual: finding["actual"],
       };

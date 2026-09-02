@@ -25,8 +25,9 @@ silently ignored is a user who believes they purged.
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Final
 
+from actionwitness_core.ports.enums import ExecutionMode
 from fastapi import APIRouter, Body
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -208,6 +209,7 @@ async def _select_and_prepare(
     async with database.reading() as work:
         before = await WorkspaceService(work, workspace_id).status()
     _require_supported_mode(before, preparer, scenario_mode)
+    _require_demo_only_profile(registry, before["selected_target_id"], failure_profile)
 
     target_id = before["selected_target_id"]
     intended_mode = before["scenario_mode"] if scenario_mode is None else scenario_mode
@@ -244,6 +246,42 @@ def _selection_of(status: dict[str, Any]) -> tuple[Any, ...]:
         status["scenario_mode"],
         status["failure_profile"],
     )
+
+
+#: §13.3 restricts these to the embedded demo target: each "shall exist only in
+#: the embedded demo target, and shall never be available against external
+#: targets". Named individually rather than derived, because the rule is about
+#: what the *behaviour does to somebody else's system*, not about which module
+#: happens to implement it — `tool_surface_poisoned` registers a look-alike tool
+#: in a live page, and `checkout_without_confirmation` creates a real order
+#: without consent.
+DEMO_ONLY_PROFILES: Final[frozenset[str]] = frozenset(
+    {"tool_surface_poisoned", "checkout_without_confirmation"}
+)
+
+
+def _require_demo_only_profile(registry: Any, target_id: Any, failure_profile: str | None) -> None:
+    """§13.3: an injected unsafe profile may not be pointed at an external target.
+
+    Refused here rather than in the adapter, because the adapter for an external
+    target is exactly the code that must never be asked to do this — a guard
+    that lived there would be trusting the thing it guards against. The check is
+    on the *selected* target, before anything is prepared or recorded.
+    """
+    if failure_profile is None or failure_profile not in DEMO_ONLY_PROFILES:
+        return
+    slot = registry.resolve(None if target_id is None else str(target_id))
+    if slot is None or slot.factory is None:
+        return
+    descriptor = slot.factory().descriptor
+    if descriptor.execution_mode is not ExecutionMode.MANAGED:
+        raise ApiError(
+            ApiErrorCode.EXTERNAL_TARGET_FORBIDDEN_OPERATION,
+            f"The {failure_profile!r} profile injects unsafe behaviour and exists only "
+            "for the embedded demo target. It can never be selected for an external "
+            "target (§13.3).",
+            details=[{"path": "failure_profile", "message": "demo-only profile"}],
+        )
 
 
 def _require_supported_mode(

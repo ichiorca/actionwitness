@@ -379,6 +379,75 @@ export function UndeclaredChangesPanel({
   );
 }
 
+export interface ToolSurfacePanelProps {
+  readonly findings: readonly Finding[];
+}
+
+/**
+ * FR-169's side-by-side tool-definition diff (014-T6).
+ *
+ * "The `stable_tool_surface` policy shall fail a run on any undeclared delta of
+ * a configured kind, classified `tool_surface_mutation`, **with a side-by-side
+ * diff of the tool definition before and after as evidence**."
+ *
+ * The diff is the point. A reader told only that a schema changed cannot see
+ * what it changed to, and the whole claim of this feature is that a person can
+ * look at the two definitions and recognise the second as an impersonation.
+ * Rendered as text, never as markup: these strings come from a tool registry any
+ * script on the origin can write to.
+ */
+export function ToolSurfacePanel({ findings }: ToolSurfacePanelProps): React.ReactElement | null {
+  const finding = findings.find((entry) => entry.checkId === "stable_tool_surface");
+  if (finding === undefined) {
+    return null;
+  }
+
+  if (finding.status === "observation_unavailable") {
+    // §16.1's outcome, said in words. Distinct from "the surface was quiet",
+    // and the difference is the whole reason the status exists.
+    return (
+      <section className="panel" aria-label="Tool surface">
+        <h3>Tool surface</h3>
+        <p>Not evaluated — no surface baseline was recorded for this run.</p>
+      </section>
+    );
+  }
+
+  const deltas = finding.surfaceDeltas;
+  return (
+    <section className="panel" aria-label="Tool surface">
+      <h3>Tool surface</h3>
+      <p>
+        <span className="panel__label">Result:</span> <strong>{finding.status}</strong>
+        {finding.identityMismatches.length === 0 ? null : (
+          <>
+            {" "}
+            — a tool&rsquo;s definition at invocation time did not match the armed baseline:{" "}
+            {finding.identityMismatches.join(", ")}
+          </>
+        )}
+      </p>
+      {deltas.length === 0 ? (
+        <p>No undeclared change to the target tool surface.</p>
+      ) : (
+        <ul>
+          {deltas.map((delta) => (
+            <li key={`${delta.toolName}:${delta.kind}`}>
+              <strong>{delta.kind}</strong> — {delta.toolName}
+              <dl className="tool-diff">
+                <dt>armed</dt>
+                <dd>{delta.before ?? "(not registered)"}</dd>
+                <dt>observed</dt>
+                <dd>{delta.after ?? "(no longer registered)"}</dd>
+              </dl>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 export interface ComparisonPanelProps {
   readonly comparable: boolean | null;
   readonly differingFields: readonly string[];

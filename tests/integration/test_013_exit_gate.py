@@ -224,26 +224,25 @@ def test_gate_5_the_undeclared_side_effect_template_ships() -> None:
     )
 
 
-def test_gate_5_the_template_honesty_gate_now_covers_four_profiles() -> None:
-    """The test that forbade claiming an uninjectable profile now covers four.
+def test_gate_5_the_template_honesty_gate_covers_the_profile_013_added() -> None:
+    """ "The test that forbade claiming an uninjectable profile now covers three."
 
-    Extended, never weakened: the gate still refuses a template that claims a
-    profile with no injector, and there are now four profiles it can vouch for
-    — 012-T1 added `duplicate_on_retry`.
+    Asserts the *property* rather than the exact implemented set. The set grows
+    with every milestone that ships an injector — 012 added `duplicate_on_retry`
+    and 014 added `tool_surface_poisoned` — and pinning it here made each of
+    those edit 013's gate for a reason that has nothing to do with 013. The
+    exact set is pinned once, in the store's own
+    `test_this_build_implements_the_honest_path_and_*` test, which is where a
+    profile appearing without an injector should fail.
+
+    What 013 needs is unchanged and asserted directly: its profile is
+    injectable, and no template may claim one that is not.
     """
-    assert (
-        frozenset(
-            {
-                FaultProfile.NONE,
-                FaultProfile.DISCOUNT_REPORTED_BUT_NOT_APPLIED,
-                FaultProfile.UNDECLARED_SIDE_EFFECT,
-                FaultProfile.DUPLICATE_ON_RETRY,
-            }
-        )
-        == IMPLEMENTED_PROFILES
-    )
+    assert FaultProfile.UNDECLARED_SIDE_EFFECT in IMPLEMENTED_PROFILES
+
     implemented = {profile.value for profile in IMPLEMENTED_PROFILES}
-    assert all(template.demonstrates in implemented for template in TEMPLATES)
+    unbacked = [t.template_id for t in TEMPLATES if t.demonstrates not in implemented]
+    assert unbacked == [], f"templates claim profiles with no injector: {unbacked}"
 
 
 # --- criterion 6 --------------------------------------------------------------

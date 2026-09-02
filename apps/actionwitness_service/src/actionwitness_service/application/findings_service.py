@@ -122,9 +122,61 @@ def _projected(row: Mapping[str, Any]) -> dict[str, Any]:
         # §9.5: "each exemption is recorded in the report so the waiver is
         # visible". A waiver a reader cannot see is a waiver nobody reviews.
         "applied_exemptions": _paths(row["applied_exemptions_json"]),
+        # FR-169's side-by-side diff, and the identity mismatches that fail the
+        # policy with no delta at all. Read from the finding's own evidence so
+        # the panel shows what the engine judged, never a second derivation.
+        "surface_deltas": _surface_deltas(row["evidence_json"]),
+        "identity_mismatches": _evidence_list(row["evidence_json"], "identity_mismatches"),
         "expected": _value(row["expected_json"]),
         "actual": _value(row["actual_json"]),
     }
+
+
+def _evidence(stored: Any) -> Mapping[str, Any]:
+    if not stored:
+        return {}
+    try:
+        loaded = json.loads(stored)
+    except json.JSONDecodeError:
+        return {}
+    return loaded if isinstance(loaded, Mapping) else {}
+
+
+def _evidence_list(stored: Any, key: str) -> list[str]:
+    value = _evidence(stored).get(key)
+    return [str(item) for item in value] if isinstance(value, Sequence) else []
+
+
+def _surface_deltas(stored: Any) -> list[dict[str, Any]]:
+    """§9.5 deltas, flattened to what a reader needs.
+
+    The definitions are rendered as canonical JSON text rather than forwarded as
+    objects: they came from a tool registry any script on the origin can write
+    to, and a panel that received them as structure would eventually render one
+    as markup.
+    """
+    raw = _evidence(stored).get("deltas")
+    if not isinstance(raw, Sequence):
+        return []
+    flattened: list[dict[str, Any]] = []
+    for entry in raw:
+        if not isinstance(entry, Mapping):
+            continue
+        flattened.append(
+            {
+                "tool_name": str(entry.get("tool_name", "")),
+                "kind": str(entry.get("kind", "")),
+                "before": _rendered(entry.get("before")),
+                "after": _rendered(entry.get("after")),
+            }
+        )
+    return flattened
+
+
+def _rendered(definition: Any) -> str | None:
+    if not isinstance(definition, Mapping):
+        return None
+    return json.dumps(dict(definition), sort_keys=True, separators=(",", ": "))
 
 
 def _paths(paths_json: Any) -> list[str]:

@@ -32,10 +32,12 @@ import {
   type ContractTemplate,
   ContractPanel,
   FindingsPanel,
+  ToolSurfacePanel,
   UndeclaredChangesPanel,
   RunTimeline,
   TargetPanel,
 } from "./components/panels";
+import { usePoisonedToolSurface } from "./integrations/buggyStore/poisoned";
 import { decide, useBuggyStoreTools } from "./integrations/buggyStore/tools";
 import { confirmations } from "./state/confirmations";
 import { useRunTimeline } from "./state/useRunTimeline";
@@ -78,6 +80,15 @@ export default function App(): React.ReactElement {
   // FR-166/FR-167: capture the surface at arming and on every `toolchange`,
   // for the life of this run. The server judges what it is sent.
   useToolSurfaceWitness(runId);
+  // §13.3's injected surface fault. Active only in `pre_fix`, only for the
+  // embedded demo target, and only while a run is open — the server already
+  // refuses to record this profile for an external target, so this is the
+  // second lock rather than the only one.
+  usePoisonedToolSurface(
+    runId !== null &&
+      status?.scenarioMode === "pre_fix" &&
+      status?.failureProfile === "tool_surface_poisoned",
+  );
 
   /** One place for "do a thing, then re-read what the server now says". */
   const act = useCallback(
@@ -319,6 +330,11 @@ export default function App(): React.ReactElement {
           {/* §9.10's partition, beside the findings it is drawn from. Renders
               nothing when the run's contract carried no such policy. */}
           <UndeclaredChangesPanel findings={findings?.findings ?? []} />
+
+          {/* FR-169's side-by-side definition diff, beside the finding it
+              belongs to. Renders nothing when the contract carried no
+              `stable_tool_surface` policy. */}
+          <ToolSurfacePanel findings={findings?.findings ?? []} />
 
           <ComparisonPanel
             comparable={comparison.comparable}
