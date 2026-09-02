@@ -256,6 +256,28 @@ Registered markers: `architecture`, `unit`, `integration`, `adapters`, `contract
 | `npm run lint` | ESLint (type-checked rules, hooks, jsx-a11y) |
 | `npm test` | Vitest (jsdom) — adapter lifecycle, polling, panels, confirmation |
 | `npm run build` | Vite production bundle |
+| `npm run typecheck:e2e` | Strict `tsc --noEmit` over the browser lane's own sources |
+| `npm run test:e2e` | **Tier 3, opt-in.** Playwright against the composed deployment — see below |
+
+#### The automated browser lane (Tier 3, never release-gating)
+
+`npm run test:e2e` builds the one-origin tree spec §29.1 describes, starts both
+application processes, and drives the harness UI, the storefront, and the WebMCP
+tool surface in a real browser. It covers the seam nothing else reaches: the
+Python suite never opens a browser, and the jsdom suite stubs `fetch` and owns
+its own `document.modelContext`.
+
+Spec §26 makes this tier **conditional** — "their absence shall never fail the
+release-gating suite" — so it is outside `uv run pytest -q`, outside `npm test`,
+outside `npm run typecheck`, and outside every CI job. `tests/browser/` remains
+the manual §26.4 checklist it was, and this lane does not replace it: Chromium
+ships no WebMCP without the flag ADR-0002 pins, so the registry is substituted
+while everything above and below it is production code.
+
+Requires `npx playwright install chromium` once. Working files land in
+`apps/actionwitness_service/frontend/.e2e/` and are git-ignored.
+`apps/actionwitness_service/frontend/e2e/README.md` documents what each spec
+holds and why the lane respects FR-009's rate limits rather than relaxing them.
 
 ### Storefront frontend — from `examples/buggy_store/frontend`
 

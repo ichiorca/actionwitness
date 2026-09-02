@@ -54,7 +54,13 @@ from actionwitness_service.application.benchmark_metrics import BenchmarkSummary
 from actionwitness_service.persistence.database import UnitOfWork
 from actionwitness_service.persistence.repositories import new_id
 
-__all__ = ["BenchmarkService", "ImportedSuite"]
+__all__ = [
+    "BenchmarkService",
+    "ImportedSuite",
+    "PreparedFinalization",
+    "PreparedImport",
+    "write_benchmark_report",
+]
 
 #: Run states an `executed_browser` binding may point at. §17.1 requires "the
 #: exact completed outcome `run_id`", so an in-flight run is not bindable: its

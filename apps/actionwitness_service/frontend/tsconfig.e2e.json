@@ -1,0 +1,38 @@
+{
+  "//": [
+    "Type-check configuration for the automated browser lane.",
+    "",
+    "Separate from tsconfig.json on purpose. The main configuration covers the",
+    "shipped bundle; the e2e sources are Node-side test code that must never end",
+    "up in it, and `include: [\"src\", ...]` is what keeps that true. Without this",
+    "second project the e2e sources would have no type coverage at all — the",
+    "exact 'a build is not a type-check' mistake the stack rules name.",
+    "",
+    "The same strictness applies: this code narrows tool results and API bodies",
+    "that arrive as `unknown`, which is where the strict flags earn their keep."
+  ],
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "noEmit": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "forceConsistentCasingInFileNames": true,
+
+    "strict": true,
+    "exactOptionalPropertyTypes": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+
+    "types": ["node", "webmcp-types"]
+  },
+  "include": ["e2e", "playwright.config.ts"]
+}

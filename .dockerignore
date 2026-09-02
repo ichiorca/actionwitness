@@ -84,3 +84,11 @@ specs/
 memory/
 .github/
 render.yaml
+
+# The Tier 3 automated browser lane. It drives the composed deployment from
+# outside, so nothing in it belongs in the image — and `.e2e/` is a working
+# directory holding two SQLite databases and an assembled copy of both bundles.
+apps/actionwitness_service/frontend/e2e/
+apps/actionwitness_service/frontend/.e2e/
+apps/actionwitness_service/frontend/playwright.config.ts
+apps/actionwitness_service/frontend/tsconfig.e2e.json
