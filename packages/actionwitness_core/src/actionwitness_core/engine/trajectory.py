@@ -109,6 +109,14 @@ def evaluate_expected_tools(expected: ExpectedTools | None, events: Sequence[Run
             severity=AssertionSeverity.CRITICAL,
             classification=FailureClassification.MISSING_EXPECTED_TOOL,
             causal_event_sequence=_first_eligible_sequence(events),
+            # AC-22 requires a finding to carry "redacted expected and actual
+            # values", and for a trajectory check those have an exact meaning:
+            # the calls the contract required, and the calls that occurred.
+            # Without them a reader learns *that* something was missing and
+            # never *which*, which sends them back to the timeline to work out
+            # what the finding already knew.
+            expected=required,
+            actual=list(observed),
             evidence={
                 **evidence,
                 "missing_calls": sorted(shortfall.elements()),
@@ -124,6 +132,8 @@ def evaluate_expected_tools(expected: ExpectedTools | None, events: Sequence[Run
             severity=AssertionSeverity.CRITICAL,
             classification=FailureClassification.TRAJECTORY_ORDER_VIOLATION,
             causal_event_sequence=_first_eligible_sequence(events),
+            expected=required,
+            actual=list(observed),
             evidence={
                 **evidence,
                 "reason": "every required call occurred, but not in the required order",

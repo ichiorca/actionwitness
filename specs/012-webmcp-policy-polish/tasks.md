@@ -25,7 +25,7 @@ tool is the failure this milestone exists to prevent.
       profile stays unimplemented and refused by name — M11's required cut
       posture — and no test claims AC-07. Needs a specification decision, not
       more code.
-- [ ] T3 — Observed-trajectory edge cases; AC-13 green.
+- [x] T3 — Observed-trajectory edge cases; AC-13 green.
 - [ ] T4 — Invocation `AbortSignal` propagation; AC-14 green. A cancelled
       invocation leaves a clean refusal rather than a half-finished mutation,
       and a partially completed operation stays visible.
