@@ -43,6 +43,7 @@ import { useWorkspace } from "./state/useWorkspace";
 import { useHarnessToolset } from "./tools/harnessTools";
 import { useWorkspaceStatusTool } from "./tools/workspaceStatus";
 import { isWebMcpSupported, useRegisteredToolNames } from "./webmcp/adapter";
+import { useToolSurfaceWitness } from "./webmcp/surface";
 
 const TERMINAL = ["passed", "passed_with_warnings", "failed", "error", "cancelled"];
 
@@ -74,6 +75,9 @@ export default function App(): React.ReactElement {
   useWorkspaceStatusTool();
   useHarnessToolset(status, refresh);
   useBuggyStoreTools(runId, phase, refresh);
+  // FR-166/FR-167: capture the surface at arming and on every `toolchange`,
+  // for the life of this run. The server judges what it is sent.
+  useToolSurfaceWitness(runId);
 
   /** One place for "do a thing, then re-read what the server now says". */
   const act = useCallback(
