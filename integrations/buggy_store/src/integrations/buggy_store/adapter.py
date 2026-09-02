@@ -39,6 +39,7 @@ from actionwitness_core.ports.enums import ExecutionMode, SideEffectClass
 from actionwitness_core.ports.models import (
     ExecutionContext,
     ScenarioSelection,
+    ScenarioState,
     TargetDescriptor,
     TargetToolSpec,
     ToolExecutionResult,
@@ -192,6 +193,36 @@ class BuggyStoreAdapter:
             },
         )
         response.raise_for_status()
+
+    async def scenario_state(self, workspace_id: str) -> ScenarioState:
+        """Ask the store whether its injected defect is currently on (§23.1).
+
+        Asked rather than computed. The harness knows the selected mode and could
+        infer "pre_fix plus a profile means the fault is running", but §9.1
+        forbids the core from interpreting mode names and §23.1 assigns this
+        derivation to the adapter — for a good reason: the target is the only
+        party that knows whether it honoured the selection. A store that refused
+        a profile, or shipped a build without it, would still be described as
+        faulty by an inference drawn from the request.
+
+        The response is untrusted like every other adapter response. A missing or
+        non-boolean `fault_active` raises rather than defaulting: `False` here
+        would be read as "the target confirmed no defect is running", which is a
+        different statement from "the target did not say".
+        """
+        response = await self._client.get(
+            f"{_API}/scenario", headers={WORKSPACE_HEADER: workspace_id}
+        )
+        response.raise_for_status()
+        document = response.json()
+
+        reported = document.get("fault_active") if isinstance(document, Mapping) else None
+        if not isinstance(reported, bool):
+            raise ValueError(
+                "the store did not report `fault_active` as a boolean; refusing to "
+                "guess whether an injected defect is running"
+            )
+        return ScenarioState(fault_active=reported)
 
     async def execute(
         self,

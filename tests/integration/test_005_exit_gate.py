@@ -570,26 +570,25 @@ async def test_gate_5_ac_20_a_completed_runs_scenario_never_changes(
     assert still["failure_profile"] == recorded["failure_profile"] == FAULT
 
 
-async def test_gate_5_ac_20_the_fault_activation_field_is_not_yet_recorded(
+async def test_gate_5_ac_20_the_fault_is_recorded_as_active_only_in_pre_fix(
     stack: FastAPI,
 ) -> None:
-    """AC-20's "activates the fault only for the `pre_fix` run" — the known gap.
+    """AC-20: the scenario "activates the fault only for the `pre_fix` run".
 
-    **This test records what the system does, not what it should do.** The
-    behavioural half of the bullet holds: the fault really is active only in
-    `pre_fix`, which is why the two runs reach opposite verdicts, and that is
-    asserted below so this cannot be read as "the scenario does nothing".
+    This replaces a characterization test that recorded the opposite. For several
+    milestones `runs.fault_active` existed and was never written, so the bullet
+    held behaviourally — the two runs really do reach opposite verdicts — while
+    the field a reader would check said `false` on both.
 
-    What is missing is the recorded *field*. `runs.fault_active` is never
-    populated: §23.1 says it is "derived by the adapter", no protocol method
-    reports it, and deriving it from the mode name is what §9.1 forbids. The 005
-    plan carries it as an open operator decision.
+    Both halves are asserted here, and the pairing is the point. The behaviour
+    without the field is a claim nobody recorded; the field without the behaviour
+    is a record of something that did not happen. AC-20 wants the run to be
+    describable, so it has to be both.
 
-    Written as an ordinary assertion rather than an `xfail`, because the lane
-    gate forbids quarantined failures and weakening a gate to admit one is an
-    escalation, not a fix. The effect is the same: implementing `fault_active`
-    breaks this test, which is the prompt to delete it and restore AC-20's
-    bullet in the traceability map.
+    The recorded value comes from the target rather than from the request: the
+    adapter reports it (§23.1) and the harness copies it in at arming, because
+    inferring "pre_fix means the fault is on" is the core interpreting a scenario
+    name, which §9.1 forbids.
     """
     # Arrange
     database: Database = stack.state.database
@@ -603,15 +602,11 @@ async def test_gate_5_ac_20_the_fault_activation_field_is_not_yet_recorded(
     assert before["overall_result"] == "failed"
     assert after["overall_result"] in {"passed", "passed_with_warnings"}
 
-    # ...and is recorded on neither run, which is the gap.
+    # ...and the record says so too.
     async with database.reading() as work:
         rows = await work.fetch_all(
             "SELECT id, fault_active FROM runs WHERE id IN (?, ?)",
             (before["run_id"], after["run_id"]),
         )
     recorded = {str(row["id"]): bool(row["fault_active"]) for row in rows}
-    assert recorded == {before["run_id"]: False, after["run_id"]: False}, (
-        "`fault_active` is now populated — AC-20's bullet can be asserted "
-        "properly; delete this characterization test and update the 005 "
-        "traceability map"
-    )
+    assert recorded == {before["run_id"]: True, after["run_id"]: False}

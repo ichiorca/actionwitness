@@ -44,6 +44,7 @@ from actionwitness_core.engine.enums import CheckStatus
 from actionwitness_core.evidence.effects import redacted_observation
 from actionwitness_core.journeys.enums import EventActor, OutcomeEventType, RunState, SnapshotPhase
 from actionwitness_core.journeys.transitions import is_terminal
+from actionwitness_core.ports import ScenarioReportingAdapter
 from actionwitness_core.ports.models import Observation
 from actionwitness_core.reports.enums import RunMode
 from actionwitness_core.security.canonical import content_hash
@@ -163,6 +164,10 @@ class RunService:
 
         # Phase 2 — the one authoritative read. Outside every lock.
         observation = await self._capture(selected, workspace_id)
+        # And, from the same target and in the same phase, what it says about
+        # the defect it is running (§23.1). I/O, so it belongs here rather than
+        # inside the transaction below.
+        fault_active = await self._fault_state(selected, workspace_id)
 
         # Phase 3 — validate against that exact value, and commit or refuse.
         async with self._locks.hold(workspace_id), self._database.transaction() as work:
@@ -180,7 +185,12 @@ class RunService:
 
             _validate_preconditions(confirmed, observation)
             return await self._write(
-                work, workspace_id, confirmed, observation, comparison_source_run_id
+                work,
+                workspace_id,
+                confirmed,
+                observation,
+                comparison_source_run_id,
+                fault_active=fault_active,
             )
 
     def _require_injectable_profile(self, selected: WorkspaceConfiguration) -> None:
@@ -205,6 +215,44 @@ class RunService:
             "armed against it would report a defect that was never produced. It is "
             "recognised by the specification and not implemented in this build.",
             details=[{"path": "failure_profile", "message": "recognised but not implemented"}],
+        )
+
+    async def _fault_state(self, selected: WorkspaceConfiguration, workspace_id: str) -> bool:
+        """Ask the target whether its injected defect is on (§23.1, AC-20).
+
+        AC-20 asks a run to record that the fault was "active only for the
+        `pre_fix` run". The harness must not answer that itself: §9.1 forbids the
+        core from interpreting scenario-mode names, and §23.1 assigns the
+        derivation to the adapter. Inferring it from `mode == "pre_fix"` would
+        record a defect as running because it was *requested*, which is the same
+        substitution of claim for observation the whole product is against.
+
+        Two outcomes, and no third:
+
+        * The adapter can report — take its answer, whatever the selection says.
+        * The adapter cannot, and no fault is selected — `False`, which is a true
+          statement about a target that injects nothing.
+
+        A selected fault with no way to confirm it raises. `_require_injectable_
+        profile` has already established that the target advertises the profile,
+        so an adapter that then cannot say whether it is running is a build
+        inconsistency, and arming through it would produce a report naming an
+        active defect on nobody's authority (§16.1).
+        """
+        adapter = self._registry.adapter(selected.adapter_id)
+        if isinstance(adapter, ScenarioReportingAdapter):
+            state = await adapter.scenario_state(workspace_id)
+            return state.fault_active
+
+        profile = selected.failure_profile
+        if profile is None or profile == AdapterRegistry.NO_FAULT:
+            return False
+        raise ApiError(
+            ApiErrorCode.TARGET_UNAVAILABLE,
+            f"The selected target cannot report whether the {profile!r} fault is "
+            "running, so a run armed against it would describe an injected defect "
+            "that nothing confirmed.",
+            details=[{"path": "failure_profile", "message": "target reports no scenario state"}],
         )
 
     # -- phase 1 and 3: the selected configuration ---------------------------
@@ -322,6 +370,8 @@ class RunService:
         selected: WorkspaceConfiguration,
         observation: Observation,
         comparison_source_run_id: str | None = None,
+        *,
+        fault_active: bool = False,
     ) -> ArmedRun:
         run_id = self._id_source()
         started_at = work.now()
@@ -331,9 +381,9 @@ class RunService:
             INSERT INTO runs (
                 id, workspace_id, contract_id, contract_content_hash,
                 target_id, target_adapter_id, scenario_mode, failure_profile,
-                intent_content_hash, implementation_version, status, started_at,
-                comparison_source_run_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                fault_active, intent_content_hash, implementation_version, status,
+                started_at, comparison_source_run_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 run_id,
@@ -344,6 +394,8 @@ class RunService:
                 selected.adapter_id,
                 selected.scenario_mode,
                 selected.failure_profile,
+                # The target's own answer (§23.1), not an inference from the mode.
+                int(fault_active),
                 content_hash({"intent": str(selected.document.get("intent", ""))}),
                 IMPLEMENTATION_VERSION,
                 str(RunState.ARMED.value),

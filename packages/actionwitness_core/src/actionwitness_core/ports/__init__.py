@@ -31,6 +31,7 @@ from actionwitness_core.ports.models import (
     ExecutionContext,
     Observation,
     ScenarioSelection,
+    ScenarioState,
     TargetDescriptor,
     TargetToolSpec,
     ToolExecutionResult,
@@ -43,6 +44,7 @@ __all__ = [
     "FindingRepository",
     "ManagedTargetAdapter",
     "ObservationProvider",
+    "ScenarioReportingAdapter",
     "SnapshotRepository",
     "TargetAdapter",
     "UnitOfWork",
@@ -105,6 +107,28 @@ class ManagedTargetAdapter(TargetAdapter, Protocol):
         self, workspace_id: str, tool_name: str, arguments: dict, context: ExecutionContext
     ) -> ToolExecutionResult:
         """Execute one allowlisted tool and return what it reported."""
+        ...
+
+
+@runtime_checkable
+class ScenarioReportingAdapter(TargetAdapter, Protocol):
+    """A target that can say whether its injected defect is currently on (§23.1).
+
+    Deliberately narrow, and deliberately separate from `ManagedTargetAdapter`.
+    Most targets inject nothing and have nothing to report; requiring the method
+    of every adapter would mean writing a stub that answers `False` for targets
+    where the question is meaningless, and a stub answering `False` is
+    indistinguishable from a real answer.
+
+    So the capability is asked for rather than assumed — `isinstance` against
+    this runtime-checkable protocol — and an adapter that advertises fault
+    profiles but cannot answer is refused at arming rather than defaulted. That
+    refusal is the §16.1 shape: a run whose report would name an active defect
+    nobody confirmed is worse than a run that does not start.
+    """
+
+    async def scenario_state(self, workspace_id: str) -> ScenarioState:
+        """Report the scenario this target is running for `workspace_id`."""
         ...
 
 

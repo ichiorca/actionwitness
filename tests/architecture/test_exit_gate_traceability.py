@@ -194,17 +194,16 @@ EXIT_GATE_005: dict[str, tuple[str, str]] = {
         "tests/integration/test_005_exit_gate.py",
         "test_gate_5_ac_20_a_completed_runs_scenario_never_changes",
     ),
-    # AC-20's "activates the fault only for the pre_fix run" holds
-    # behaviourally — criterion 1 is that difference — but is not recorded as a
-    # field: `runs.fault_active` is never populated, and the 005 plan carries it
-    # as an open operator decision. The covering test characterizes the gap and
-    # fails once the field lands, which is the prompt to restore this entry to
-    # an ordinary assertion. Named here so the gap is part of the map rather
-    # than an omission from it.
-    "5i. AC-20 — the fault is active only for `pre_fix` (KNOWN GAP: recorded "
-    "behaviourally, not as `runs.fault_active`; awaiting an operator decision)": (
+    # Was a KNOWN GAP for several milestones: the bullet held behaviourally
+    # while `runs.fault_active` was never written, so the field a reader would
+    # check said `false` on both runs. Closed 2026-09-01 — the adapter reports
+    # the state (§23.1) and arming copies it in — and this is an ordinary
+    # assertion again, which is exactly what the characterization test asked
+    # for by name at the moment it failed.
+    "5i. AC-20 — the fault is active only for `pre_fix`, behaviourally and as "
+    "the recorded `runs.fault_active`": (
         "tests/integration/test_005_exit_gate.py",
-        "test_gate_5_ac_20_the_fault_activation_field_is_not_yet_recorded",
+        "test_gate_5_ac_20_the_fault_is_recorded_as_active_only_in_pre_fix",
     ),
 }
 

@@ -648,3 +648,86 @@ def test_the_adapter_constructs_no_http_client() -> None:
     }
     assert "httpx.AsyncClient" not in constructed
     assert "httpx.Client" not in constructed
+
+
+# --- what the target says about itself (§23.1, AC-20) ------------------------
+
+
+@pytest.mark.adapters
+async def test_the_adapter_reports_the_scenario_it_prepared(adapter: BuggyStoreAdapter) -> None:
+    """§23.1: `fault_active` is "derived by the adapter", so it must be askable.
+
+    Asserted both ways round on the same adapter. A method that only ever
+    returned `True` would pass a one-sided test and would record every run as
+    faulty, which is the false claim this product exists to catch — pointed at
+    itself.
+    """
+    await _armed(adapter, "pre_fix", "discount_reported_but_not_applied")
+    running = await adapter.scenario_state("ws-1")
+
+    await _armed(adapter, "post_fix", "discount_reported_but_not_applied")
+    quiet = await adapter.scenario_state("ws-1")
+
+    assert running.fault_active is True
+    assert quiet.fault_active is False
+
+
+@pytest.mark.adapters
+async def test_a_selected_profile_alone_does_not_make_the_fault_active(
+    adapter: BuggyStoreAdapter,
+) -> None:
+    """The distinction the field exists for.
+
+    A `post_fix` comparison run carries the same `failure_profile` as its
+    `pre_fix` pair — that is what makes the pair differ in one variable — and the
+    fault is switched off. A reader who could not tell "recorded" from "running"
+    would read the post-fix run as faulty.
+    """
+    await _armed(adapter, "post_fix", "discount_reported_but_not_applied")
+
+    assert (await adapter.scenario_state("ws-1")).fault_active is False
+
+
+@pytest.mark.adapters
+async def test_no_fault_profile_is_never_reported_as_active(adapter: BuggyStoreAdapter) -> None:
+    await _armed(adapter, "pre_fix", "none")
+
+    assert (await adapter.scenario_state("ws-1")).fault_active is False
+
+
+@pytest.mark.adapters
+async def test_a_store_that_does_not_report_the_field_is_refused_not_defaulted() -> None:
+    """An adapter response is untrusted input like any other (constitution §5).
+
+    `False` would be read as "the target confirmed no defect is running", which
+    is a different statement from "the target did not say". The second one has to
+    raise, or a store that stopped reporting would silently relabel every faulty
+    run as clean.
+    """
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"scenario_mode": "pre_fix"})
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="http://buggy-store.test"
+    ) as client:
+        with pytest.raises(ValueError, match="fault_active"):
+            await BuggyStoreAdapter(client).scenario_state("ws-1")
+
+
+@pytest.mark.adapters
+async def test_a_non_boolean_report_is_refused_too() -> None:
+    """`"true"` is not `True`.
+
+    A truthy string would sail through a `bool(...)` coercion and record an
+    active fault on the strength of a type error.
+    """
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"fault_active": "true"})
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="http://buggy-store.test"
+    ) as client:
+        with pytest.raises(ValueError, match="fault_active"):
+            await BuggyStoreAdapter(client).scenario_state("ws-1")

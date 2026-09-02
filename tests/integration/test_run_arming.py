@@ -30,6 +30,9 @@ import httpx
 import pytest
 from actionwitness_core.security.canonical import content_hash
 from actionwitness_service.api.app import API_PREFIX, create_app
+from actionwitness_service.api.errors import ApiError, ApiErrorCode
+from actionwitness_service.application.adapter_registry import AdapterRegistry
+from actionwitness_service.application.run_service import RunService, WorkspaceConfiguration
 from actionwitness_service.persistence.database import Database
 from buggy_store.api import create_app as create_store
 from fastapi import FastAPI
@@ -510,3 +513,89 @@ async def _put_a_mug_in_the_cart(harness: FastAPI, workspace_id: str) -> None:
         },
     )
     assert response.status_code < 400, response.text
+
+
+# --- §23.1: the target reports the fault, and silence is not "no" ------------
+
+
+@pytest.mark.integration
+async def test_a_fault_nobody_can_confirm_refuses_to_arm() -> None:
+    """§16.1 and §23.1, at the seam where they meet.
+
+    `_require_injectable_profile` has already established that the selected
+    target *advertises* the profile. If the adapter then cannot say whether it is
+    running, the harness has a run whose report would name an active defect on
+    nobody's authority. Defaulting to `false` would understate it and defaulting
+    to `true` would invent it, so it refuses.
+
+    Unreachable in this build — the one adapter that injects anything also
+    reports — and that is the reason to test it. It is the branch that stops a
+    future adapter from arriving with faults it cannot describe, and nothing else
+    would notice.
+    """
+
+    class MuteAdapter:
+        """Advertises nothing about its scenario, like every external target."""
+
+    class OneAdapterRegistry:
+        NO_FAULT = AdapterRegistry.NO_FAULT
+
+        def adapter(self, name: str) -> object:
+            return MuteAdapter()
+
+    service = RunService(
+        database=None,  # type: ignore[arg-type]
+        registry=OneAdapterRegistry(),  # type: ignore[arg-type]
+        locks=None,  # type: ignore[arg-type]
+    )
+    selected = WorkspaceConfiguration(
+        contract_id="c-1",
+        contract_content_hash="h",
+        target_id="silent-target",
+        adapter_id="silent",
+        scenario_mode="pre_fix",
+        failure_profile="discount_reported_but_not_applied",
+        document={},
+    )
+
+    with pytest.raises(ApiError) as refusal:
+        await service._fault_state(selected, "ws-1")
+
+    assert refusal.value.code is ApiErrorCode.TARGET_UNAVAILABLE
+    assert "discount_reported_but_not_applied" in str(refusal.value)
+
+
+@pytest.mark.integration
+async def test_a_target_that_injects_nothing_records_no_active_fault() -> None:
+    """The same mute adapter, with nothing selected, is not an error.
+
+    An external target injects nothing and has nothing to report, and refusing it
+    would make every observed-only target unarmable. `False` here is a true
+    statement rather than a default.
+    """
+
+    class MuteAdapter:
+        pass
+
+    class OneAdapterRegistry:
+        NO_FAULT = AdapterRegistry.NO_FAULT
+
+        def adapter(self, name: str) -> object:
+            return MuteAdapter()
+
+    service = RunService(
+        database=None,  # type: ignore[arg-type]
+        registry=OneAdapterRegistry(),  # type: ignore[arg-type]
+        locks=None,  # type: ignore[arg-type]
+    )
+    selected = WorkspaceConfiguration(
+        contract_id="c-1",
+        contract_content_hash="h",
+        target_id="silent-target",
+        adapter_id="silent",
+        scenario_mode="external_current",
+        failure_profile=None,
+        document={},
+    )
+
+    assert await service._fault_state(selected, "ws-1") is False

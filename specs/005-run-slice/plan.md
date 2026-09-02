@@ -162,13 +162,15 @@ arming observes and does not call `prepare()`. A run armed against whatever
 state the target already holds is the honest default — preconditions are what
 decide whether that state is acceptable.
 
-### T1 — `fault_active` is left at its default
+### T1 — `fault_active` is left at its default. **CLOSED 2026-09-01.**
 
 §17.1's `runs.fault_active` cannot be derived by the harness: whether a profile
 is active in a given scenario mode is target semantics, and §9.1 forbids the
 harness from interpreting mode names. The selection itself (`scenario_mode`,
-`failure_profile`) is recorded faithfully. The adapter reports activation, so
-the column is populated in T10 where the adapter is consulted.
+`failure_profile`) is recorded faithfully.
+
+Now populated. The adapter reports activation and arming copies it in; see the
+T10 entry below for which of the three queued options was taken and why.
 
 ### T1 — event order is `run_armed` then `snapshot_captured`
 
@@ -750,7 +752,7 @@ refuse it too, but a refusal arriving *after* a reseed attempt is harder to
 reason about than one arriving instead of it — and a test counts the `prepare`
 calls to prove none happened.
 
-### T10 — `runs.fault_active` is still unset (**operator decision**)
+### T10 — `runs.fault_active` is still unset. **CLOSED 2026-09-01 — option 2.**
 
 §23.1's `ScenarioReference.fault_active` is documented as "derived by the
 adapter", and §17.1 gives `runs` the column — but `ManagedTargetAdapter.prepare`
@@ -767,7 +769,35 @@ Populating it needs one of:
    populated when the pre/post comparison needs it.
 
 The selection itself (`scenario_mode`, `failure_profile`) is recorded faithfully
-either way, and the comparison in T11 keys on those. **Queued for the operator.**
+either way, and the comparison in T11 keys on those.
+
+**Taken: option 2**, deliberately, because it is the one of the three that needs
+no operator sign-off. Option 1 changes `ManagedTargetAdapter.prepare`'s return
+type, and the escalation contract reserves an incompatible public-protocol change
+for the operator; option 3 was the status quo, and the characterization test
+under T13 existed only to keep it visible.
+
+What landed:
+
+- `ScenarioState` (`ports/models.py`) — a value type carrying `fault_active`,
+  kept separate from `ScenarioSelection` because a selection is what was *asked
+  for* and this is what the target says is *true* of itself.
+- `ScenarioReportingAdapter` (`ports/__init__.py`) — a narrow, runtime-checkable
+  protocol with `scenario_state(workspace_id)`. Narrow on purpose: most targets
+  inject nothing, and a stub answering `False` for them would be
+  indistinguishable from a real answer.
+- `BuggyStoreAdapter.scenario_state` reads the store's own
+  `GET /store/scenario`, which has always reported `fault_active` in its
+  document and which the adapter previously discarded. A missing or non-boolean
+  value raises rather than defaulting — `False` would read as "the target
+  confirmed no defect is running", which is not "the target did not say".
+- `RunService._fault_state` asks during arming's phase 2, beside the
+  authoritative observation and outside every lock, and the answer is written
+  into the run.
+
+No migration: the column has existed since migration 1 and was simply never
+written. Nothing about `prepare` changed, so every existing adapter and every
+caller is untouched.
 
 ### T10 — earlier tests keep setting the scenario at source, deliberately
 
@@ -937,7 +967,7 @@ added later on the day it is added, including one nobody meant to expose;
 §20.3 puts redaction before export, so the published field list is named in one
 reviewable place and `redacted_payload_json` never reaches a client as itself.
 
-### T13 — AC-20's fault-activation bullet is met behaviourally, not as a field
+### T13 — AC-20's fault-activation bullet was met behaviourally, not as a field. **CLOSED 2026-09-01.**
 
 "Activates the fault only for the `pre_fix` run" holds where it matters: the two
 runs reach opposite verdicts, which is criterion 1. What is missing is the
@@ -953,8 +983,16 @@ escalation rather than a fix. The characterization test gives the same signal �
 implementing `fault_active` breaks it — without touching the gate. The
 traceability map names it as a known gap rather than omitting the bullet.
 
-**Still the operator's decision** (carried from T10): protocol change, new
-optional method, or accept the field stays unset in Tier 1.
+Closed by T10's option 2. The characterization test did exactly what it was
+written to do: implementing the field broke it, its failure message named the
+next two steps, and both were taken —
+`test_gate_5_ac_20_the_fault_is_recorded_as_active_only_in_pre_fix` now asserts
+both halves of the bullet, and the traceability map carries an ordinary entry
+instead of a known gap.
+
+Worth keeping the shape in mind for the next one: a gap recorded as a passing
+test that fails when the gap closes is more durable than a `TODO`, because it
+cannot be forgotten and cannot be satisfied by wishful reading.
 
 ### T13 — criterion 3 is recorded as it behaves
 

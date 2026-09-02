@@ -46,6 +46,7 @@ __all__ = [
     "ExecutionContext",
     "Observation",
     "ScenarioSelection",
+    "ScenarioState",
     "TargetDescriptor",
     "TargetToolSpec",
     "ToolExecutionResult",
@@ -137,6 +138,24 @@ class ScenarioSelection(CoreModel):
                 f"{sorted(descriptor.supported_scenario_modes)}",
                 code=CoreErrorCode.CONTRACT_VALIDATION_FAILED,
             )
+
+
+class ScenarioState(CoreModel):
+    """What a target reports about the scenario it is actually running (§23.1).
+
+    §23.1 says `fault_active` is "derived by the adapter rather than chosen by
+    the operator", and §9.1 forbids the core from interpreting scenario-mode
+    names. Those two rules together mean the harness cannot compute this: it
+    must be told, by the only party that knows whether a defect is switched on.
+
+    A separate type from `ScenarioSelection` on purpose. A selection is what was
+    *asked for* and is copied into the run at arming; this is what the target
+    says is *true* of itself right now. Collapsing them would make "recorded" and
+    "running" the same field, which is precisely the distinction a `post_fix`
+    comparison run exists to express.
+    """
+
+    fault_active: bool
 
 
 class TargetToolSpec(CoreModel):
