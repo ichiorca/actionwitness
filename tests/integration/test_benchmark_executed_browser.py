@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote
 
@@ -63,8 +64,59 @@ SCENARIOS = [
 ] + [{"scenario_id": CLEAN, "scenario_mode": "post_fix", "failure_profile": None}]
 
 
+class _JourneyClock:
+    """Time as this journey would really have spent it: a second per request.
+
+    Every test here drives a whole benchmark — a contract, three complete runs
+    of three tool calls each, an import, a binding, a finalize, and the reads
+    that check the result. That is upwards of thirty requests, and FR-009 meters
+    thirty as a burst.
+
+    A human doing this journey spends minutes on it and never approaches the
+    limit. In-process ASGI spends about two seconds on it, so the bucket refills
+    by four tokens where reality would have refilled it hundreds of times, and
+    the suite ends up decided by how fast the machine ran: fast enough and the
+    burst is exhausted, slow enough and it is not. That is the wall-clock
+    dependence §6 forbids in a required suite, and it is why this module had one
+    test failing while its neighbours — a request or two lighter — passed.
+
+    `test_004_exit_gate` stops the clock for the mirror-image reason: it is
+    *testing* the burst, so any refill at all makes the answer depend on speed.
+    This module is testing the matrix, so what it needs is not zero refill but
+    honest refill. A second per request is well under what the real journey
+    takes and comfortably over what the limiter needs, and the limiter itself is
+    untouched — it still meters every request against the clock it is given.
+
+    Time also stands still *within* a request, which is stricter than the real
+    clock: two timestamps taken during one operation agree, as §1's injected
+    clocks are there to guarantee.
+    """
+
+    #: Arbitrary and fixed, so nothing here can depend on the day it runs.
+    START = datetime(2026, 1, 1, tzinfo=UTC)
+
+    #: Per request. Two tokens refill for every one spent, so a journey of any
+    #: length stays inside FR-009 without the limit being relaxed.
+    STEP = timedelta(seconds=1)
+
+    def __init__(self) -> None:
+        self._now = self.START
+
+    def __call__(self) -> datetime:
+        return self._now
+
+    async def advance(self, _request: httpx.Request) -> None:
+        """An httpx request hook: one step before each request is sent."""
+        self._now += self.STEP
+
+
 @pytest.fixture
-async def stack(tmp_path: Path) -> AsyncIterator[FastAPI]:
+def clock() -> _JourneyClock:
+    return _JourneyClock()
+
+
+@pytest.fixture
+async def stack(tmp_path: Path, clock: _JourneyClock) -> AsyncIterator[FastAPI]:
     store = create_store(database_path=tmp_path / "store.sqlite3")
     async with (
         store.router.lifespan_context(store),
@@ -78,6 +130,7 @@ async def stack(tmp_path: Path) -> AsyncIterator[FastAPI]:
                 "HARNESS_ARTIFACT_ROOT": str(tmp_path / "artifacts"),
             },
             database_path=tmp_path / "harness.sqlite3",
+            clock=clock,
             target_client=target_client,
         )
         async with harness.router.lifespan_context(harness):
@@ -85,10 +138,11 @@ async def stack(tmp_path: Path) -> AsyncIterator[FastAPI]:
 
 
 @pytest.fixture
-async def visitor(stack: FastAPI) -> AsyncIterator[httpx.AsyncClient]:
+async def visitor(stack: FastAPI, clock: _JourneyClock) -> AsyncIterator[httpx.AsyncClient]:
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=stack, raise_app_exceptions=False),
         base_url="https://harness.test",
+        event_hooks={"request": [clock.advance]},
     ) as client:
         yield client
 
