@@ -658,6 +658,95 @@ EXIT_GATE_014: dict[str, tuple[str, str]] = {
     ),
 }
 
+#: 015's exit gate, in the spec's own words.
+#:
+#: Criterion 5 is the lane gate again, for the reason given above 013's map.
+#:
+#: Criterion 3 is the one worth reading twice. "Refuses at every layer" is three
+#: separate claims, and the third — that no audit module can reach the network at
+#: all — is the only one that survives somebody rewriting the calling code, so it
+#: is named here from the architecture lane rather than folded into the API test.
+EXIT_GATE_015: dict[str, tuple[str, str]] = {
+    "1. with the module unconfigured, nothing about the feature is reachable and "
+    "the capability surface reports it unavailable": (
+        "tests/integration/test_015_exit_gate.py",
+        "test_gate_1_an_unconfigured_module_reaches_nothing",
+    ),
+    "1b. …and unconfigured is what the deployment ships as, read from the "
+    "settings default rather than from documentation (§29.1)": (
+        "tests/architecture/test_audit_guardrails.py",
+        "test_the_deployment_ships_with_the_audit_disabled",
+    ),
+    "2. an audit against the half-broken fixture names the silently-failing cart tool": (
+        "tests/integration/test_015_exit_gate.py",
+        "test_gate_2_the_audit_names_the_tool_that_lied",
+    ),
+    "2b. …with reported-versus-observed evidence beside it": (
+        "tests/integration/test_015_exit_gate.py",
+        "test_gate_2_the_evidence_shows_the_claim_beside_the_observation",
+    ),
+    "2c. …while an honest storefront is not accused (the falsifiability half)": (
+        "tests/integration/test_015_exit_gate.py",
+        "test_gate_2_an_honest_storefront_is_not_accused",
+    ),
+    "2d. …and the never-invoked tools are listed as present-but-unexercised": (
+        "tests/integration/test_015_exit_gate.py",
+        "test_gate_2_the_never_invoked_tools_are_reported_not_exercised",
+    ),
+    "2e. …and the report names the pack that was applied (FR-161)": (
+        "tests/integration/test_015_exit_gate.py",
+        "test_gate_2_the_pack_offered_is_the_pack_named_in_the_report",
+    ),
+    "2f. …the fixture's cart tool really does answer identically either way, "
+    "which is the premise the whole criterion rests on": (
+        "apps/actionwitness_service/frontend/src/test/halfBrokenStorefront.test.ts",
+        "returns the same words when it is telling the truth",
+    ),
+    "3. a non-allowlisted origin is refused at the API": (
+        "tests/integration/test_015_exit_gate.py",
+        "test_gate_3_a_non_allowlisted_origin_is_refused_at_the_api",
+    ),
+    "3b. …and at the adapter, which will not accept an observation from anywhere else (§12.17)": (
+        "tests/integration/test_015_exit_gate.py",
+        "test_gate_3_a_non_allowlisted_origin_is_refused_at_the_adapter",
+    ),
+    "3c. …and structurally: no audit module holds a network client at all (FR-160a)": (
+        "tests/architecture/test_audit_guardrails.py",
+        "test_no_audit_module_can_reach_the_network",
+    ),
+    "3d. …nor any affordance for more than one target, since a list of origins "
+    "is a scan queue with a friendlier name": (
+        "tests/architecture/test_audit_guardrails.py",
+        "test_the_audit_api_accepts_one_origin_and_never_a_list",
+    ),
+    "3e. …and no offered pack can dispatch checkout or order management (FR-162)": (
+        "tests/integration/test_015_exit_gate.py",
+        "test_gate_3_no_offered_pack_can_dispatch_a_consequential_tool",
+    ),
+    "4. the report carries none of the harness's vocabulary": (
+        "tests/integration/test_015_exit_gate.py",
+        "test_gate_4_the_report_uses_no_harness_vocabulary",
+    ),
+    "4b. …states its own limits, so a clean result is not read as a guarantee": (
+        "tests/integration/test_015_exit_gate.py",
+        "test_gate_4_the_report_states_its_own_limits",
+    ),
+    "4c. …and needs no browser to render, being data rather than a component": (
+        "tests/integration/test_015_exit_gate.py",
+        "test_gate_4_the_report_needs_no_browser_to_render",
+    ),
+    "4d. …and every outcome the classifier can produce has a sentence, so no row renders blank": (
+        "tests/integration/test_015_exit_gate.py",
+        "test_gate_4_every_outcome_the_classifier_can_produce_has_merchant_copy",
+    ),
+    "5. full suite, architecture lane, and both frontend gates green (DISCHARGED "
+    "BY RUNNING THEM; the covering test is the lane gate that fails if one "
+    "stops selecting tests)": (
+        "tests/architecture/test_test_lanes.py",
+        "test_every_lane_selects_at_least_one_test",
+    ),
+}
+
 MAPS = {
     "003": EXIT_GATE_003,
     "004": EXIT_GATE_004,
@@ -667,6 +756,9 @@ MAPS = {
     "008": EXIT_GATE_008,
     "009": EXIT_GATE_009,
     "010": EXIT_GATE_010,
+    "013": EXIT_GATE_013,
+    "014": EXIT_GATE_014,
+    "015": EXIT_GATE_015,
 }
 
 
@@ -780,6 +872,9 @@ PUBLISHED_CRITERIA: dict[str, int] = {
     "008": 5,
     "009": 6,
     "010": 6,
+    "013": 6,
+    "014": 6,
+    "015": 5,
 }
 
 

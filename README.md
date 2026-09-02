@@ -39,6 +39,7 @@ per-milestone contracts derived from it are tracked under `specs/`.
 - [Human–agent guidance and confirmation](#humanagent-guidance-and-confirmation)
 - [Regression evals: schema, runner, CLI](#regression-evals-schema-runner-cli)
 - [Importing an external evaluator report (Tier 2)](#importing-an-external-evaluator-report-tier-2)
+- [Auditing a storefront you did not build](#auditing-a-storefront-you-did-not-build)
 - [Writing an adapter](#writing-an-adapter)
 - [Deployment](#deployment)
 - [Security and data handling](#security-and-data-handling)
@@ -377,6 +378,37 @@ POST /api/v1/benchmarks/{benchmark_id}/imports
 _Upstream stable-trial-ID reporter issue: not yet filed. Filing is recommended and
 non-blocking (spec §25.3)._
 
+## Auditing a storefront you did not build
+
+Some storefronts have agent tools on them that their owners never installed and
+cannot test. Storefront Witness audits one such surface — a single origin the
+operator asserts they are authorized on — and returns a report written for the shop
+owner: which agent tools work, which report success while the store does not change,
+which were deliberately left alone, and what to fix first.
+
+```
+POST /api/v1/audits            # assert one authorized origin
+GET  /api/v1/audits/current
+```
+
+- **Off unless configured.** `external_audit` ships disabled, so an anonymous
+  workspace can never assert authorization for an origin the deployment did not
+  allowlist (`EXTERNAL_AUDIT_ALLOWED_ORIGINS`, server-controlled).
+- **One origin, never a list.** The request model has no field that accepts a
+  collection. There is no crawler and no discovery path.
+- **The harness makes no request to the audited site.** The independent cart read
+  happens in the operator's own browser, through the platform's session API. No
+  module in the audit imports an HTTP client, which is asserted in the architecture
+  lane rather than promised in a comment.
+- **Never checkout, never an order.** `proceed_to_checkout` and `manage_orders` are
+  reported as present and reachable, and no shipped contract pack can dispatch them.
+- **A pass is evidence, not a warranty.** The report states its own limits.
+
+The context this feature was built for — and the specific claims this project does
+and does not make about it — is `docs/storefront-witness.md`. The public findings
+cited there are **published third-party reports**, attributed and dated; ActionWitness
+has scanned no brand it does not own.
+
 ## Writing an adapter
 
 Three protocols in `packages/actionwitness_core/src/actionwitness_core/ports/__init__.py`:
@@ -471,7 +503,7 @@ own state at `GET /api/v1/workspace` under `modules`.
 |---|---|---|
 | `shopify` | **off** (Tier 3, optional) | Needs an authorized development store, one configured variant and currency. The adapter and theme bridge are unmounted scaffolds. |
 | `live_evaluator` | **off** (Tier 3, optional) | Live model runs need a provider credential. Recorded fixtures are used instead, and are labelled `recorded_fixture` rather than `live_model_run`. |
-| `external_audit` | **off** (Tier 3, optional) | An anonymous workspace must never assert authorization for an origin the deployment did not configure. |
+| `external_audit` | **off by default** (Tier 3, optional) | Implemented and tested; ships disabled because an anonymous workspace must never assert authorization for an origin the deployment did not configure. Enabling it needs `EXTERNAL_AUDIT_ALLOWED_ORIGINS` — see [above](#auditing-a-storefront-you-did-not-build). |
 
 Other known limitations:
 
