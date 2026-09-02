@@ -87,8 +87,20 @@ def _normalize(origin: str) -> str:
     """
     from urllib.parse import urlsplit
 
-    parsed = urlsplit(origin.strip())
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-        return origin.strip().lower()
-    port = f":{parsed.port}" if parsed.port else ""
-    return f"{parsed.scheme.lower()}://{parsed.hostname.lower()}{port}"
+    bare = origin.strip().lower()
+    try:
+        parsed = urlsplit(origin.strip())
+        hostname, port_number = parsed.hostname, parsed.port
+    except ValueError:
+        # Both calls raise on input no browser sends but any client can write:
+        # an unclosed IPv6 authority raises from `urlsplit` itself, while a
+        # non-numeric or out-of-range port raises only when `.port` is *read*,
+        # because splitting is lazy. This function's entire job is to decide a
+        # refusal, so an unparseable origin takes the path the docstring already
+        # describes — it normalizes to itself and fails the equality check —
+        # rather than becoming a 500 from inside the middleware.
+        return bare
+    if parsed.scheme not in {"http", "https"} or not hostname:
+        return bare
+    port = f":{port_number}" if port_number else ""
+    return f"{parsed.scheme.lower()}://{hostname.lower()}{port}"

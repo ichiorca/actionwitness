@@ -147,6 +147,44 @@ async def test_health_checks_are_excluded_from_the_limit(app: FastAPI) -> None:
     assert set(statuses) == {200}
 
 
+async def test_a_path_that_merely_starts_like_a_health_check_is_still_metered(
+    app: FastAPI,
+) -> None:
+    """The exemption is for `/healthz`, not for everything spelled like it.
+
+    Matching the exemption on characters rather than path segments made
+    `/healthz-anything` — and `/assetsX`, and `/demo/assets.zip` — exempt too.
+    None of them route anywhere, but the exemption is consulted before routing,
+    so appending one character to a health check bought unlimited unmetered 404s
+    from a service whose whole rate-limit story is per-peer buckets.
+    """
+    # Arrange / Act
+    async with client(app) as visitor:
+        statuses = [
+            (await visitor.get("/healthz-anything")).status_code
+            for _ in range(fr009.REQUEST_BURST + 1)
+        ]
+
+    # Assert — metered like any other unknown path: 404 until the bucket is
+    # spent, then the refusal.
+    assert statuses[-1] == 429, "a near-miss of an exempt prefix must not be exempt"
+    assert set(statuses[: fr009.REQUEST_BURST]) == {404}
+
+
+async def test_the_real_health_check_and_its_assets_stay_exempt(app: FastAPI) -> None:
+    """The other half: narrowing the match must not un-exempt anything real."""
+    # Arrange / Act
+    async with client(app) as visitor:
+        health = [
+            (await visitor.get("/healthz")).status_code for _ in range(fr009.REQUEST_BURST + 5)
+        ]
+        asset = await visitor.get("/assets/does-not-exist.js")
+
+    # Assert
+    assert set(health) == {200}
+    assert asset.status_code != 429
+
+
 async def test_health_checks_do_not_spend_another_route_s_allowance(app: FastAPI) -> None:
     """Exclusion means excluded, not cheap."""
     # Arrange

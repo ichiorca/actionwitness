@@ -24,13 +24,14 @@ was in whitespace or key order. The row is the anchor in both: an embedded
 
 from __future__ import annotations
 
-import json
 from typing import Any, Final
 
-from actionwitness_core.security.canonical import canonical_text, document_content_hash
-
 from actionwitness_service.api.errors import ApiError, ApiErrorCode
-from actionwitness_service.application.artifacts import OUTCOME_REPORT, ArtifactStore
+from actionwitness_service.application.artifacts import (
+    OUTCOME_REPORT,
+    ArtifactCorrupt,
+    ArtifactStore,
+)
 from actionwitness_service.application.authorization import WorkspaceScope
 from actionwitness_service.persistence.database import UnitOfWork
 
@@ -92,29 +93,17 @@ class ReportService:
         }
 
     def _verified(self, relative_path: str, expected_hash: str) -> Any:
-        """The document, or a refusal — never a document that failed its hash."""
-        try:
-            stored = self._artifacts.read_bytes(relative_path)
-        except (OSError, ValueError) as missing:
-            # A row without its file is the crash window `ArtifactStore`
-            # documents in reverse; it is unreadable evidence either way, so it
-            # gets the same explicit non-pass as corrupted evidence.
-            raise ApiError(ApiErrorCode.HARNESS_ERROR, _CORRUPT) from missing
+        """The document, or a refusal — never a document that failed its hash.
 
+        The checks themselves live in `ArtifactStore.verified_document`, which
+        is where the bytes and the hash are written, so the rule that decides
+        whether stored evidence is still the sealed evidence has one
+        implementation rather than one per reader. What stays here is the
+        refusal this route sends: `_CORRUPT` deliberately names no path and no
+        hash, because a reader who learned both would hold the two values needed
+        to forge a replacement.
+        """
         try:
-            text = stored.decode("utf-8")
-            document = json.loads(text)
-        except (UnicodeDecodeError, json.JSONDecodeError) as unreadable:
-            raise ApiError(ApiErrorCode.HARNESS_ERROR, _CORRUPT) from unreadable
-
-        if not isinstance(document, dict):
-            raise ApiError(ApiErrorCode.HARNESS_ERROR, _CORRUPT)
-        if document_content_hash(document) != expected_hash:
-            raise ApiError(ApiErrorCode.HARNESS_ERROR, _CORRUPT)
-        if canonical_text(document) != text:
-            # Same content, different bytes. Not necessarily an attack — but the
-            # file is no longer the one that was sealed, and a reader recomputing
-            # the hash from these bytes would get a different answer than the
-            # writer did.
-            raise ApiError(ApiErrorCode.HARNESS_ERROR, _CORRUPT)
-        return document
+            return self._artifacts.verified_document(relative_path, expected_hash)
+        except ArtifactCorrupt as corrupt:
+            raise ApiError(ApiErrorCode.HARNESS_ERROR, _CORRUPT) from corrupt

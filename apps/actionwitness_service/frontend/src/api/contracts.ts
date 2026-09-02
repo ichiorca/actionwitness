@@ -80,6 +80,72 @@ export function parseCreatedContract(value: unknown): CreatedContract {
   };
 }
 
+/**
+ * One immutable contract record, keyed as `GET /contracts/{id}` sends it.
+ *
+ * Deliberately snake_case, and deliberately not the camelCase style the rest of
+ * this module uses for UI-facing types. This shape has exactly one consumer —
+ * `get_outcome_contract` — and what an agent reads is the project's published
+ * vocabulary (§15.2, Appendix D), not a TypeScript house style. Renaming the
+ * keys on the way through would hand the agent a document whose field names
+ * appear in no spec it can read, which is the same drift FR-150 names for
+ * findings.
+ */
+export interface OutcomeContractDocument {
+  readonly contract_id: string;
+  readonly name: string;
+  readonly schema_version: string;
+  readonly content_hash: string;
+  readonly source_template_id: string | null;
+  readonly is_built_in: boolean;
+  /** The contract itself — assertions, policies, preconditions. */
+  readonly document: Record<string, unknown>;
+}
+
+/**
+ * Narrow one contract record.
+ *
+ * The identity fields are required because a contract an agent cannot name or
+ * hash is not a contract it can act on: `content_hash` in particular is how a
+ * reader checks that the document it was handed is the one the run was armed
+ * against, and defaulting it to `""` would make an unverifiable document look
+ * verifiable. `document` is kept as an opaque record rather than narrowed
+ * further — §17 owns its schema, and a second opinion here would be a second
+ * contract parser that eventually disagrees with the one that decides verdicts.
+ */
+export function parseOutcomeContract(value: unknown): OutcomeContractDocument {
+  const record = requireRecord(value, "the outcome contract");
+  return {
+    contract_id: requireString(record["contract_id"], "contract_id"),
+    name: requireString(record["name"], "name"),
+    schema_version: requireString(record["schema_version"], "schema_version"),
+    content_hash: requireString(record["content_hash"], "content_hash"),
+    source_template_id: optionalString(record["source_template_id"]),
+    is_built_in: record["is_built_in"] === true,
+    document: requireRecord(record["document"], "document"),
+  };
+}
+
+/**
+ * Read one contract (§15.2's `GET /contracts/{contract_id}`).
+ *
+ * §15.2 also describes a `/published` variant, and `get_outcome_contract` used
+ * to call it. That endpoint does not exist: `routes/contracts.py` says so in as
+ * many words, because publication belongs to the proposal-mode milestone. The
+ * tool therefore 404'd on every call. This is the route the service actually
+ * serves, and it is workspace-scoped, so an identifier learned from elsewhere
+ * still reads as a 404 (FR-006).
+ */
+export async function readOutcomeContract(
+  contractId: string,
+  signal?: AbortSignal,
+): Promise<OutcomeContractDocument> {
+  return request(`/contracts/${encodeURIComponent(contractId)}`, {
+    parse: parseOutcomeContract,
+    signal,
+  });
+}
+
 export async function listContractTemplates(
   signal?: AbortSignal,
 ): Promise<readonly ContractTemplateSummary[]> {

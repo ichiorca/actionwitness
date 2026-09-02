@@ -270,6 +270,52 @@ async def test_a_mistyped_public_origin_falls_back_to_the_request_origin(
     assert refused.status_code == 403
 
 
+async def test_a_production_deployment_without_a_public_origin_is_not_ready(
+    tmp_path: Path,
+) -> None:
+    """§20.1: in production, an unset origin is a weakened policy, not a default.
+
+    With no `HARNESS_PUBLIC_ORIGIN` the policy compares each mutation against the
+    origin the *request itself* presents — correct for documented local
+    development, and in a deployed service equivalent to accepting whatever the
+    caller claims. Reported through readiness rather than a refusal to start, so
+    a bad value holds the new deploy back instead of taking the service down.
+    """
+    # Arrange — production, with the one variable that matters left out.
+    environ = dict(PRODUCTION_ENV)
+    environ.pop("HARNESS_PUBLIC_ORIGIN", None)
+    application = create_app(environ=environ, database_path=tmp_path / "harness.sqlite3")
+
+    # Act
+    async with application.router.lifespan_context(application), visitor(application) as client:
+        response = await client.get("/healthz")
+
+    # Assert
+    assert response.status_code == 503, "a deployed service with no origin policy is not ready"
+    assert response.json()["origin_policy"] == "unconfigured"
+    assert response.json()["status"] == "degraded"
+
+
+async def test_a_local_deployment_without_a_public_origin_stays_ready(tmp_path: Path) -> None:
+    """The counterpart, and the reason the check is environment-scoped.
+
+    Local development is documented as running without a configured origin. If
+    the check were unconditional, every developer's first run would report an
+    unhealthy service.
+    """
+    # Arrange / Act
+    application = create_app(
+        environ={"HARNESS_ENV": "local", "BUGGY_STORE_ENABLED": "false"},
+        database_path=tmp_path / "harness.sqlite3",
+    )
+    async with application.router.lifespan_context(application), visitor(application) as client:
+        response = await client.get("/healthz")
+
+    # Assert
+    assert response.status_code == 200
+    assert response.json()["origin_policy"] == "configured"
+
+
 async def test_the_health_check_reports_an_unreadable_database_as_degraded(
     tmp_path: Path,
 ) -> None:

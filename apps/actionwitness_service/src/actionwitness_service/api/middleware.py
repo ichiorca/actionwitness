@@ -110,6 +110,21 @@ _EXEMPT_DOCUMENTS: Final = frozenset({"/", "/demo", "/demo/"})
 _WORKSPACE_EXEMPT_PREFIXES: Final = (*_EXEMPT_PREFIXES, "/demo")
 
 
+def _under(path: str, prefixes: tuple[str, ...]) -> bool:
+    """Whether `path` *is* one of these prefixes or sits beneath it.
+
+    A bare `startswith` matched on characters rather than on path segments, so
+    every exemption silently covered a family of neighbours nobody exempted:
+    `/healthz-anything`, `/assetsX`, `/demo/assets.zip`. None of those resolve
+    to a route, but the exemption is consulted before routing — so an
+    unmetered, unauthenticated 404 was reachable by appending a character to a
+    health check, which is precisely the free traffic FR-009's bucket exists to
+    deny. Matching on the segment boundary keeps every real asset path exempt
+    and gives the neighbours no exemption at all.
+    """
+    return any(path == prefix or path.startswith(f"{prefix}/") for prefix in prefixes)
+
+
 def is_exempt_path(path: str) -> bool:
     """Whether this path is outside the rate limit (FR-009: health and static).
 
@@ -117,12 +132,12 @@ def is_exempt_path(path: str) -> bool:
     allowance, which is offered separately so that exempting a document from
     per-minute metering can never become a way to mint workspaces for free.
     """
-    return path.startswith(_EXEMPT_PREFIXES) or path in _EXEMPT_DOCUMENTS
+    return _under(path, _EXEMPT_PREFIXES) or path in _EXEMPT_DOCUMENTS
 
 
 def is_workspace_exempt_path(path: str) -> bool:
     """Whether this path takes no harness workspace cookie."""
-    return path.startswith(_WORKSPACE_EXEMPT_PREFIXES)
+    return _under(path, _WORKSPACE_EXEMPT_PREFIXES)
 
 
 def workspace_id_of(request: Request) -> str | None:

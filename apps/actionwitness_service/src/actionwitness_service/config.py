@@ -45,7 +45,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from enum import StrEnum
-from typing import Any
+from typing import Any, Final
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict
@@ -407,6 +407,18 @@ def _resolve_live_evaluator(
     )
 
 
+#: Whether this build actually ships the Shopify target.
+#:
+#: It does not. `application/adapter_registry.py` registers `buggy_store` alone,
+#: `api/routes/shopify.py` is an unmounted empty router, and every task in
+#: `specs/011-shopify-cart-proof/tasks.md` is unticked — a state
+#: `test_010_exit_gate.py` actively enforces. Configuration parsing is kept and
+#: kept tested so the module can be switched on in one edit when the adapter and
+#: route land; what is *not* kept is the claim that setting four environment
+#: variables turned a feature on.
+_SHOPIFY_ADAPTER_SHIPPED: Final = False
+
+
 def _resolve_shopify(environ: Mapping[str, str]) -> tuple[ShopifySettings | None, ModuleState]:
     name = "shopify"
     required = (
@@ -432,15 +444,32 @@ def _resolve_shopify(environ: Mapping[str, str]) -> tuple[ShopifySettings | None
     if not _CURRENCY.match(currency):
         return None, _misconfigured(name, f"{currency!r} is not a three-letter currency code.")
 
-    return (
-        ShopifySettings(
-            harness_public_origin=harness_origin,
-            store_origin=store_origin,
-            test_variant_id=environ["SHOPIFY_TEST_VARIANT_ID"].strip(),
-            expected_currency=currency,
-        ),
-        _enabled(name, f"Cart-only proof against {store_origin}."),
+    settings = ShopifySettings(
+        harness_public_origin=harness_origin,
+        store_origin=store_origin,
+        test_variant_id=environ["SHOPIFY_TEST_VARIANT_ID"].strip(),
+        expected_currency=currency,
     )
+    if not _SHOPIFY_ADAPTER_SHIPPED:
+        # Valid configuration, and still not available: this build registers no
+        # Shopify adapter, so `enabled` would be a claim the deployment cannot
+        # honour. `disabled` rather than `misconfigured` because the operator did
+        # nothing wrong — the reason says which of the two it is, and `capabilities`
+        # (registered targets) and `modules` now agree instead of contradicting
+        # each other on the one module a judge is most likely to ask about.
+        #
+        # The parsed settings are dropped rather than returned, because a module
+        # that is off must expose no settings object at all — a populated one is
+        # how "is it configured?" quietly becomes a stand-in for "is it on?".
+        # The parsing above still runs, so its refusals stay tested.
+        del settings
+        return None, _disabled(
+            name,
+            "Configured, but this build ships no Shopify adapter or route "
+            "(Tier 3, specs/011-shopify-cart-proof). Nothing will run against "
+            f"{store_origin} until that work lands.",
+        )
+    return settings, _enabled(name, f"Cart-only proof against {store_origin}.")
 
 
 def _resolve_external_audit(

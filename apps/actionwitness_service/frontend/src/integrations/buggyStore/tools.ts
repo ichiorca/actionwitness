@@ -29,6 +29,7 @@ import {
   useHarnessTool,
   useNativeTool,
 } from "../../webmcp/adapter";
+import { observedToolIdentityHash } from "../../webmcp/identity";
 
 const ACTIVE_PHASES = ["armed", "running"];
 
@@ -57,16 +58,41 @@ interface InvokeOutcome {
   readonly body: Record<string, unknown>;
 }
 
-/** One target action through the recorded route. */
+/**
+ * One target action through the recorded route.
+ *
+ * ## Why the identity hash is read here rather than held from registration
+ *
+ * FR-169 requires each recorded invocation to carry "the identity hash of the
+ * tool definition **as observed at invocation time**", and the whole point of
+ * AC-25 is a definition altered between the armed capture and this call. A hash
+ * derived from the literal this file registers would agree with the baseline by
+ * construction and could never disagree with anything — it would be this module
+ * confirming its own source code. So the definition is re-read from the browser
+ * registry, through the adapter's single `getTools()` call, at the moment of the
+ * call. If a look-alike replaced the tool since arming, that is what gets hashed
+ * and that is what the server refuses.
+ *
+ * The server compares it against the armed baseline *it* hashed, so a hash this
+ * page got wrong can only refuse an invocation, never admit one.
+ *
+ * Omitted when no honest hash exists — no WebMCP, no such tool, no secure
+ * context. §15.3 makes the field optional for exactly that case, and the surface
+ * capture still reaches `stable_tool_surface` on its own.
+ */
 async function invoke(
   runId: string,
   toolName: string,
   args: Record<string, unknown>,
   signal?: AbortSignal,
 ): Promise<InvokeOutcome> {
+  const identity = await observedToolIdentityHash(toolName);
   const body = await request(`/runs/${runId}/target-tools/${toolName}:invoke`, {
     method: "POST",
-    body: { arguments: args },
+    body: {
+      arguments: args,
+      ...(identity === null ? {} : { tool_identity_hash: identity }),
+    },
     ...(signal === undefined ? {} : { signal }),
     parse: (value) => {
       if (typeof value !== "object" || value === null) {
@@ -181,8 +207,24 @@ export function useBuggyStoreTools(
     inputSchema: {
       type: "object",
       properties: {
-        product_id: { type: "string", minLength: 1, description: "Catalog product id." },
-        quantity: { type: "integer", minimum: 0, description: "Zero removes the line." },
+        // Appendix D.2's enum and bound, restored. The browser registration had
+        // drifted to a plain bounded string while the Python adapter kept
+        // publishing the enum, so the two discovery surfaces disagreed about
+        // what an agent may send — and the looser one is the one an agent
+        // actually reads. A `quantity` of 9 or a product id that was never
+        // seeded then costs a refused round trip that the schema was supposed
+        // to prevent.
+        product_id: {
+          type: "string",
+          enum: ["mug-ceramic-001", "notebook-001", "tote-001"],
+          description: "Stable seeded product id.",
+        },
+        quantity: {
+          type: "integer",
+          minimum: 0,
+          maximum: 5,
+          description: "Absolute quantity; zero removes the line.",
+        },
         request_id: {
           type: "string",
           minLength: 8,
@@ -213,7 +255,12 @@ export function useBuggyStoreTools(
     description: "Apply a discount code to the current cart.",
     inputSchema: {
       type: "object",
-      properties: { code: { type: "string", minLength: 1, maxLength: 32, description: "Code." } },
+      properties: {
+        // Appendix D.2's allowlist, restored for the same reason as
+        // `update_cart`'s: a bounded free string invited an agent to try a code
+        // the store will only ever refuse.
+        code: { type: "string", enum: ["SAVE20"], description: "Allowlisted demo discount code." },
+      },
       required: ["code"],
       additionalProperties: false,
     },

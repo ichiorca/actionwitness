@@ -20,6 +20,13 @@ refuses once it has run.
 **A refused binding leaves the trial excluded, never rebound.** FR-091 again: a
 trial without sufficient evidence for its declared mode is "`excluded`, not
 silently downgraded or rebound". Refusals here change nothing.
+
+**A binding is only half of FR-091 — sealing is where it pays.** FR-091 binds an
+`executed_browser` trial "one-to-one to the exact completed outcome `run_id`",
+and FR-092 then needs that run's verdict as the trial's outcome layer, or the
+two-by-two has nothing to count. `seal` is where the run's verdict is read
+across and written into the trial; `_derive_bound_outcomes` says why that moment
+and not another.
 """
 
 from __future__ import annotations
@@ -34,9 +41,12 @@ from actionwitness_core.benchmarks.enums import (
     BenchmarkStatus,
     CorrelationMode,
     ExclusionReason,
+    OutcomeTrialResult,
     SourceKind,
     TrialEligibility,
+    outcome_from_layer_result,
 )
+from actionwitness_core.benchmarks.matrix import exclusion_for
 from actionwitness_core.benchmarks.models import (
     BENCHMARK_SCHEMA_VERSION,
     MANIFEST_SCHEMA_VERSION,
@@ -47,10 +57,16 @@ from actionwitness_core.benchmarks.models import (
     TrialBinding,
 )
 from actionwitness_core.benchmarks.states import require_transition
+from actionwitness_core.journeys.enums import RunState
+from actionwitness_core.reports.enums import LayerResult
 from actionwitness_core.security.canonical import canonical_text
 
 from actionwitness_service.api.errors import ApiError, ApiErrorCode
-from actionwitness_service.application.benchmark_metrics import BenchmarkSummary, summarize
+from actionwitness_service.application.benchmark_metrics import (
+    BenchmarkSummary,
+    summarize,
+    trial_from_row,
+)
 from actionwitness_service.persistence.database import UnitOfWork
 from actionwitness_service.persistence.repositories import new_id
 
@@ -66,7 +82,12 @@ __all__ = [
 #: exact completed outcome `run_id`", so an in-flight run is not bindable: its
 #: verdict does not exist yet, and binding to it would reserve a result.
 _BINDABLE_RUN_STATES: frozenset[str] = frozenset(
-    {"passed", "passed_with_warnings", "failed", "error"}
+    {
+        RunState.PASSED.value,
+        RunState.PASSED_WITH_WARNINGS.value,
+        RunState.FAILED.value,
+        RunState.ERROR.value,
+    }
 )
 
 #: Statuses in which bindings may still change (§16.4).
@@ -461,6 +482,12 @@ class BenchmarkService:
     async def seal(self, benchmark_id: str) -> BenchmarkStatus:
         """`draft` → `ready`, after which bindings are immutable (§16.4).
 
+        Sealing is where the population closes, so it is also where each trial's
+        outcome layer is settled: bound trials take their run's verdict, unbound
+        ones become the coverage gap FR-091 requires. Both writes happen in this
+        method's transaction, alongside the status change, so a suite is never
+        `ready` with an outcome layer that only half ran.
+
         An unaddressable trial that nobody bound does not block this: FR-091
         makes it `excluded`, and a suite is allowed to have coverage gaps as
         long as it reports them. What it must not do is invent the binding.
@@ -471,12 +498,89 @@ class BenchmarkService:
             BenchmarkStatus.READY,
             correlation_mode=CorrelationMode(str(suite["correlation_mode"])),
         )
+        await self._derive_bound_outcomes(benchmark_id)
         await self._mark_unbound_excluded(benchmark_id)
         await self._work.execute(
             "UPDATE benchmark_suites SET status = ? WHERE id = ? AND workspace_id = ?",
             (target.value, benchmark_id, self._workspace_id),
         )
         return target
+
+    async def _derive_bound_outcomes(self, benchmark_id: str) -> None:
+        """FR-091's binding, turned into FR-092's outcome layer.
+
+        FR-091 binds an `executed_browser` trial "one-to-one to the exact
+        completed outcome `run_id`"; FR-092 then needs that run's verdict as the
+        trial's outcome half, or the two-by-two counts nothing and every rate is
+        `null`. This is the step that carries one across to the other. Without
+        it a binding is a stored pointer nobody reads, and a suite finalizes with
+        an all-zero matrix that looks like a clean result.
+
+        **The verdict comes from the run, never from the report.** §12.10 and
+        §5's rail keep an imported evaluator result a self-report: it is the
+        channel under test, and the call-level axis is already where it is
+        counted. Promoting it to the outcome axis as well would make both cells
+        of the two-by-two the same source, and the matrix would be incapable of
+        showing the disagreement it exists to show. Nothing here reads
+        `call_level_result` except to let an evaluator error keep its own
+        exclusion reason.
+
+        **Why at sealing, not at binding or at finalization.**
+
+        - Not at binding, because until the suite closes for binding the
+          population is still growing, and eligibility is what FR-092 divides
+          by. A draft that reported rates over a half-bound suite would be
+          publishing a denominator that changes under the reader — the same
+          reason `_mark_unbound_excluded` waits until here rather than calling a
+          fillable gap permanent at import.
+        - Not at finalization, because §16.4 makes that step atomic and
+          ADR-0003 splits it into a read-only phase, a file write with no
+          transaction open, and a commit. `prepare_finalize` runs on a reading
+          connection and has nothing to write with, and moving the derivation
+          into `seal_finalize` would put it after the report it feeds.
+        - At sealing it is safe to read once and keep: `bind` accepts only a
+          terminal run, and §16 gives terminal runs no outgoing transition, so
+          the verdict this reads is the verdict finalization would have read.
+
+        Naturally a no-op for an `imported_trajectory_replay` suite: `TrialBinding`
+        forbids an outcome run in that mode, so no row matches. Those trials get
+        their outcome layer from the replay, which is the only place it exists.
+        """
+        rows = await self._work.fetch_all(
+            "SELECT * FROM benchmark_trials WHERE benchmark_suite_id = ? "
+            "AND outcome_run_id IS NOT NULL ORDER BY external_trial_id",
+            (benchmark_id,),
+        )
+        for row in rows:
+            run = await self._work.fetch_one(
+                "SELECT status, overall_result FROM runs WHERE id = ? AND workspace_id = ?",
+                (str(row["outcome_run_id"]), self._workspace_id),
+            )
+            if run is None:  # pragma: no cover - `bind` refused a run not in this workspace
+                outcome = OutcomeTrialResult.NOT_REACHED
+            else:
+                outcome = _outcome_of_run(str(run["status"]), run["overall_result"])
+            # Eligibility is FR-092's own rule, so it is asked of the core rather
+            # than restated here: an evaluator error keeps its own reason, an
+            # excluded outcome says which kind, and anything else is a trial both
+            # layers actually judged.
+            reason = exclusion_for(
+                trial_from_row(row).model_copy(update={"outcome_result": outcome})
+            )
+            await self._work.execute(
+                "UPDATE benchmark_trials SET outcome_result = ?, eligibility = ?, "
+                "exclusion_reason = ? WHERE id = ?",
+                (
+                    outcome.value,
+                    (
+                        TrialEligibility.EXCLUDED
+                        if reason is not None
+                        else TrialEligibility.ELIGIBLE
+                    ).value,
+                    None if reason is None else reason.value,
+                    str(row["id"]),
+                ),
+            )
 
     async def _mark_unbound_excluded(self, benchmark_id: str) -> None:
         """FR-091: an unbound trial is `excluded`, and the reason says why.
@@ -761,6 +865,38 @@ class BenchmarkService:
                 self._work.now(),
             ),
         )
+
+
+def _outcome_of_run(status: str, overall_result: Any) -> OutcomeTrialResult:
+    """One completed run's authoritative verdict, in the trial's vocabulary.
+
+    §17.1 splits a run's ending across two columns and never merges them:
+    `overall_result` is the business verdict `VerificationService` writes at the
+    seal, and `status` is the lifecycle state it ended in. Only the first is read
+    as a verdict here. The second is consulted for exactly one thing — telling
+    "the outcome layer ran and broke" from "the outcome layer reached no verdict
+    at all" — because FR-092 excludes both but §9.9's coverage has to say which,
+    and `error_trials` is a disclosed subset rather than a silent one.
+
+    `overall_result` is NULL precisely when a run reached no business verdict:
+    the target could not be observed, or FR-008's event ceiling tripped. Neither
+    is a pass, and §5's rail is explicit that an observation failure "produces an
+    explicit non-pass result; it never degrades to success" — so the absence of a
+    verdict is read as an absence, never filled in from the run's status.
+    """
+    if overall_result is not None:
+        try:
+            return outcome_from_layer_result(LayerResult(str(overall_result)))
+        except ValueError:  # pragma: no cover - only the verification seal writes this
+            # A stored verdict outside §23.1's vocabulary is a record this module
+            # cannot read. Ambiguity is a non-pass, so it is disclosed as an
+            # outcome error rather than guessed at or treated as absent.
+            return OutcomeTrialResult.ERROR
+    return (
+        OutcomeTrialResult.ERROR
+        if status == RunState.ERROR.value
+        else OutcomeTrialResult.NOT_REACHED
+    )
 
 
 def _addressable(trial: Mapping[str, Any]) -> bool:

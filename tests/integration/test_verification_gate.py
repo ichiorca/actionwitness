@@ -381,7 +381,17 @@ async def test_an_invocation_overlapping_verification_loses_cleanly(
     # Assert — exactly one of the two outcomes, never a mixture.
     assert verification.status_code in {200, 409}
     if verification.status_code == 200 and invocation.status_code == 409:
-        assert invocation.json()["error"]["code"] == "RUN_ALREADY_VERIFYING"
+        # Which refusal the loser gets depends on how far the winner had run,
+        # not on whether the gate worked. Starved past the seal — which is what
+        # a loaded machine does — the run is already terminal, and the honest
+        # answer is that its timeline is closed rather than that verification is
+        # still going. Both are the same fail-closed refusal from the same
+        # guard, so pinning only the first made this assert the scheduler.
+        assert invocation.json()["error"]["code"] in {
+            "RUN_ALREADY_VERIFYING",
+            "RUN_TIMELINE_SEALED",
+        }
+        assert invocation.json()["error"]["retryable"] is False
     else:
         assert invocation.status_code == 200
 

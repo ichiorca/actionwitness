@@ -58,7 +58,7 @@ from actionwitness_service.application.template_catalogue import (
     TemplateExpansion,
 )
 from actionwitness_service.application.workspaces import WorkspaceStore
-from actionwitness_service.config import ServiceSettings
+from actionwitness_service.config import DeploymentEnvironment, ServiceSettings
 from actionwitness_service.persistence.database import Database
 from actionwitness_service.persistence.locks import WorkspaceLocks
 from actionwitness_service.telemetry import RequestLoggingMiddleware, configure_logging
@@ -325,18 +325,34 @@ def create_app(
             database_reachable = False
             _unhandled_logger.exception("health check could not read the database")
 
-        if not database_reachable:
+        # §20.1: in production the origin policy is only as strong as the
+        # origin it was given. An absent or unparseable `HARNESS_PUBLIC_ORIGIN`
+        # is dropped to `None` by config, and `OriginPolicy` then falls back to
+        # comparing each request against *its own* origin — which is the right
+        # default for documented local development and the wrong one for a
+        # deployed service, where it means the allowlist is whatever the caller
+        # claims. Reporting it here rather than refusing to start is deliberate:
+        # a platform health check that goes red holds the new deploy back and
+        # leaves the previous one serving, where a crash-on-boot would take the
+        # deployment down for a value an operator can fix in the dashboard.
+        origin_configured = (
+            settings.harness.environment is not DeploymentEnvironment.PRODUCTION
+            or settings.harness.public_origin is not None
+        )
+
+        if not database_reachable or not origin_configured:
             # 503 rather than a healthy-looking body with a bad field in it:
             # the platform reads the status code, and a health check that
             # answers 200 while the source of truth is gone is the failure mode
             # this branch was added to remove.
             response.status_code = 503
         return {
-            "status": "ok" if database_reachable else "degraded",
+            "status": "ok" if database_reachable and origin_configured else "degraded",
             "schema_version": getattr(app.state, "schema_version", None),
             "public_origin": settings.harness.public_origin,
             "assets_mounted": app.state.assets_mounted,
             "database": "ok" if database_reachable else "unavailable",
+            "origin_policy": "configured" if origin_configured else "unconfigured",
         }
 
     app.include_router(workspace_routes.router, prefix=API_PREFIX)

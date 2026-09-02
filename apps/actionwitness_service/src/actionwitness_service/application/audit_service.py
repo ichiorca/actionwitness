@@ -101,15 +101,25 @@ def normalize_origin(value: str) -> str | None:
     """
     from urllib.parse import urlsplit
 
-    parsed = urlsplit(value.strip())
-    if parsed.scheme != "https" or not parsed.hostname:
+    try:
+        parsed = urlsplit(value.strip())
+        hostname, port_number = parsed.hostname, parsed.port
+    except ValueError:
+        # The origin arrives in a request body, so "not an exact HTTPS origin"
+        # has to cover the values that cannot be parsed at all — an unclosed
+        # IPv6 authority raises from `urlsplit`, a non-numeric or out-of-range
+        # port only when `.port` is read. `None` is what every other rejected
+        # shape below returns, and the caller already turns it into
+        # `AUDIT_NOT_AUTHORIZED`.
+        return None
+    if parsed.scheme != "https" or not hostname:
         return None
     if parsed.username or parsed.password:
         return None
     if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
         return None
-    port = f":{parsed.port}" if parsed.port else ""
-    return f"https://{parsed.hostname.lower()}{port}"
+    port = f":{port_number}" if port_number else ""
+    return f"https://{hostname.lower()}{port}"
 
 
 class AuditService:
@@ -229,6 +239,109 @@ class AuditService:
             ),
         )
 
+    async def complete(
+        self, audit: ExternalAudit, *, pack_id: str, report_artifact_id: str
+    ) -> ExternalAudit:
+        """§22's terminal `completed`, carrying the report it produced.
+
+        Written in the same transaction as the artifact row, so a workspace
+        never holds a `completed` audit pointing at a report that is not there,
+        and never holds a live audit whose report already exists — the second
+        being the state that used to block the next audit until the workspace
+        aged out.
+
+        The status is re-read and re-checked rather than assumed from `audit`:
+        the caller composed the report outside this transaction, and a status
+        that moved in the meantime must not be overwritten by a decision taken
+        before it moved.
+        """
+        current = await self.current()
+        if current is None or current.audit_id != audit.audit_id:
+            raise ApiError(
+                ApiErrorCode.AUDIT_NOT_AUTHORIZED,
+                "This audit is no longer the workspace's live audit.",
+            )
+        await self._work.execute(
+            """
+            UPDATE external_audits
+               SET status = ?, contract_pack_id = ?, report_artifact_id = ?, completed_at = ?
+             WHERE id = ? AND workspace_id = ?
+            """,
+            (
+                AuditStatus.COMPLETED.value,
+                pack_id,
+                report_artifact_id,
+                self._work.now(),
+                audit.audit_id,
+                self._workspace_id,
+            ),
+        )
+        return ExternalAudit(
+            {
+                "id": audit.audit_id,
+                "authorized_origin": audit.authorized_origin,
+                "authorization_asserted_by": audit.asserted_by,
+                "authorization_asserted_at": audit.asserted_at,
+                "status": AuditStatus.COMPLETED.value,
+            }
+        )
+
+    async def cancel(self) -> ExternalAudit:
+        """§22's `cancelled` — the operator abandoning an audit they began.
+
+        Added because the only ways out of `authorized` were completing and the
+        24-hour workspace sweep: an audit started against the wrong origin, or
+        begun and thought better of, held the workspace's one live-audit slot
+        for a day. Terminal and one-way; a cancelled audit is not resumed, it is
+        re-authorized, so nothing can quietly continue against an origin whose
+        assertion the operator has withdrawn.
+        """
+        audit = await self.current()
+        if audit is None:
+            raise ApiError(
+                ApiErrorCode.AUDIT_NOT_AUTHORIZED,
+                "No authorized audit exists for this workspace.",
+            )
+        await self._work.execute(
+            "UPDATE external_audits SET status = ?, completed_at = ? "
+            "WHERE id = ? AND workspace_id = ?",
+            (
+                AuditStatus.CANCELLED.value,
+                self._work.now(),
+                audit.audit_id,
+                self._workspace_id,
+            ),
+        )
+        return ExternalAudit(
+            {
+                "id": audit.audit_id,
+                "authorized_origin": audit.authorized_origin,
+                "authorization_asserted_by": audit.asserted_by,
+                "authorization_asserted_at": audit.asserted_at,
+                "status": AuditStatus.CANCELLED.value,
+            }
+        )
+
+    async def completed_report_artifact(self) -> tuple[str, str] | None:
+        """The most recent completed audit's report artifact, with its origin.
+
+        Reads the *completed* audit rather than the live one, because by the
+        time a report exists the audit that produced it is terminal — a live
+        audit is one that has not produced a report yet.
+        """
+        row = await self._work.fetch_one(
+            """
+            SELECT report_artifact_id, authorized_origin FROM external_audits
+             WHERE workspace_id = ? AND status = ? AND report_artifact_id IS NOT NULL
+             ORDER BY completed_at DESC, id DESC
+             LIMIT 1
+            """,
+            (self._workspace_id, AuditStatus.COMPLETED.value),
+        )
+        if row is None:
+            return None
+        return str(row["report_artifact_id"]), str(row["authorized_origin"])
+
     async def current(self) -> ExternalAudit | None:
         """This workspace's live audit, if it has one."""
         placeholders = ", ".join("?" for _ in TERMINAL_STATUSES)
@@ -242,6 +355,24 @@ class AuditService:
             (self._workspace_id, *sorted(status.value for status in TERMINAL_STATUSES)),
         )
         return None if row is None else ExternalAudit(row)
+
+    async def require_live(self) -> ExternalAudit:
+        """The workspace's live audit, or the refusal that says there is none.
+
+        The counterpart to `require_authorized_origin` for the steps that do not
+        name a target. A submission carries no origin *by design* — §12.17 allows
+        one asserted origin at a time and the audit already holds it, so asking
+        the caller to name it again would create a second place where an origin
+        could be introduced, and the only interesting thing a caller could do
+        with that field is disagree with the assertion.
+        """
+        audit = await self.current()
+        if audit is None:
+            raise ApiError(
+                ApiErrorCode.AUDIT_NOT_AUTHORIZED,
+                "No authorized audit exists for this workspace.",
+            )
+        return audit
 
     async def require_authorized_origin(self, origin: str) -> ExternalAudit:
         """The gate every later step passes through (FR-160a).

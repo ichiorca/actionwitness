@@ -60,6 +60,7 @@ semantics in the harness.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -106,6 +107,11 @@ from actionwitness_service.persistence.locks import WorkspaceLocks
 from actionwitness_service.persistence.repositories import EventRepository, new_id
 
 __all__ = ["INVOCABLE_RUN_STATES", "InvocationOutcome", "InvocationService"]
+
+#: Server-side only, and never the structured request line: this logger carries
+#: tracebacks, which §21.5's closed field set exists to keep out of the shipped
+#: log stream.
+_logger = logging.getLogger("actionwitness.invocation")
 
 #: The run states in which a target action is accepted. §11.5: `Armed` and
 #: `Running` publish target tools; `Verifying` publishes "status only", and
@@ -449,6 +455,19 @@ class InvocationService:
             # test — an honest mutation must report `state_changed: true`, so a
             # bug that made every observation fail cannot pass silently. It has
             # already caught one.
+            #
+            # Logged because the *verdict* is the same for every cause — absent
+            # observation, explicit non-pass — while the operator's response is
+            # not: a target that is down, a target that is misconfigured, and a
+            # defect in this adapter are three different problems that reach
+            # this line looking identical. The traceback goes to the same
+            # server-side channel as an unhandled request failure, never into
+            # the response or the structured request line (§21.5).
+            _logger.warning(
+                "observation failed for workspace %s; recorded as absent",
+                workspace_id,
+                exc_info=True,
+            )
             return None
 
     async def _identity_mismatch(

@@ -22,19 +22,36 @@ recompute the identity from the stored file alone.
 **The file is written before the row is inserted.** The insert belongs to the
 caller's transaction — for an outcome report, the same one that seals the run —
 and file I/O must not happen inside it (ADR-0003: nothing is held across a
-wait). Crashing between the two leaves a file with no row, which the next write
-overwrites and which no reader can reach. The reverse order would leave a row
-pointing at a file that does not exist, which a reader *would* reach.
+wait). Crashing between the two leaves a file with no row, which no reader can
+reach. The reverse order would leave a row pointing at a file that does not
+exist, which a reader *would* reach.
 
-Paths are workspace-scoped: `<workspace>/<run>/<type>.json`. That is what makes
-FR-009's traversal check meaningful — an artifact root containing one directory
-per workspace has an obvious shape, and a path that climbs out of it is
-obviously wrong.
+**Paths are content-addressed:** `<workspace>/<run>/<type>-<digest>.json`. The
+workspace scoping is what makes FR-009's traversal check meaningful — an
+artifact root containing one directory per workspace has an obvious shape, and a
+path that climbs out of it is obviously wrong. The digest is what keeps a
+committed row honest. Without it the path was a constant per `(workspace, run,
+type)`, and a surface that legitimately writes the same type twice — a benchmark
+suite accepts repeated imports while it is still `draft` — overwrote the first
+file in place while the first `artifacts` row, its `content_hash`, and the trials
+referencing it all stayed live. The row then described bytes that were no longer
+there. Naming the file after its own hash makes that unrepresentable: different
+documents cannot collide, and the same document rewritten is byte-identical.
+
+**Every write is atomic.** Bytes go to a temporary file in the destination
+directory, are flushed and `fsync`ed, and are then `os.replace`d over the final
+name. Writing the final name directly truncates it first, so a crash mid-write
+left a *committed* row pointing at a half-written file — which is
+indistinguishable, to the verifier that reads it back, from evidence somebody
+tampered with.
 """
 
 from __future__ import annotations
 
+import json
+import os
 import re
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
@@ -46,7 +63,17 @@ from actionwitness_service.application.limits import WorkspaceCeilings
 from actionwitness_service.persistence.database import UnitOfWork
 from actionwitness_service.persistence.repositories import new_id
 
-__all__ = ["OUTCOME_REPORT", "ArtifactStore", "WrittenArtifact"]
+__all__ = ["OUTCOME_REPORT", "ArtifactCorrupt", "ArtifactStore", "WrittenArtifact"]
+
+
+class ArtifactCorrupt(Exception):
+    """A stored artifact is not the one that was sealed.
+
+    Deliberately not an `ApiError`: storage does not decide status codes, and
+    the two routes that read artifacts back phrase the refusal differently for
+    different readers. What they share is that neither serves the document.
+    """
+
 
 #: §17.1's `artifacts.artifact_type`. Project-allocated: the specification names
 #: the column but enumerates no vocabulary, and one value is not yet a closed
@@ -58,6 +85,36 @@ OUTCOME_REPORT: Final = "outcome_report"
 #: server-issued (`ws_…`, `run_…`), so anything else is a bug, and a bug that
 #: reached `Path` would be a traversal.
 _SAFE_IDENTIFIER: Final = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+
+
+def _write_atomically(target: Path, encoded: bytes) -> None:
+    """Write bytes that are either wholly present or wholly absent.
+
+    The temporary file is created in the *destination* directory so `os.replace`
+    is a same-filesystem rename rather than a copy — across filesystems it would
+    stop being atomic, which is the one property this function exists for. The
+    `fsync` before the rename is what makes the atomicity cover the contents and
+    not merely the name: without it a crash can leave the new name pointing at
+    unflushed blocks. A failed write takes the partial file with it, because the
+    whole point is that no reader ever sees one.
+    """
+    partial: Path | None = None
+    try:
+        # `delete=False` because the file has to outlive the handle — the rename
+        # is what publishes it. Cleanup is the `except` below, and it runs after
+        # the handle is closed so the unlink also works on Windows.
+        with tempfile.NamedTemporaryFile(
+            dir=target.parent, prefix=f".{target.name}.", suffix=".part", delete=False
+        ) as handle:
+            partial = Path(handle.name)
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(partial, target)
+    except BaseException:
+        if partial is not None:
+            partial.unlink(missing_ok=True)
+        raise
 
 
 @dataclass(frozen=True)
@@ -92,16 +149,20 @@ class ArtifactStore:
 
         text = canonical_text(document)
         encoded = text.encode("utf-8")
-        relative = f"{workspace_id}/{run_id}/{artifact_type}.json"
+        digest = document_content_hash(document)
+        # Enough of the digest to make a collision infeasible, short enough that
+        # the directory stays readable to a person looking for one run's report.
+        stamp = digest.removeprefix("sha256:")[:16]
+        relative = f"{workspace_id}/{run_id}/{artifact_type}-{stamp}.json"
 
         target = self._root / relative
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(encoded)
+        _write_atomically(target, encoded)
 
         return WrittenArtifact(
             relative_path=relative,
             byte_size=len(encoded),
-            content_hash=document_content_hash(document),
+            content_hash=digest,
             artifact_type=artifact_type,
             schema_version=schema_version,
         )
@@ -173,11 +234,26 @@ class ArtifactStore:
         route. `None` rather than a raise, because the caller knows whether a
         missing row is a 404 or an internal inconsistency and this does not.
         """
+        found = await self.stored_reference(work, workspace_id, artifact_id)
+        return None if found is None else found[0]
+
+    async def stored_reference(
+        self, work: UnitOfWork, workspace_id: str, artifact_id: str
+    ) -> tuple[str, str] | None:
+        """Where the artifact is, and the hash it was recorded with.
+
+        The pair travels together because verifying one against the other is the
+        only way to know a stored artifact is still the sealed one, and a caller
+        that fetched the path alone would have nothing to check it against. Same
+        workspace scoping as `relative_path`, for the same reason: an artifact id
+        is guessable, and a lookup without the workspace term would read another
+        workspace's evidence.
+        """
         row = await work.fetch_one(
-            "SELECT relative_path FROM artifacts WHERE id = ? AND workspace_id = ?",
+            "SELECT relative_path, content_hash FROM artifacts WHERE id = ? AND workspace_id = ?",
             (artifact_id, workspace_id),
         )
-        return None if row is None else str(row["relative_path"])
+        return None if row is None else (str(row["relative_path"]), str(row["content_hash"]))
 
     def read_bytes(self, relative_path: str) -> bytes:
         """The stored bytes, exactly as written.
@@ -194,6 +270,43 @@ class ArtifactStore:
     def read_text(self, relative_path: str) -> str:
         """The stored text, for a reader that wants to verify the hash itself."""
         return self.read_bytes(relative_path).decode("utf-8")
+
+    def verified_document(self, relative_path: str, expected_hash: str) -> dict[str, Any]:
+        """The stored document, or `ArtifactCorrupt` — never an unchecked one.
+
+        Four checks, and each one is a way a stored artifact stops being the
+        thing that was sealed: unreadable, undecodable, a different document, or
+        the same document in different bytes. The last is the subtle one — a
+        file somebody reformatted still hashes its *content* to the recorded
+        value, but a reader recomputing from those bytes gets a different answer
+        than the writer did, so it is no longer evidence anybody can check.
+
+        Raises rather than returning a sentinel, and raises a plain exception
+        rather than an `ApiError`: this module owns storage, not HTTP status
+        codes, and each caller states its own refusal (constitution §5 — an
+        integrity failure is an explicit non-pass and never degrades into
+        serving the document anyway).
+        """
+        try:
+            stored = self.read_bytes(relative_path)
+        except (OSError, ValueError) as missing:
+            # A row without its file is the crash window this module documents
+            # in reverse; unreadable evidence either way.
+            raise ArtifactCorrupt("the stored artifact could not be read") from missing
+
+        try:
+            text = stored.decode("utf-8")
+            document = json.loads(text)
+        except (UnicodeDecodeError, json.JSONDecodeError) as unreadable:
+            raise ArtifactCorrupt("the stored artifact is not readable JSON") from unreadable
+
+        if not isinstance(document, dict):
+            raise ArtifactCorrupt("the stored artifact is not a document")
+        if document_content_hash(document) != expected_hash:
+            raise ArtifactCorrupt("the stored artifact does not match its recorded hash")
+        if canonical_text(document) != text:
+            raise ArtifactCorrupt("the stored artifact is no longer the bytes that were sealed")
+        return document
 
 
 def _require_safe(identifier: str, what: str) -> None:

@@ -95,11 +95,41 @@ def test_credentialed_modules_are_off_by_default(name: str) -> None:
     assert state.reason.strip(), f"{name} gives no guidance for why it is off"
 
 
+#: Modules this build configures but does not ship, so they stay off no matter
+#: how completely they are configured.
+#:
+#: `shopify` parses its four variables and then reports `disabled`, because the
+#: adapter and route do not exist (Tier 3, `specs/011-shopify-cart-proof`). It is
+#: named here rather than quietly tolerated: when that work lands and
+#: `_SHOPIFY_ADAPTER_SHIPPED` flips, this set empties and the assertions below
+#: tighten back automatically instead of needing to be remembered.
+UNSHIPPED = frozenset({"shopify"})
+
+
 @pytest.mark.unit
-def test_fully_configured_environment_enables_everything() -> None:
+def test_fully_configured_environment_enables_everything_that_ships() -> None:
     settings = ServiceSettings.from_env(FULL_ENV)
-    disabled = [s.name for s in settings.modules if not s.is_enabled]
-    assert disabled == [], f"expected every module enabled, got {disabled} off"
+    disabled = sorted(s.name for s in settings.modules if not s.is_enabled)
+    assert disabled == sorted(UNSHIPPED), f"expected only {sorted(UNSHIPPED)} off, got {disabled}"
+
+
+@pytest.mark.unit
+def test_an_unshipped_module_says_so_rather_than_claiming_to_be_on() -> None:
+    """Configuration is not capability.
+
+    Four correct environment variables used to produce `enabled` for a module
+    with no adapter behind it, so `modules.shopify` said "enabled" while
+    `capabilities` listed no shopify target at all — the workspace response
+    contradicted itself about the one module a reviewer is most likely to ask
+    about. The reason has to name the build, not the operator's config, because
+    the operator's config is correct.
+    """
+    settings = ServiceSettings.from_env(FULL_ENV)
+    state = settings.module("shopify")
+
+    assert state.status is ModuleStatus.DISABLED
+    assert "no shopify adapter" in state.reason.lower()
+    assert settings.shopify is None, "a module that is off must expose no settings object"
 
 
 # --- absence disables only its own module -----------------------------------
@@ -110,10 +140,16 @@ def test_fully_configured_environment_enables_everything() -> None:
 def test_absent_configuration_disables_only_its_own_module(removed: str) -> None:
     settings = ServiceSettings.from_env(_without(*MODULE_ENV_KEYS[removed]))
 
-    others = {name: settings.is_enabled(name) for name in MODULE_NAMES if name != removed}
+    others = {
+        name: settings.is_enabled(name)
+        for name in MODULE_NAMES
+        if name != removed and name not in UNSHIPPED
+    }
     assert all(others.values()), f"removing {removed} config also disabled {others}"
 
-    if removed in DEFAULT_ON:
+    if removed in UNSHIPPED:
+        assert not settings.is_enabled(removed)
+    elif removed in DEFAULT_ON:
         assert settings.is_enabled(removed), f"{removed} should stay on at its defaults"
     else:
         assert not settings.is_enabled(removed)
@@ -166,7 +202,11 @@ def test_invalid_configuration_disables_only_that_module_with_a_reason(
     )
     assert getattr(settings, name) is None, f"{name} is misconfigured but still exposes settings"
 
-    others = [other for other in MODULE_NAMES if other != name and not settings.is_enabled(other)]
+    others = [
+        other
+        for other in MODULE_NAMES
+        if other != name and other not in UNSHIPPED and not settings.is_enabled(other)
+    ]
     assert others == [], f"misconfiguring {name} also disabled {others}"
 
 
@@ -202,10 +242,17 @@ def test_partial_shopify_configuration_is_misconfigured_not_silently_ignored() -
     ],
 )
 def test_store_origin_is_normalized_to_an_exact_origin(raw: str, expected: str) -> None:
-    """Origins are compared by equality for CORS, so normalization is a safety step."""
-    settings = ServiceSettings.from_env({**FULL_ENV, "SHOPIFY_STORE_ORIGIN": raw})
-    assert settings.shopify is not None
-    assert settings.shopify.store_origin == expected
+    """Origins are compared by equality for CORS, so normalization is a safety step.
+
+    Asserted against the normalizer rather than through `settings.shopify`,
+    which is `None` while the module is unshipped (see `UNSHIPPED`). The rule
+    still needs a test now: it is what the adapter will depend on the day it
+    lands, and a normalization that silently stopped working in the meantime
+    would surface as a CORS mismatch nobody could explain.
+    """
+    from actionwitness_service.config import _exact_origin
+
+    assert _exact_origin(raw, require_https=True) == expected
 
 
 @pytest.mark.unit

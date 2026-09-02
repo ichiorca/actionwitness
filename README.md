@@ -31,7 +31,7 @@ per-milestone contracts derived from it are tracked under `specs/`.
 
 - [Why a witness](#why-a-witness)
 - [60-second test](#60-second-test)
-- [Architecture](#architecture)
+- [Architecture](#architecture) — full design account in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 - [Where the WebMCP code is](#where-the-webmcp-code-is)
 - [Browser setup: Chrome and ChatGPT](#browser-setup-chrome-and-chatgpt)
 - [Command surface](#command-surface)
@@ -108,6 +108,11 @@ requirement (AC-09).
 
 ## Architecture
 
+The diagram and layout below are the orientation. **`docs/ARCHITECTURE.md` is the
+full account** — why the layers are shaped this way, how each invariant is
+mechanically enforced rather than documented, where the WebMCP surfaces are, the
+evidence and consent models, and a candid list of the system's known limits.
+
 ```mermaid
 flowchart TB
     subgraph browser["Browser (one origin)"]
@@ -154,7 +159,7 @@ response is never persisted as observed state (constitution §4).
     apps/actionwitness_service       FastAPI app, orchestration, guidance, persistence, CLI, React frontend
     integrations/buggy_store         core ports <-> Buggy Store versioned HTTP API + WebMCP bridge
     integrations/google_evals        pinned webmcp-evals report adapter (import/normalize/correlate)
-    integrations/shopify             Tier 3 authorized development-store adapter (unmounted scaffold)
+    integrations/shopify             external-surface audit (audit.py, pack.py — live, used by /api/v1/audits); Tier 3 dev-store target (adapter.py, observation.py — scaffold, router unmounted)
     examples/buggy_store             independently runnable demo target (no assurance-stack imports — enforced)
     shopify_bridge                   Tier 3 theme bridge (placeholder)
     tests/                           architecture, unit, integration, adapters, contracts, evals lanes
@@ -411,13 +416,48 @@ owner: which agent tools work, which report success while the store does not cha
 which were deliberately left alone, and what to fix first.
 
 ```
-POST /api/v1/audits            # assert one authorized origin
-GET  /api/v1/audits/current
+GET  /api/v1/audits/packs             # the built-in contract packs, offered (FR-161)
+POST /api/v1/audits                   # assert one authorized origin
+GET  /api/v1/audits/current           # the live audit, or an explicit null
+POST /api/v1/audits/current/evidence  # the pass: browser transcript in, sealed report out
+GET  /api/v1/audits/current/report    # the sealed report, re-verified before it is served
+POST /api/v1/audits/current/cancel    # release the workspace's one live-audit slot
 ```
+
+An audit now **finishes**. The submission classifies the browser's transcript
+(`pack_id`, the `getTools()` enumeration, what each exercised tool claimed, and the
+raw cart reads before and after), composes the merchant report, writes it as a
+content-addressed artifact (ADR-0007), and moves the audit to §22's terminal `completed` in the
+same transaction that records the artifact row — so the next audit is no longer
+blocked behind the 24-hour workspace sweep. `cancel` is the other exit, for an
+audit begun against the wrong origin.
+
+**The browser client for this flow is not built.** The server path is complete,
+tested end to end over HTTP (`tests/integration/test_external_audit_pass.py`), and
+entirely API-driven — but there is no audit UI in the React workspace, and no
+frontend module references `/audits`. Today this is exercised by an API client
+that supplies the transcript, not from the app. What is missing is the browser
+half that runs `getTools()`, exercises the pack, and reads `cart.js` in the
+operator's own session; nothing in the endpoints above will do that for you.
 
 - **Off unless configured.** `external_audit` ships disabled, so an anonymous
   workspace can never assert authorization for an origin the deployment did not
   allowlist (`EXTERNAL_AUDIT_ALLOWED_ORIGINS`, server-controlled).
+- **The packs are offered, never chosen for you.** `match_pack` returns every pack
+  a surface satisfies and picks none, and the submission must name one — choosing
+  on the operator's behalf would decide, against a storefront somebody depends on,
+  whether a write path gets exercised.
+- **A submission is size-capped before it is parsed** (FR-117, 256 KiB). The cart
+  payload is the one part of the request the audited storefront controls rather
+  than the operator, so the bound precedes the JSON parser rather than sitting
+  behind it as a validator.
+- **An unread channel is never a pass.** Absent observations arrive as `null` and
+  every exercised tool is classified `unobserved` — §12.17's
+  `observation_unavailable`. A *malformed* read is refused as a 422 instead, because
+  a broken submission and an unobservable storefront are different facts.
+- **A tampered report is refused, not served.** The stored document is re-verified
+  against its recorded hash on every read, and the refusal names neither the path
+  nor the hash — together they are what a forger would need.
 - **One origin, never a list.** The request model has no field that accepts a
   collection. There is no crawler and no discovery path.
 - **The harness makes no request to the audited site.** The independent cart read
@@ -452,8 +492,11 @@ labels changed.
 
 **Supported external target scope.** Exactly one: an authorized Shopify development
 store, one configured variant and currency, cart-only, and only when the operator
-supplies the configuration. It is **not enabled in this deployment**. Every other
-external target is roadmap scope, not V1.
+supplies the configuration. It is **not enabled in any build** — configuring it
+reports `disabled` with a reason naming the missing adapter rather than switching
+anything on. Every other external target is roadmap scope, not V1. The audit
+surface above is a different thing and does not need it: it observes a storefront
+through the operator's browser and drives no target adapter at all.
 
 ## Deployment
 
@@ -466,7 +509,9 @@ docker run --rm -p 8000:8000 -e HARNESS_PUBLIC_ORIGIN=http://localhost:8000 acti
 
 - `/` — harness workspace `/api/v1` — harness API
 - `/demo` — Buggy Store storefront `/demo/api/v1` — Buggy Store API
-- `/healthz` — liveness, plus the configured origin and whether assets mounted
+- `/healthz` — liveness, plus `public_origin`, `assets_mounted`, `schema_version`,
+  `database` (`ok` / `unavailable`) and `origin_policy` (`configured` /
+  `unconfigured`)
 
 The image runs **two processes in two virtualenvs**: the store never shares an
 environment with the assurance stack, and the only route between them is the
@@ -478,6 +523,18 @@ ADR-0006 records the whole composition and what it costs.
 cookie's `Secure` attribute and the origin allowlist; set it wrong and the service
 comes up healthy while refusing every mutation. `/healthz` reports the value it
 resolved, which is how you find that mistake in seconds instead of an hour.
+
+That check is not merely descriptive. `/healthz` answers **503** with
+`"status": "degraded"` when the database cannot be read, or when a *production*
+deployment has no valid `HARNESS_PUBLIC_ORIGIN` — in which case `OriginPolicy`
+falls back to comparing each request against its own origin, which is the right
+default for documented local development and an allowlist of whatever the caller
+claims anywhere else. The database probe reads a real table on every call rather
+than reporting a value captured at startup, because SQLite happily creates an
+empty database for a path that no longer exists and a `SELECT 1` would answer
+just as cheerfully from the file it had silently made. A red health check holds
+the new deploy back and leaves the previous one serving, which is why this is
+reported rather than made a crash on boot.
 
 Environment variables are documented in
 `apps/actionwitness_service/src/actionwitness_service/config.py` and `.env.example`.
@@ -517,6 +574,11 @@ runtime.
   rather than logged raw.
 - **Evidence is append-only, canonically serialized (RFC 8785), and hash-linked.**
   Verification failure produces an explicit non-pass; it never degrades to success.
+  Artifact files are named after the digest of their own document and written
+  atomically, so a committed row can never come to describe bytes that were
+  overwritten or half-written — ADR-0007 records the two defects that made that
+  necessary, and there is one verification implementation rather than one per
+  reader.
 - **Data retention.** Demo data is ephemeral. Stale workspaces are swept at startup
   and hourly. Nothing personal is requested or required.
 
@@ -530,7 +592,7 @@ own state at `GET /api/v1/workspace` under `modules`.
 
 | Module | State | Why |
 |---|---|---|
-| `shopify` | **off** (Tier 3, optional) | Needs an authorized development store, one configured variant and currency. The adapter and theme bridge are unmounted scaffolds. |
+| `shopify` | **off** (Tier 3, optional) | The adapter, the theme bridge, and `/api/v1/shopify` are unmounted scaffolds, so the module reports `disabled` **even when all four environment variables are set** — the reason names the build rather than blaming the operator, and no settings object is exposed, because a populated one is how "is it configured?" quietly becomes a stand-in for "is it on?". Switching it on is one edit (`_SHOPIFY_ADAPTER_SHIPPED`) once the adapter and route land. |
 | `live_evaluator` | **off** (Tier 3, optional) | Live model runs need a provider credential. Recorded fixtures are used instead, and are labelled `recorded_fixture` rather than `live_model_run`. |
 | `external_audit` | **off by default** (Tier 3, optional) | Implemented and tested; ships disabled because an anonymous workspace must never assert authorization for an origin the deployment did not configure. Enabling it needs `EXTERNAL_AUDIT_ALLOWED_ORIGINS` — see [above](#auditing-a-storefront-you-did-not-build). |
 

@@ -6,8 +6,17 @@ that violates one is a constitutional change and needs explicit sign-off.
 
 ## Codebase navigation
 
-If `docs/CODEMAPS/` exists, read it first to orient before scanning files — it is
-a token-lean architecture map.
+Read `docs/CODEMAPS/README.md` first to orient before scanning files — it is a
+token-lean map, and its routing table sends you to the one map for the area you
+are touching. Each map is `file → what it owns → what will bite you`.
+
+`docs/ARCHITECTURE.md` is the companion: CODEMAPS is *where*, ARCHITECTURE is
+*why*. Read it before changing a boundary, a lifecycle, or anything the maps flag
+as enforced elsewhere.
+
+If you move or rename a module, update its row in the same change.
+`tests/architecture/test_codemaps.py` catches a path that stopped existing; it
+cannot catch a description that stopped being true.
 
 ## Protected paths
 

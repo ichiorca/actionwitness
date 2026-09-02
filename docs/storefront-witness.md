@@ -75,28 +75,83 @@ Stated plainly, because the temptation runs the other way.
 - **A clean audit is not a guarantee.** It is evidence about the journey that was
   tried. The report says so in its own voice rather than in a footnote, because a
   merchant who reads a pass as a warranty stops looking.
+- **No one-click audit yet.** The server runs the pass end to end and seals the
+  report; the browser half that would enumerate the tools, exercise the pack, and
+  read the cart in the operator's own session is not built, so today this is driven
+  by an API client rather than from the app. See the status note at the end of the
+  next section — a merchant cannot use this unaided, and saying otherwise would be
+  the same kind of confident-and-wrong the feature exists to catch.
 
 ## What an audit actually does
 
-1. **The operator asserts an authorized origin.** One origin, supplied by a human,
-   recorded against the workspace, checked against a server-controlled allowlist
-   that no request body can widen. Nothing proceeds without it.
-2. **The published tools are enumerated** through the browser adapter, as an
+Each step below is a call a client makes, in order, against `/api/v1/audits`.
+
+1. **A contract pack is offered.** `GET /audits/packs` returns the built-in packs
+   as a static catalogue — the read-only pass and the cart pass — each carrying the
+   tools a surface must publish for the pack to apply and the tools the pack will
+   never invoke. It is a catalogue, not a query: nothing is submitted, so there is
+   no request here that names an origin or a tool list, and nothing for a scanner
+   to use.
+2. **The operator asserts an authorized origin.** `POST /audits`. One origin,
+   supplied by a human, recorded against the workspace, checked against a
+   server-controlled allowlist that no request body can widen. Nothing proceeds
+   without it.
+3. **The published tools are enumerated** through the browser adapter, as an
    external, untrusted surface.
-3. **A contract pack is chosen explicitly** — the read-only pass or the cart pass —
-   and the report names which one ran, so a reader can tell what the result covers.
-   `proceed_to_checkout` and `manage_orders` are enumerated, reported as reachable,
-   and never invoked: exercising them could create a real order against a real
-   customer's account.
-4. **Each tool's claim is checked against an independent read** of the cart, taken
-   through the platform's own session API in the operator's browser rather than by
-   the harness reaching out to the site. Where no independent channel exists, the
-   tool is reported as *not checked* — never as passing.
-5. **The report is composed for the shop owner**: which tools worked, which
-   reported success while the store did not change, which failed outright, which
-   were deliberately left alone, and what to do first. The engineer-grade evidence —
-   the tool's exact words beside the observed cart, before and after — sits
-   underneath for whoever the owner forwards it to.
+4. **The pack is selected explicitly.** The submission names it, and the server
+   re-checks that the enumerated surface actually satisfies it — a cart pack sent
+   against a surface with no cart tool is refused as a selection error rather than
+   run, because run anyway it would report the cart tool "absent" and read as a
+   finding about the storefront. Nothing picks a pack on the operator's behalf:
+   choosing would decide, against a store somebody depends on, whether a write path
+   gets exercised. `proceed_to_checkout` and `manage_orders` are enumerated,
+   reported as reachable, and never invoked — exercising them could create a real
+   order against a real customer's account.
+5. **The transcript is submitted and judged.** `POST /audits/current/evidence`
+   carries what the browser saw: the enumeration, what each exercised tool
+   *claimed*, and the raw cart reads before and after. Every field is untrusted.
+   The body is size-capped before it is parsed, because the cart payload is the one
+   part of the request the audited storefront controls rather than the operator.
+   Each tool's claim is then checked against the independent read, taken through
+   the platform's own session API in the operator's browser rather than by the
+   harness reaching out to the site. Where no independent channel exists the tool is
+   reported as *not checked* — never as passing; where the read arrives malformed
+   the submission is refused outright, because a broken read and an absent channel
+   are different facts and collapsing the first into the second would report a
+   storefront as unobservable when the submission was simply wrong.
+6. **The report is composed for the shop owner and sealed**: which tools worked,
+   which reported success while the store did not change, which failed outright,
+   which were deliberately left alone, and what to do first. The engineer-grade
+   evidence — the tool's exact words beside the observed cart, before and after —
+   sits underneath for whoever the owner forwards it to. The composed report is
+   written as an immutable artifact, hashed, and recorded in the same transaction
+   that marks the audit complete, so the workspace never holds a finished audit
+   pointing at a report that is not there.
+7. **The report is read back verified, not recomposed.** `GET
+   /audits/current/report` serves the stored bytes after checking them against the
+   hash that was recorded — readable, decodable, the same document, and the same
+   canonical bytes. A report that fails any of those is **refused rather than
+   served with a caveat**, and the refusal names neither the file nor the hash,
+   which together are what somebody would need to forge a replacement. This is the
+   document an owner is most likely to forward to somebody else, which is the worst
+   possible place to make an exception to the rule that an integrity failure is an
+   explicit non-pass.
+8. **The audit ends.** `completed` on submission, or `cancelled` through `POST
+   /audits/current/cancel` for one begun against the wrong origin. Both are
+   terminal, and terminal is what frees the workspace's single live-audit slot for
+   the next audit. A cancelled audit is not resumed — it is re-authorized, so
+   nothing can quietly continue against an origin whose assertion was withdrawn.
+
+**Status: the server path is complete; the browser client is not built.** Every
+step above is reachable over HTTP today and covered end to end by
+`tests/integration/test_external_audit_pass.py`, which drives the API and imports
+no application module. What does not exist is the operator-facing half: there is no
+audit UI in the workspace, and nothing in the frontend calls `/audits`. The
+enumeration, the tool exercise, and the `cart.js` read in step 3 through 5 are
+described as the browser's work because that is where they must happen — but today
+a person doing them is doing them by hand and posting the transcript with an API
+client. That is a missing feature, stated here rather than left for a reader to
+infer from a screenshot that does not exist.
 
 ## The guardrails, and why they are shaped this way
 

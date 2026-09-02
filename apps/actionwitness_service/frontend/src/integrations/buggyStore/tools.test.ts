@@ -21,10 +21,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ConfirmationCoordinator } from "../../state/confirmations";
 import { type InstalledDouble, installModelContextDouble } from "../../test/modelContextDouble";
-import { PROCEED_TO_CHECKOUT, UPDATE_CART, useBuggyStoreTools } from "./tools";
+import { readSurface } from "../../webmcp/adapter";
+import { observedToolIdentityHash } from "../../webmcp/identity";
+import {
+  APPLY_DISCOUNT,
+  PROCEED_TO_CHECKOUT,
+  SEARCH_CATALOG,
+  UPDATE_CART,
+  useBuggyStoreTools,
+} from "./tools";
 
 let installed: InstalledDouble | null = null;
-let calls: { url: string; method: string }[] = [];
+let calls: { url: string; method: string; body: unknown }[] = [];
 
 function respond(handler: (url: string, method: string) => Response): void {
   vi.stubGlobal(
@@ -36,10 +44,25 @@ function respond(handler: (url: string, method: string) => Response): void {
       // making the route assertions below vacuous.
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       const method = init?.method ?? "GET";
-      calls.push({ url, method });
+      // The body is recorded for the same reason the URL is narrowed: most of
+      // `BodyInit` stringifies to "[object Object]", and an assertion against
+      // that would pass for a request that carried nothing.
+      const raw = init?.body;
+      const body: unknown = typeof raw === "string" ? JSON.parse(raw) : null;
+      calls.push({ url, method, body });
       return handler(url, method);
     }),
   );
+}
+
+/** The schema one registered tool publishes, as `getTools()` reports it. */
+async function publishedSchema(name: string): Promise<Record<string, unknown>> {
+  const surface = await readSurface();
+  const tool = surface?.find((entry) => entry.name === name);
+  if (tool === undefined) {
+    throw new Error(`${name} is not registered`);
+  }
+  return tool.input_schema;
 }
 
 function json(body: unknown, status = 200): Response {
@@ -139,6 +162,134 @@ describe("dispatch", () => {
       true,
     );
     expect(calls.some((call) => call.url.includes("/demo/"))).toBe(false);
+  });
+});
+
+describe("each invocation carries the identity it observed (FR-169)", () => {
+  it("sends the identity hash of the definition the browser reports", async () => {
+    // FR-169: "each recorded target-tool invocation shall carry the identity
+    // hash of the tool definition as observed at invocation time". The server
+    // has refused on mismatch since 005, but the field is optional and no
+    // client sent one — so the check was dead in production and green only
+    // where a test hand-fed the hash.
+    //
+    // Asserted against the shared computation rather than a literal, because a
+    // literal here would pass while the *client* and the *server* disagreed;
+    // `identity.test.ts` is where the shared computation is pinned to Python's.
+    await mounted();
+
+    await installed?.modelContext.invoke(UPDATE_CART, {
+      product_id: "mug-ceramic-001",
+      quantity: 1,
+      request_id: "req_onemug",
+    });
+
+    const expected = await observedToolIdentityHash(UPDATE_CART);
+    expect(expected).not.toBeNull();
+    const invocation = calls.find((call) => call.url.includes(`${UPDATE_CART}:invoke`));
+    expect(invocation?.body).toEqual({
+      arguments: { product_id: "mug-ceramic-001", quantity: 1, request_id: "req_onemug" },
+      tool_identity_hash: expected,
+    });
+  });
+
+  it("sends the altered definition's hash when the registry reports one", async () => {
+    // AC-25 from the client's side. The registry reports a definition that no
+    // longer matches the armed baseline while the genuine handler still runs —
+    // which is the case a hash frozen at registration could never notice, and
+    // the case FR-169 requires to fail "even if no `toolchange` event was
+    // observed". A hash taken from this module's own source literal would agree
+    // with the baseline by construction and could never disagree with anything.
+    await mounted();
+    const registry = installed?.modelContext;
+    expect(registry).toBeDefined();
+    const armed = await observedToolIdentityHash(APPLY_DISCOUNT);
+    expect(armed).not.toBeNull();
+
+    const reported = await (registry as NonNullable<typeof registry>).getTools();
+    vi.spyOn(registry as NonNullable<typeof registry>, "getTools").mockResolvedValue(
+      reported.map((tool) =>
+        tool.name === APPLY_DISCOUNT
+          ? { ...tool, description: "Apply a discount code. [look-alike]" }
+          : tool,
+      ),
+    );
+    await registry?.invoke(APPLY_DISCOUNT, { code: "SAVE20" });
+
+    const invocation = calls.find((call) => call.url.includes(`${APPLY_DISCOUNT}:invoke`));
+    const sent = (invocation?.body as { tool_identity_hash?: string } | undefined)
+      ?.tool_identity_hash;
+    expect(sent).toBeDefined();
+    // Different from the armed identity, which is what the server refuses on.
+    expect(sent).not.toBe(armed);
+  });
+
+  it("still invokes, without the field, when no hash can be computed", async () => {
+    // §15.3 keeps the field optional, and the server documents why: a client
+    // that cannot compute one must still be able to invoke. Omitting it narrows
+    // the evidence — the surface capture still reaches `stable_tool_surface` —
+    // where refusing would make an un-instrumented browser unable to act at all,
+    // which is this page inventing a policy the server does not have.
+    await mounted();
+    const registry = installed?.modelContext;
+    expect(registry).toBeDefined();
+    vi.spyOn(registry as NonNullable<typeof registry>, "getTools").mockRejectedValue(
+      new Error("the registry is unavailable"),
+    );
+
+    const result = await registry?.invoke(SEARCH_CATALOG, { query: "mug" });
+
+    // The call happened, and it carried arguments and nothing else.
+    const invocation = calls.find((call) => call.url.includes(`${SEARCH_CATALOG}:invoke`));
+    expect(invocation?.body).toEqual({ arguments: { query: "mug" } });
+    expect((result as { isError?: boolean }).isError).toBeFalsy();
+  });
+});
+
+describe("the published schemas are Appendix D.2's", () => {
+  it("constrains update_cart to the seeded products and the quantity ceiling", async () => {
+    // D.2 gives `product_id` an enum of the three seeded ids and `quantity` a
+    // maximum of 5. The browser registration had drifted to a plain bounded
+    // string and an unbounded integer while the Python adapter kept publishing
+    // the enum — so the agent-facing discovery surface described a wider tool
+    // than the one that exists, and the looser description is the one an agent
+    // reads.
+    await mounted();
+
+    const schema = await publishedSchema(UPDATE_CART);
+
+    const properties = schema["properties"] as Record<string, Record<string, unknown>>;
+    expect(properties["product_id"]?.["enum"]).toEqual([
+      "mug-ceramic-001",
+      "notebook-001",
+      "tote-001",
+    ]);
+    expect(properties["quantity"]?.["minimum"]).toBe(0);
+    expect(properties["quantity"]?.["maximum"]).toBe(5);
+    expect(schema["required"]).toEqual(["product_id", "quantity", "request_id"]);
+    expect(schema["additionalProperties"]).toBe(false);
+  });
+
+  it("constrains apply_discount to the allowlisted code", async () => {
+    await mounted();
+
+    const schema = await publishedSchema(APPLY_DISCOUNT);
+
+    const properties = schema["properties"] as Record<string, Record<string, unknown>>;
+    expect(properties["code"]?.["enum"]).toEqual(["SAVE20"]);
+    expect(schema["required"]).toEqual(["code"]);
+  });
+
+  it("keeps search_catalog's D.2 result bound", async () => {
+    // The one D.2 bound that had not drifted. Asserted so a future edit cannot
+    // quietly widen it while the two tests above hold the others.
+    await mounted();
+
+    const schema = await publishedSchema(SEARCH_CATALOG);
+
+    const properties = schema["properties"] as Record<string, Record<string, unknown>>;
+    expect(properties["max_results"]?.["minimum"]).toBe(1);
+    expect(properties["max_results"]?.["maximum"]).toBe(5);
   });
 });
 

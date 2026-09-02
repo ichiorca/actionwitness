@@ -64,14 +64,17 @@ SCHEMA_VERSION: Final = "1.0"
 
 #: FR-117's bound on a submitted cart payload, in bytes.
 #:
-#: Declared here and enforced nowhere yet, which is worth stating plainly: the
-#: bound belongs to the §15.9 observation route that reads raw request bytes,
-#: and that route does not exist. `normalize_cart` below cannot apply it — it
-#: receives a payload that has already been parsed, by which point the decode
-#: this bound exists to prevent has happened.
+#: Enforced by `POST /api/v1/audits/current/evidence`, which reads the raw request
+#: body and checks its length *before* handing it to the JSON parser. That is the
+#: only place it can be applied: `normalize_cart` below receives a payload that
+#: has already been parsed, by which point the decode this bound exists to
+#: prevent has happened.
 #:
-#: The previous note claimed it was "enforced before parsing". Nothing enforced
-#: it, so the comment described a protection the reader did not have.
+#: The history is worth keeping, because the comment was wrong twice in opposite
+#: directions. It first claimed enforcement that did not exist; it was then
+#: corrected to say the route did not exist, which was true until 015-T8 built
+#: it. A bound is only a protection when a call site reads it, so if that
+#: endpoint ever stops consulting this constant, this comment is wrong again.
 MAX_CART_PAYLOAD_BYTES: Final = 256 * 1024
 
 #: §9.3's conventional namespace, so a contract author writes `target.cart.total`

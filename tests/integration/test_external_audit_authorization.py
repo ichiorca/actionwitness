@@ -179,6 +179,13 @@ async def test_a_refused_assertion_records_no_audit(configured: FastAPI) -> None
         "https://shop.example.evil.test",  # the near-miss the allowlist exists for
         "shop.example",  # not a URL at all
         "",  # nothing
+        # Unparseable rather than merely wrong. `urlsplit` splits lazily, so an
+        # out-of-range or non-numeric port raises only when the port is read,
+        # and an unclosed IPv6 authority raises from the split itself. All three
+        # are "not an exact HTTPS origin" and must refuse, not 500.
+        "https://shop.example:99999",
+        "https://shop.example:notaport",
+        "https://[not:a:v6:addr/",
     ],
 )
 async def test_an_origin_that_is_not_exact_is_refused(configured: FastAPI, origin: str) -> None:

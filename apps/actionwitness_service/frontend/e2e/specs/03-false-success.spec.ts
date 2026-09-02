@@ -126,10 +126,13 @@ test.describe("journey A — the discount that was reported but never applied", 
     // "who is right" a question nobody can answer from the screen.
     const result = await agent.invoke(GET_RUN_FINDINGS, { limit: 10 });
     const page = bodyOf(result);
-    expect(page["overallResult"]).toBe("failed");
+    // FR-150 names these fields normatively, in snake_case. This spec used to
+    // assert the camelCase the tool leaked from its own parse step — so it
+    // encoded the drift rather than catching it.
+    expect(page["overall_result"]).toBe("failed");
 
     const checkIds = (page["findings"] as Record<string, unknown>[]).map(
-      (finding) => finding["checkId"],
+      (finding) => finding["check_id"],
     );
     expect(checkIds).toContain("discounted-total");
 

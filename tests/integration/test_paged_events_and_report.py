@@ -405,7 +405,7 @@ async def test_a_tampered_report_is_refused_rather_than_returned(
         assert (await visitor.get(f"{RUNS}/{run_id}/report")).status_code == 200
 
         # Act — flip the verdict on disk.
-        stored = next((tmp_path / "artifacts").rglob("outcome_report.json"))
+        stored = next((tmp_path / "artifacts").rglob("outcome_report-*.json"))
         document = json.loads(stored.read_text(encoding="utf-8"))
         document["layers"]["business_outcome"] = "passed"
         stored.write_text(json.dumps(document), encoding="utf-8")
@@ -427,7 +427,7 @@ async def test_a_report_whose_file_vanished_is_refused(stack: FastAPI, tmp_path:
         run_id = await _verified_run(visitor)
 
         # Act
-        next((tmp_path / "artifacts").rglob("outcome_report.json")).unlink()
+        next((tmp_path / "artifacts").rglob("outcome_report-*.json")).unlink()
         response = await visitor.get(f"{RUNS}/{run_id}/report")
 
     # Assert
@@ -441,7 +441,7 @@ async def test_the_refusal_names_no_path_or_hash(stack: FastAPI, tmp_path: Path)
     # Arrange
     async with client(stack) as visitor:
         run_id = await _verified_run(visitor)
-        stored = next((tmp_path / "artifacts").rglob("outcome_report.json"))
+        stored = next((tmp_path / "artifacts").rglob("outcome_report-*.json"))
         expected = (await visitor.get(f"{RUNS}/{run_id}/report")).json()["content_hash"]
         stored.write_text('{"tampered": true}', encoding="utf-8")
 
@@ -450,7 +450,10 @@ async def test_the_refusal_names_no_path_or_hash(stack: FastAPI, tmp_path: Path)
 
     # Assert
     assert expected not in body
-    assert "outcome_report.json" not in body
+    # The stored name rather than a literal: artifact filenames carry their own
+    # content digest, so a refusal that echoed the name would be echoing a hash.
+    assert stored.name not in body
+    assert "outcome_report" not in body
     assert str(tmp_path) not in body
     assert "artifacts" not in body
 
@@ -469,7 +472,7 @@ async def test_a_rewritten_but_equivalent_file_is_still_refused(
     # Arrange
     async with client(stack) as visitor:
         run_id = await _verified_run(visitor)
-        stored = next((tmp_path / "artifacts").rglob("outcome_report.json"))
+        stored = next((tmp_path / "artifacts").rglob("outcome_report-*.json"))
         document = json.loads(stored.read_text(encoding="utf-8"))
 
         # Act — same document, different serialization.

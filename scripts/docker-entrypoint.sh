@@ -42,17 +42,49 @@ mkdir -p "${HARNESS_ARTIFACT_ROOT}"
 /opt/store/bin/buggy-store &
 store_pid=$!
 
-# If the store dies the harness stays up and /demo/api/v1 answers 502. That is
-# the honest failure: an observation the harness cannot make must surface as a
-# non-pass, never as a pass by omission (constitution §5).
-trap 'kill -TERM "${store_pid}" 2>/dev/null || true' TERM INT
-
 # One worker, not a default (§29.1, ADR-0003). See the Dockerfile header.
-exec /opt/harness/bin/uvicorn \
+#
+# Started in the background rather than through `exec`, so this shell stays
+# PID 1. An earlier version installed the trap below and then `exec`ed here,
+# which replaced the shell — traps belong to the shell, so the handler was
+# destroyed microseconds after being installed and could never fire. The store
+# was then a child of uvicorn, a process with no supervision logic: `docker
+# stop` signalled PID 1 only, the store received nothing, and the kernel killed
+# it when the namespace tore down. Keeping the shell means signals reach both
+# processes and both are reaped here.
+/opt/harness/bin/uvicorn \
     actionwitness_service.api.app:create_app \
     --factory \
     --host 0.0.0.0 \
     --port "${PORT}" \
     --workers 1 \
     --proxy-headers \
-    --forwarded-allow-ips "${HARNESS_TRUSTED_PROXIES:-127.0.0.1}"
+    --forwarded-allow-ips "${HARNESS_TRUSTED_PROXIES:-127.0.0.1}" &
+harness_pid=$!
+
+# Forwarded to both, so each gets to run its own shutdown: uvicorn drains its
+# requests, and the store closes its SQLite connection instead of being killed
+# with the namespace.
+terminate() {
+    kill -TERM "${harness_pid}" 2>/dev/null || true
+    kill -TERM "${store_pid}" 2>/dev/null || true
+}
+trap terminate TERM INT
+
+# `wait` returns as soon as a trapped signal has been handled, while the process
+# it was waiting for is still shutting down — so it is retried until the harness
+# has genuinely exited, and its real status is what this container exits with.
+harness_status=0
+while kill -0 "${harness_pid}" 2>/dev/null; do
+    wait "${harness_pid}" || harness_status=$?
+done
+
+# The harness is gone, so the store has nothing left to serve. If the *store*
+# died first the harness was deliberately left running — an observation the
+# harness cannot make must surface as a non-pass through a 502 on
+# /demo/api/v1, never as a pass by omission (constitution §5) — so this is
+# reached only on the way out.
+kill -TERM "${store_pid}" 2>/dev/null || true
+wait "${store_pid}" 2>/dev/null || true
+
+exit "${harness_status}"

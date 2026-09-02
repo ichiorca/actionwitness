@@ -125,6 +125,13 @@ async def test_a_mutation_from_the_configured_origin_is_allowed(
         pytest.param("null", id="opaque-origin"),
         pytest.param("*", id="wildcard"),
         pytest.param("", id="empty"),
+        # `urlsplit` parses lazily: these three split without complaint and only
+        # raise when the port is *read*. An `Origin` header is attacker-supplied,
+        # so a value that cannot be parsed has to arrive at the same refusal as
+        # `null` and `*` rather than at a traceback.
+        pytest.param("https://harness.test:99999", id="port-out-of-range"),
+        pytest.param("https://harness.test:notaport", id="port-not-numeric"),
+        pytest.param("https://[not:a:v6:addr/", id="malformed-ipv6-authority"),
     ],
 )
 async def test_a_mutation_from_a_near_miss_origin_is_refused(

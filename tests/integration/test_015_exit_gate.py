@@ -197,6 +197,54 @@ def test_gate_2_the_never_invoked_tools_are_reported_not_exercised() -> None:
     assert "proceed_to_checkout" in report["summary"]["not_checked"]
 
 
+async def test_gate_2_the_whole_journey_is_reachable_through_the_api(
+    configured: FastAPI,
+) -> None:
+    """Criterion 2 as a *journey*, not as an arithmetic check.
+
+    The tests above compose the adapter, the classifier, and the report composer
+    directly, which proves the server-side reasoning and — on its own — proved
+    it about code no client could reach. The feature shipped with authorization
+    and nothing to call after it: the classifier and the report composer were
+    imported only by tests, and an authorized audit sat live until its workspace
+    aged out. So the gate now also asserts the plain thing a shop owner does:
+    authorize, submit what their browser saw, read the report.
+    """
+    # Arrange
+    async with client(configured) as visitor:
+        authorized = await visitor.post(
+            f"{API_PREFIX}/audits",
+            json={"origin": ORIGIN, "asserted_by": "the shop owner", "authorized": True},
+        )
+
+        # Act
+        submitted = await visitor.post(
+            f"{API_PREFIX}/audits/current/evidence",
+            json={
+                "pack_id": "shopify_cart",
+                "enumerated": ENUMERATED,
+                "reports": {
+                    "update_cart": {
+                        "summary": '{"status":"success","message":"Added to cart"}',
+                        "expects_state_change": True,
+                    }
+                },
+                "observed_before": EMPTY_CART,
+                "observed_after": EMPTY_CART,
+            },
+        )
+        fetched = await visitor.get(f"{API_PREFIX}/audits/current/report")
+
+    # Assert — the same verdict the composed path reaches, arrived at by HTTP.
+    assert authorized.status_code == 201, authorized.text
+    assert submitted.status_code == 201, submitted.text
+    report = submitted.json()["report"]
+    assert "update_cart" in report["summary"]["headline"]
+    assert "said they worked when they had not" in report["summary"]["headline"]
+    assert fetched.status_code == 200
+    assert fetched.json()["report"] == report
+
+
 # --- criterion 3: refused at every layer --------------------------------------
 
 
