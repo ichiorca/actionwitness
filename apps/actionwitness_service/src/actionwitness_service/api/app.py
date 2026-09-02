@@ -20,6 +20,7 @@ from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import httpx
 from actionwitness_core.kernel import CoreError
@@ -49,6 +50,11 @@ from actionwitness_service.application.artifacts import ArtifactStore
 from actionwitness_service.application.cleanup import WorkspaceCleaner
 from actionwitness_service.application.contract_service import seed_templates
 from actionwitness_service.application.rate_limits import RateLimiter
+from actionwitness_service.application.template_catalogue import (
+    ExpansionRejected,
+    TemplateCatalogue,
+    TemplateExpansion,
+)
 from actionwitness_service.application.workspaces import WorkspaceStore
 from actionwitness_service.config import ServiceSettings
 from actionwitness_service.persistence.database import Database
@@ -117,6 +123,12 @@ def create_app(
         # without it, and a startup that insisted on seeding its templates
         # would make that impossible.
         app.state.templates_seeded = await _seed_builtin_templates(database, app.state.adapters)
+        # The same templates, kept in memory as well: seeding stores each
+        # document, and instantiating needs what a document does not carry —
+        # the scalars a template allowlists and the arithmetic that expands
+        # one (FR-021). Composed here for the same reason seeding is, and
+        # empty when the integration is absent.
+        app.state.templates = _build_template_catalogue(app.state.adapters)
 
         # FR-009: "at startup and at least hourly". The startup sweep is awaited
         # so a deployment begins with expired data already gone; the hourly one
@@ -278,10 +290,44 @@ def create_app(
     register_demo_proxy(app, enabled=settings.is_enabled("buggy_store"))
     app.state.assets_mounted = mount_static_applications(app, settings.harness.static_root)
 
-    # TODO(M4): §15.2's instantiate, from-candidates, and published endpoints
+    # TODO(M8): §15.2's from-candidates and published endpoints
     # TODO(005): the rest of §15.3 — run read, paged events, invocation,
     # confirmation decisions, verify, report, and comparison
     return app
+
+
+def _build_template_catalogue(registry: AdapterRegistry) -> TemplateCatalogue:
+    """Compose the instantiable templates from each available integration.
+
+    The translation of the integration's own rejection into `ExpansionRejected`
+    happens here, at the composition root, so the service keeps one error type
+    to catch and no generic module imports a commerce package. An absent
+    integration contributes nothing and is not an error (§21.1) — the catalogue
+    is simply smaller, and a request naming one of its templates is refused by
+    name rather than by a crash.
+    """
+    if not registry.is_available("buggy_store"):
+        return TemplateCatalogue()
+    from integrations.buggy_store.templates import TEMPLATES, TemplateExpansionError
+    from integrations.buggy_store.templates import expand as expand_buggy_store
+
+    def _expander(template_id: str) -> Callable[[Mapping[str, Any]], Mapping[str, Any]]:
+        def expand(parameters: Mapping[str, Any]) -> Mapping[str, Any]:
+            try:
+                return expand_buggy_store(template_id, parameters)
+            except TemplateExpansionError as rejected:
+                raise ExpansionRejected(rejected.details) from rejected
+
+        return expand
+
+    return TemplateCatalogue(
+        TemplateExpansion(
+            template_id=template.template_id,
+            parameters=tuple(template.parameters),
+            expand=_expander(template.template_id),
+        )
+        for template in TEMPLATES
+    )
 
 
 async def _seed_builtin_templates(database: Database, registry: AdapterRegistry) -> int:

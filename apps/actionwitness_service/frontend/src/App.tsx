@@ -23,7 +23,9 @@ import {
   parseFindings,
   parseRun,
 } from "./api/workspace";
+import { type ContractTemplateSummary, listContractTemplates } from "./api/contracts";
 import { ConfirmationDialog } from "./components/ConfirmationDialog";
+import { ContractForm } from "./components/ContractForm";
 import { GuidanceBanner } from "./components/GuidanceBanner";
 import {
   CapabilityBar,
@@ -58,7 +60,7 @@ export default function App(): React.ReactElement {
   const { status, error, loading, refresh } = useWorkspace();
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [templates, setTemplates] = useState<readonly ContractTemplate[]>([]);
+  const [templates, setTemplates] = useState<readonly ContractTemplateSummary[]>([]);
   const [findings, setFindings] = useState<FindingsPage | null>(null);
   const [pending, setPending] = useState<PendingConfirmation | null>(null);
   const [comparison, setComparison] = useState<{
@@ -110,22 +112,10 @@ export default function App(): React.ReactElement {
   useEffect(() => {
     let live = true;
     const controller = new AbortController();
-    void request("/contracts/templates", {
-      signal: controller.signal,
-      parse: (value): readonly ContractTemplate[] => {
-        const record = value as { templates?: unknown };
-        return Array.isArray(record.templates)
-          ? record.templates.map((entry) => {
-              const template = entry as Record<string, unknown>;
-              return {
-                contractId: String(template["contract_id"]),
-                sourceTemplateId: String(template["source_template_id"]),
-                title: String(template["title"] ?? template["source_template_id"]),
-              };
-            })
-          : [];
-      },
-    }).then(
+    // 012-T5: the shared validator, because the declarative form needs each
+    // template's `parameters` — which scalars it allowlists — and a second
+    // hand-rolled parse of the same payload is a second thing to keep correct.
+    void listContractTemplates(controller.signal).then(
       (loaded) => {
         if (live) {
           setTemplates(loaded);
@@ -281,8 +271,33 @@ export default function App(): React.ReactElement {
             }}
           />
 
-          <ContractPanel
+          <ContractForm
             templates={templates}
+            onCreated={(contract) => {
+              // §6.3 steps 6–7: the guidance banner moves to "arm the contract"
+              // and the arming tools register — both of which need the new
+              // contract *selected*. Creating one and leaving the workspace
+              // pointing at the old one would end the journey a step short of
+              // where the form promised to take it.
+              void act(async () =>
+                request(`/contracts/${contract.contractId}/select`, {
+                  method: "POST",
+                  parse: (value) => value,
+                }),
+              );
+            }}
+          />
+
+          <ContractPanel
+            templates={templates.map(
+              (template): ContractTemplate => ({
+                contractId: template.contractId,
+                sourceTemplateId: template.sourceTemplateId,
+                // §15.2's summary carries no `title`; this is what the panel
+                // already showed, kept as it was rather than changed in passing.
+                title: template.sourceTemplateId,
+              }),
+            )}
             selectedContractId={status.selectedContractId}
             busy={busy}
             canSelect={status.activeRun === null || TERMINAL.includes(status.activeRun.status)}

@@ -21,12 +21,14 @@ from fastapi import Depends, Request
 from actionwitness_service.api.errors import ApiError, ApiErrorCode
 from actionwitness_service.application.adapter_registry import AdapterRegistry
 from actionwitness_service.application.artifacts import ArtifactStore
+from actionwitness_service.application.template_catalogue import TemplateCatalogue
 from actionwitness_service.config import ServiceSettings
 from actionwitness_service.persistence.database import Database
 from actionwitness_service.persistence.locks import WorkspaceLocks
 
 __all__ = [
     "ArtifactsDependency",
+    "CatalogueDependency",
     "DatabaseDependency",
     "LocksDependency",
     "RegistryDependency",
@@ -67,6 +69,17 @@ def _artifacts(request: Request) -> ArtifactStore:
     return request.app.state.artifacts
 
 
+def _catalogue(request: Request) -> TemplateCatalogue:
+    """The instantiable templates this deployment composed at startup.
+
+    Built once rather than per request, and from app state rather than by
+    importing an integration here: which targets are available is a
+    composition decision (§21.1), and a generic dependency that reached for
+    a commerce module would make every route depend on one.
+    """
+    return request.app.state.templates
+
+
 def _settings(request: Request) -> ServiceSettings:
     """The resolved module configuration.
 
@@ -87,4 +100,5 @@ DatabaseDependency = Annotated[Database, Depends(_database)]
 LocksDependency = Annotated[WorkspaceLocks, Depends(_locks)]
 RegistryDependency = Annotated[AdapterRegistry, Depends(_registry)]
 ArtifactsDependency = Annotated[ArtifactStore, Depends(_artifacts)]
+CatalogueDependency = Annotated[TemplateCatalogue, Depends(_catalogue)]
 SettingsDependency = Annotated[ServiceSettings, Depends(_settings)]

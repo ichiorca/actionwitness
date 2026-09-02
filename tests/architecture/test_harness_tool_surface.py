@@ -11,6 +11,11 @@ That failure would be confusing in the worst way: the harness accusing the
 target of mutating its surface, because somebody renamed one of the harness's
 own tools. So the two lists are held in agreement here rather than by memory.
 
+Two frontend files are scanned, because the harness registers by two
+mechanisms: the hook module, and §25.2's declarative form whose `toolname`
+attribute *is* its registration (012-T5). Both reach `getTools()` identically,
+so both have to be partitioned identically.
+
 Parsed with a regex rather than a TS toolchain, because the Python lane has no
 Node — the same tradeoff `test_exit_gate_traceability` makes for vitest titles.
 """
@@ -24,23 +29,47 @@ import pytest
 from actionwitness_service.application.surface_service import HARNESS_TOOL_NAMES
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-HARNESS_TOOLS_TS = (
-    REPO_ROOT / "apps" / "actionwitness_service" / "frontend" / "src" / "tools" / "harnessTools.ts"
-)
+FRONTEND_SRC = REPO_ROOT / "apps" / "actionwitness_service" / "frontend" / "src"
+HARNESS_TOOLS_TS = FRONTEND_SRC / "tools" / "harnessTools.ts"
+
+#: §25.2's declarative tool lives in the form that *is* its registration, not in
+#: the hook module — the browser reads `toolname` off the markup and nothing
+#: calls `registerTool`. It still reaches `getTools()` like any other tool, so
+#: it still has to be partitioned as one (012-T5).
+CONTRACT_FORM_TSX = FRONTEND_SRC / "components" / "ContractForm.tsx"
 
 #: `name: "list_contract_templates",` — the shape every entry in that file uses.
 _NAME = re.compile(r'^\s*name:\s*"([a-z_]+)"', re.MULTILINE)
 
+#: `export const CREATE_CONTRACT_TOOL = "create_outcome_contract";`
+_DECLARATIVE_NAME = re.compile(r'^export const \w+_TOOL = "([a-z_]+)";', re.MULTILINE)
+
 
 def _declared_in_frontend() -> set[str]:
-    return set(_NAME.findall(HARNESS_TOOLS_TS.read_text(encoding="utf-8")))
+    return set(_NAME.findall(HARNESS_TOOLS_TS.read_text(encoding="utf-8"))) | set(
+        _DECLARATIVE_NAME.findall(CONTRACT_FORM_TSX.read_text(encoding="utf-8"))
+    )
 
 
 @pytest.mark.architecture
-def test_the_frontend_tool_module_is_still_where_the_server_expects() -> None:
+def test_the_frontend_tool_modules_are_still_where_the_server_expects() -> None:
     """The guard on the comparison below: an empty scan would prove nothing."""
     assert HARNESS_TOOLS_TS.is_file(), "the harness tool definitions moved"
+    assert CONTRACT_FORM_TSX.is_file(), "the declarative contract form moved"
     assert _declared_in_frontend(), "no tool names were parsed, so the check is vacuous"
+
+
+@pytest.mark.architecture
+def test_the_declarative_tool_is_scanned_too() -> None:
+    """A second guard, because the two files are parsed by different patterns.
+
+    `harnessTools.ts` writes `name: "…"` inside an object; the form writes an
+    exported constant. If the declarative pattern silently stopped matching, the
+    union above would still be non-empty and the check below would still pass —
+    while `create_outcome_contract` quietly became a name the server excuses and
+    nothing declares, which is the direction an attacker would want.
+    """
+    assert "create_outcome_contract" in _declared_in_frontend()
 
 
 @pytest.mark.architecture

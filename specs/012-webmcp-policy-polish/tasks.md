@@ -29,7 +29,13 @@ tool is the failure this milestone exists to prevent.
 - [x] T4 — Invocation `AbortSignal` propagation; AC-14 green. A cancelled
       invocation leaves a clean refusal rather than a half-finished mutation,
       and a partially completed operation stays visible.
-- [ ] T5 — Flat declarative contract-instantiation form; AC-02 green.
+- [x] T5 — Flat declarative contract-instantiation form; AC-02 green for what
+      the repository can reach, and open on the operator's browser run (see
+      plan.md D2 and `tests/browser/ac02-registration-checklist.md`). Ships the
+      whole path: per-template scalar allowlists and server-side expansion,
+      `POST /contracts`, and the annotated form that is the third registration
+      mechanism. D3 and D4 record where the implementation reads Appendix G as
+      a shape rather than transcribing it.
 - [ ] T6 — `getTools()` / `toolchange` reconciliation, feeding
       `stable_tool_surface` rather than routing around it. Reconciliation that
       silently accepted a changed surface would undermine the policy 007's case

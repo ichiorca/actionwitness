@@ -50,12 +50,20 @@ __all__ = ["HARNESS_TOOL_NAMES", "SurfaceCaptureOutcome", "SurfaceService"]
 #:
 #: Held here rather than derived from the browser, because the namespace
 #: assignment is exactly what a hostile page would want to control. Kept in step
-#: with `frontend/src/tools/harnessTools.ts` by
-#: `tests/architecture/test_harness_tool_surface.py`: a name missing from this
-#: set lands a legitimate harness tool in the *target* partition, where its
-#: ordinary lifecycle appearance and disappearance would fail the run.
+#: with the frontend by `tests/architecture/test_harness_tool_surface.py`: a
+#: name missing from this set lands a legitimate harness tool in the *target*
+#: partition, where its ordinary lifecycle appearance and disappearance would
+#: fail the run.
+#:
+#: The frontend declares these in two places, because the harness registers by
+#: two mechanisms. Most come from `frontend/src/tools/harnessTools.ts`;
+#: `create_outcome_contract` is §25.2's *declarative* tool, which exists because
+#: a visible form carries `toolname` rather than because anything called
+#: `registerTool`. The browser reports it in `getTools()` exactly like the
+#: others, so the partition has to know it either way.
 HARNESS_TOOL_NAMES: frozenset[str] = frozenset(
     {
+        "create_outcome_contract",
         "list_contract_templates",
         "get_outcome_contract",
         "arm_outcome_contract",

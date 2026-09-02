@@ -173,6 +173,9 @@ async def test_a_template_listing_carries_what_a_chooser_needs(app: FastAPI) -> 
             "target_id",
             "schema_version",
             "content_hash",
+            # 012-T5: the scalars this template allowlists, so the declarative
+            # form renders exactly the controls it accepts (FR-021).
+            "parameters",
         }
         assert template["target_id"] == TARGET_ID
         assert template["content_hash"].startswith("sha256:")

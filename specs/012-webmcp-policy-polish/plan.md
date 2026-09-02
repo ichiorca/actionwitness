@@ -130,3 +130,57 @@ or (b) the demonstration wants a target reached *outside* the harness gate — a
 external caller hitting the store's `/checkout` directly — which is a different
 journey than the one FR-060 evaluates and needs its own contract. Both are
 specification decisions rather than implementation choices.
+
+### D2 — AC-02's browser half is a checklist, not a test (T5)
+
+**AC-02/§25.2.** AC-02 reads "when inspected in Chrome DevTools, then the
+expected native, imperative, and declarative tools are visible with valid
+schemas". The automated frontend suite runs in jsdom, which has no WebMCP
+implementation — and the declarative mechanism has *nothing to intercept*: a
+tool exists because the browser parsed `toolname` off the markup, not because
+anything called `registerTool`. No test in this repository can assert that a
+browser registered it.
+
+**Taken: the testable half is tested and the rest is a checklist.**
+`src/components/contractForm.test.tsx` pins every annotation §25.2 requires,
+`preventDefault`, one submit path shared by agent and human, `respondWith`,
+`toolactivated`/`toolcancel`, and the disabled-not-removed treatment of an
+unallowlisted control. `tests/browser/ac02-registration-checklist.md` carries
+the DevTools run, in the same form and for the same reason as ADR-0002's spike
+checklist (§26.4 makes WebMCP browser checks manual; §7.5 forbids letting a
+flagged browser gate the suite).
+
+**AC-02 is therefore green for what the repository can reach and open on the
+operator's run.** Recorded rather than claimed: the milestone's rule is that a
+shipped item carries its acceptance criterion, and half of this one needs a
+person at a browser.
+
+### D3 — the appendix's template identifiers are illustrative (T5)
+
+**Appendix G.** The `create_outcome_contract` schema in Appendix G enumerates
+`save20_no_checkout`, `idempotent_cart_retry`, `confirmed_checkout`, and
+`shopify_exact_cart`. None of those is a template this build publishes; the real
+identifiers are `one_mug_save20_no_checkout`, `retry_safe_cart_update`,
+`confirmed_checkout_only`, `one_mug_no_side_effects`, and (from 014)
+`one_mug_stable_surface`.
+
+**Taken: the enum is derived from the published registry, not transcribed.**
+Hard-coding the appendix's names would offer an agent four templates the server
+cannot expand and hide the five it can. The appendix is read as a shape — one
+`template_id` chosen from a closed published set, plus three optional scalars —
+and that shape is implemented exactly. No behaviour differs; the names do.
+
+### D4 — `contract_name` is bounded twice, at different limits (T5)
+
+**Appendix G / §20.2.** Appendix G bounds `contract_name` at 80 characters, which
+is also the core's `MAX_NAME_LENGTH`. The request model bounds it at 200 instead,
+and the expansion enforces the 80.
+
+Deliberate: the two bounds answer different questions. 200 is the *safety* bound
+— nothing unbounded may reach a column, a log line, or an error message — and 80
+is the *domain* bound, which belongs with the template that knows what a contract
+name is. Enforcing only the safety bound at the boundary means an 81-character
+name is refused by the expansion with a field-level message naming
+`contract_name`, rather than by FastAPI with a message about string length. Both
+arrive as the same `CONTRACT_VALIDATION_FAILED` envelope, so a client parses one
+shape either way.

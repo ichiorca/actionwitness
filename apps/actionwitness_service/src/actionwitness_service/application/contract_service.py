@@ -41,7 +41,7 @@ from actionwitness_service.application.guidance_service import (
     current_guidance,
 )
 from actionwitness_service.persistence.database import UnitOfWork
-from actionwitness_service.persistence.repositories import ContractRepository
+from actionwitness_service.persistence.repositories import ContractRepository, new_id
 
 __all__ = ["ContractService", "seed_templates"]
 
@@ -110,6 +110,52 @@ class ContractService:
         """Every global built-in template (§15.2)."""
         rows = await ContractRepository(self._work).list_template_summaries()
         return [_summary(row) for row in rows]
+
+    async def instantiate(
+        self, document: Mapping[str, Any], *, source_template_id: str
+    ) -> Mapping[str, Any]:
+        """Persist one expanded template as an immutable contract (FR-021–023).
+
+        The document arrives already expanded, because the arithmetic that
+        produced it is target knowledge and this service is target-neutral. What
+        happens here is the part that is the same for every target: validate,
+        hash, store once, and never update.
+
+        **Validation is not skipped because we generated it.** `parse_contract`
+        runs on the expansion exactly as it runs on a seeded template — the
+        constitution requires persisted JSON to be validated on write, and a
+        template whose arithmetic produced an out-of-range total should fail
+        here rather than at the first run armed against it.
+
+        The contract is stored under this workspace rather than globally: it was
+        created by one person's form submission, and FR-009 deletes a
+        workspace's own contracts while preserving the built-in templates.
+        """
+        # Raises `ContractError`, which the boundary turns into §15.8's
+        # envelope with field-level details — the same shape a rejected form
+        # field produces, so a client parses one error format and not two.
+        parse_contract(document)
+
+        stored = dict(document)
+        digest = content_hash(stored)
+        record = ContractRecord(
+            contract_id=new_id("ctr"),
+            schema_version=str(stored.get("schema_version", "1.0")),
+            content_hash=digest,
+            document=stored,
+            created_at=self._work.instant(),
+        )
+        await ContractRepository(self._work, self._workspace_id).add(
+            record, source_template_id=source_template_id
+        )
+        return {
+            "contract_id": record.contract_id,
+            "content_hash": digest,
+            "source_template_id": source_template_id,
+            "name": str(stored.get("name", "")),
+            "schema_version": record.schema_version,
+            "document": stored,
+        }
 
     async def read(self, contract_id: str) -> Mapping[str, Any]:
         """One immutable contract this workspace may see (§15.2, FR-006).

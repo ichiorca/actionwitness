@@ -6,12 +6,16 @@
  * the rest of the UI is testable without a browser that has WebMCP at all, and
  * so there is exactly one place to audit when the browser API changes.
  *
- * ## Two registration paths, and why both exist
+ * ## Three registration paths, and why each exists
+ *
+ * §25's three mechanisms, and AC-02 expects all three to be visible in a
+ * browser at once. Two of them are a choice forced by a package pin; the third
+ * is a different kind of registration entirely.
  *
  * ADR-0002 pinned `use-webmcp-tool@0.2.0`. Its `execute` signature is
  * `(args) => Result` — **it forwards no per-invocation `AbortSignal`**. That is
  * not a defect in the package; it is the exact gap ADR-0002's "rule 3 split"
- * anticipated, and it decides which path each tool uses:
+ * anticipated, and it decides which of the first two paths each tool uses:
  *
  * - `useHarnessTool` wraps the pinned hook. Correct for tools whose work is a
  *   single request the browser can abandon harmlessly.
@@ -20,6 +24,10 @@
  *   for anything cancellation-sensitive — `proceed_to_checkout` waits on a
  *   human, and an agent that abandons the call must be able to cancel the
  *   confirmation rather than leave it pending (FR-037, §14.9).
+ * - `useDeclarativeTool` registers nothing. The browser reads `toolname` off a
+ *   visible `<form>` and the tool exists because the markup does (§25.2). Used
+ *   for `create_outcome_contract`, where the agent's affordance and the
+ *   person's affordance are deliberately the same DOM node.
  *
  * ## Lifecycle
  *
@@ -40,6 +48,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { FormEvent, MutableRefObject } from "react";
 import { useWebMCP } from "use-webmcp-tool";
 
 export const MAX_TOOL_RESULT_CHARS = 1_500;
@@ -299,6 +308,137 @@ export function useNativeTool(tool: NativeToolDefinition): RegistrationState {
   }, [name, description, enabled, limit, shape]);
 
   return state;
+}
+
+/**
+ * §25.2's declarative registration — the third mechanism, and the odd one out.
+ *
+ * There is no `registerTool` call here because there is nothing to call. The
+ * browser reads `toolname` and `tooldescription` off a visible `<form>`, its
+ * `toolparamdescription` controls become the schema, and the tool appears
+ * because the markup exists. That is the whole appeal: the agent's affordance
+ * and the human's affordance are the same DOM node, so they cannot drift apart
+ * the way a hand-written schema drifts from the form it claims to describe.
+ *
+ * It still belongs in this module. The attribute names, `agentInvoked`,
+ * `respondWith`, and the `toolactivated`/`toolcancel` events are all direct
+ * WebMCP surface, and the constitution keeps that in the adapter. A component
+ * gets prop objects and a submit handler; it never learns an attribute name.
+ *
+ * ## What `respondWith` is for
+ *
+ * A human submitting the form gets a page that updates. An agent submitting it
+ * needs a *result* — and the submit handler's promise is the only thing that
+ * knows when the server actually answered. Without `respondWith`, the agent's
+ * call resolves the instant the handler returns, which is before the contract
+ * exists; it would read a pending request as a finished one.
+ *
+ * ## Why the activation state is rendered
+ *
+ * §25.2 asks for `toolactivated` and `toolcancel` to be handled "so agent focus
+ * and cancellation remain visible". A form quietly filled in and submitted by
+ * something the person cannot see is precisely the failure mode this product
+ * exists to make visible, so the state is surfaced rather than merely tracked.
+ */
+
+export type AgentActivity = "idle" | "activated" | "cancelled";
+
+export interface DeclarativeToolDefinition {
+  readonly name: string;
+  readonly description: string;
+}
+
+/** What a control needs to become a parameter of the declarative tool. */
+export function toolParameterProps(description: string): Record<string, string> {
+  return { toolparamdescription: description };
+}
+
+/** The submit control an agent may operate (§25.2's `toolautosubmit`). */
+export function toolAutoSubmitProps(): Record<string, string> {
+  return { toolautosubmit: "" };
+}
+
+export interface DeclarativeFormBinding {
+  /** Spread onto the `<form>`: this is the registration. */
+  readonly formProps: Record<string, string>;
+  readonly ref: MutableRefObject<HTMLFormElement | null>;
+  readonly onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  /** Whether an agent currently holds the form, for the human looking at it. */
+  readonly activity: AgentActivity;
+}
+
+/**
+ * Bind one visible form as a declarative tool.
+ *
+ * `submit` is given the form's own values and returns whatever the agent should
+ * receive. It is the *same* function a human submission runs — §25.2 requires
+ * the declarative path to "post the same payload to FastAPI used by a human
+ * submission", and the way to guarantee that is to have one handler rather than
+ * two that are supposed to agree.
+ */
+export function useDeclarativeTool(
+  tool: DeclarativeToolDefinition,
+  submit: (values: FormData) => Promise<unknown>,
+): DeclarativeFormBinding {
+  const ref = useRef<HTMLFormElement | null>(null);
+  const [activity, setActivity] = useState<AgentActivity>("idle");
+
+  // Held in a ref for the same reason the other two paths do it: call sites
+  // write inline closures, and an effect keyed on this identity would rebind
+  // the listeners on every render.
+  const latest = useRef(submit);
+  latest.current = submit;
+
+  useEffect(() => {
+    const form = ref.current;
+    if (form === null) {
+      return;
+    }
+    const activated = (): void => {
+      setActivity("activated");
+    };
+    const cancelled = (): void => {
+      setActivity("cancelled");
+    };
+    form.addEventListener("toolactivated", activated);
+    form.addEventListener("toolcancel", cancelled);
+    return () => {
+      form.removeEventListener("toolactivated", activated);
+      form.removeEventListener("toolcancel", cancelled);
+    };
+  }, []);
+
+  const onSubmit = useCallback((event: FormEvent<HTMLFormElement>): void => {
+    // Always. A declarative form that navigated would tear down the page the
+    // agent is mid-conversation with, and the human's own submission would lose
+    // every other panel's state.
+    event.preventDefault();
+
+    const values = new FormData(event.currentTarget);
+    const answered = latest.current(values).then(
+      (result) => normalizeResult(result),
+      (error: unknown) => normalizeError(error),
+    );
+
+    // `agentInvoked` is the only thing that distinguishes the two callers, and
+    // it decides one thing: whether anybody is waiting for a value. A human
+    // gets the re-rendered page; an agent gets this promise.
+    const submitEvent = event.nativeEvent as SubmitEvent & {
+      agentInvoked?: boolean;
+      respondWith?: (result: Promise<unknown>) => void;
+    };
+    if (submitEvent.agentInvoked === true && typeof submitEvent.respondWith === "function") {
+      submitEvent.respondWith(answered);
+    }
+    setActivity("idle");
+  }, []);
+
+  return {
+    formProps: { toolname: tool.name, tooldescription: tool.description },
+    ref,
+    onSubmit,
+    activity,
+  };
 }
 
 /**
