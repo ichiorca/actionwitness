@@ -22,6 +22,7 @@ __all__ = [
     "AUTHORITATIVE_SOURCES",
     "ENUM_REGISTRATIONS",
     "EvidenceSourceClassification",
+    "ToolNamespace",
     "ToolReportedStatus",
 ]
 
@@ -97,6 +98,38 @@ TOOL_REPORTED_STATUS_DESCRIPTIONS: Mapping[ToolReportedStatus, str] = {
 }
 
 
+class ToolNamespace(StrEnum):
+    """§9.11's normative partition of the tool surface.
+
+    "Only the target partition is subject to stability policy by default.
+    Without this partition, ordinary state-dependent registration of harness
+    tools would register as surface mutation on every lifecycle transition" — a
+    workspace legitimately gains and loses its own tools as a run moves through
+    §11.5's phases.
+
+    **The server assigns this, never the browser.** A page that could label its
+    own tools would label a poisoned look-alike `harness` and step outside the
+    policy that exists to catch it. A name the harness does not publish is
+    therefore `target`, which fails safe: an unknown tool appearing mid-run
+    shows up as an `added` delta rather than as nothing at all.
+    """
+
+    HARNESS = "harness"
+    TARGET = "target"
+
+
+TOOL_NAMESPACE_DESCRIPTIONS: Mapping[ToolNamespace, str] = {
+    ToolNamespace.HARNESS: (
+        "ActionWitness's own registered tools, whose availability legitimately "
+        "changes with workspace lifecycle state (§11.5)."
+    ),
+    ToolNamespace.TARGET: (
+        "Tools belonging to the target under test, and anything the harness does "
+        "not publish. Subject to stability policy by default."
+    ),
+}
+
+
 ENUM_REGISTRATIONS: tuple[tuple[str, str, type[StrEnum], Mapping[StrEnum, str]], ...] = (
     (
         "evidence_source_classification",
@@ -105,4 +138,7 @@ ENUM_REGISTRATIONS: tuple[tuple[str, str, type[StrEnum], Mapping[StrEnum, str]],
         EVIDENCE_SOURCE_DESCRIPTIONS,
     ),
     ("tool_reported_status", "FR-032", ToolReportedStatus, TOOL_REPORTED_STATUS_DESCRIPTIONS),
+    # Appended: `registry.json` is committed, so a new row at the end is a
+    # readable diff while an insertion would shift every row after it.
+    ("tool_namespace", "spec §9.11", ToolNamespace, TOOL_NAMESPACE_DESCRIPTIONS),
 )

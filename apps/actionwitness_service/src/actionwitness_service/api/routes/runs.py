@@ -30,7 +30,12 @@ from __future__ import annotations
 import json
 from typing import Annotated, Any, Literal
 
+from actionwitness_core.evidence.surface import MAX_SURFACE_TOOLS
 from actionwitness_core.reports.enums import RunMode
+from actionwitness_core.security.limits import (
+    MAX_TOOL_DESCRIPTION_CHARS,
+    MAX_TOOL_NAME_CHARS,
+)
 from fastapi import APIRouter, Body, Path, Query
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -54,6 +59,7 @@ from actionwitness_service.application.guidance_service import current_guidance
 from actionwitness_service.application.invocation_service import InvocationService
 from actionwitness_service.application.report_service import ReportService
 from actionwitness_service.application.run_service import RunService
+from actionwitness_service.application.surface_service import SurfaceService
 from actionwitness_service.application.timeline_service import (
     EVENT_PAGE_DEFAULT,
     EVENT_PAGE_MAX,
@@ -192,6 +198,61 @@ async def invoke_target_tool(
         "duration_ms": outcome.duration_ms,
         "next_action": outcome.next_action,
     }
+
+
+class CapturedToolRequest(BaseModel):
+    """One tool as `getTools()` reported it (FR-166).
+
+    No hash and no namespace: both are the server's to compute. A page that
+    could supply its own identity hash would be the tool surface vouching for
+    itself, and a page that could label its own namespace would mark a poisoned
+    look-alike `harness` and step outside the policy that watches the target
+    partition (§9.11).
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: Annotated[str, Field(min_length=1, max_length=MAX_TOOL_NAME_CHARS)]
+    description: Annotated[str, Field(max_length=MAX_TOOL_DESCRIPTION_CHARS)] = ""
+    read_only_hint: bool | None = None
+    untrusted_content_hint: bool | None = None
+    input_schema: dict[str, Any] = Field(default_factory=dict)
+
+
+class CaptureSurfaceRequest(BaseModel):
+    """§20.2 bounds a frontend-submitted surface at 100 tools."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    tools: Annotated[list[CapturedToolRequest], Field(max_length=MAX_SURFACE_TOOLS)]
+
+
+@router.post("/{run_id}/tool-surface", status_code=201)
+async def capture_tool_surface(
+    run_id: RunId,
+    workspace_id: WorkspaceDependency,
+    database: DatabaseDependency,
+    locks: LocksDependency,
+    request: Annotated[CaptureSurfaceRequest, Body()],
+) -> dict[str, Any]:
+    """Record one observation of the browser's tool surface (FR-166, FR-167).
+
+    Every capture is recorded, including one identical to the last. FR-167 asks
+    the frontend to re-capture on every `toolchange` firing, and a capture that
+    produced no event would leave the timeline unable to distinguish "looked and
+    saw nothing" from "never looked" — which is the distinction §16.1 turns into
+    a failing policy.
+
+    Appended under the workspace lock and in one transaction: the capture and
+    the deltas it implies describe one instant, and a reader who saw the capture
+    without its deltas would believe the surface was quiet.
+    """
+    async with locks.hold(workspace_id), database.transaction() as work:
+        await WorkspaceScope(work, workspace_id).run(run_id)
+        outcome = await SurfaceService(work, workspace_id).capture(
+            run_id, [tool.model_dump() for tool in request.tools]
+        )
+    return outcome.as_document()
 
 
 @router.post("/{run_id}/verify")

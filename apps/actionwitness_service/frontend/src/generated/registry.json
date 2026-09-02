@@ -253,6 +253,13 @@
         "already_applied": "A retry under the original request ID returned the first persisted result rather than repeating the mutation."
       }
     },
+    "tool_namespace": {
+      "spec_ref": "spec §9.11",
+      "members": {
+        "harness": "ActionWitness's own registered tools, whose availability legitimately changes with workspace lifecycle state (§11.5).",
+        "target": "Tools belonging to the target under test, and anything the harness does not publish. Subject to stability policy by default."
+      }
+    },
     "check_type": {
       "spec_ref": "spec §17.1 / §10.1",
       "members": {
