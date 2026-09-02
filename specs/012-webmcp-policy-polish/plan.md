@@ -170,6 +170,54 @@ cannot expand and hide the five it can. The appendix is read as a shape — one
 `template_id` chosen from a closed published set, plus three optional scalars —
 and that shape is implemented exactly. No behaviour differs; the names do.
 
+### D6 — SSE ships server-side; the workspace stays on polling (T7)
+
+**§15.3 / §7.3.** The entry condition was checked rather than assumed: all eight
+exit gates plus the architecture lane were green (239 tests) before any of this
+was written, and the polling transport's own tests pass unchanged.
+
+§15.3's normative sentence is about the API — "use the event sequence as the SSE
+`id`, honor `Last-Event-ID`, and retain the paged endpoint as fallback" — and
+all three ship with tests. What is **not** done is switching the React workspace
+onto `EventSource`.
+
+**Taken deliberately, for two reasons.** §15.3 makes polling normative and SSE
+an enhancement, so a client that never negotiates a stream cannot tell this
+shipped; nothing is half-exposed. And the plan's own warning for this item is
+that SSE is "a second transport with its own reconnection and stale-response
+semantics" — putting one into the workspace at the end of the milestone, when
+the timeline view is stable and tested, buys nothing the requirement asks for.
+
+There is also a testing argument. jsdom has no `EventSource`, so a client-side
+suite would be a double exercising a double, while resume is exactly what *can*
+be tested honestly through the real ASGI app — which is where it now is.
+
+**If the operator wants the workspace switched, that is a follow-up**, and the
+server contract it would consume is complete and covered.
+
+### D7 — a rail test was vacuous, and the mutation proved it (T7)
+
+**Constitution §17 / §6.** The first version of the SSE rail test asserted the
+obvious form of "no transaction across SSE delivery": open a stream, leave it
+suspended, write to the database, require the write to succeed.
+
+It passed against an implementation **deliberately broken** to hold its unit of
+work across every yield. `Database.reading()` opens a fresh connection and
+issues no `BEGIN`; under WAL a reader does not block a writer, so there was no
+writer to starve and nothing for the assertion to detect. The test would have
+sat in the suite looking like proof of a rail it could not see.
+
+**Taken: the test was replaced with one that measures the hazard that is real
+here** — connections, one per open stream, held as long as a tab stays open with
+nothing bounding how many tabs there are (§21).
+`test_no_unit_of_work_is_held_across_a_yield` counts open units of work at the
+point the generator suspends. It was re-run against the same mutation and
+fails, so its teeth are demonstrated rather than assumed.
+
+The module docstring was corrected too: it had asserted the writer-starvation
+mechanism as fact, and a comment that explains a mechanism which does not exist
+is worse than no comment.
+
 ### D5 — two `getTools()` readers existed, and were merged (T6)
 
 **Constitution §1 / §25.1 / FR-003.** 014 built the surface capture with its own

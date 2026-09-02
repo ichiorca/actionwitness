@@ -7,6 +7,7 @@
 | `POST` | `/runs/{run_id}/verify`                           | 005-T6 |
 | `GET`  | `/runs/{run_id}/comparison`                       | 005-T11 |
 | `GET`  | `/runs/{run_id}/events`                           | 005-T12 |
+| `GET`  | `/runs/{run_id}/events` (SSE)                     | 012-T7 |
 | `GET`  | `/runs/{run_id}`                                  | 006-T4 |
 | `GET`  | `/runs/{run_id}/findings`                         | 006-T4 |
 | `GET`  | `/runs/{run_id}/report`                           | 005-T12 |
@@ -36,7 +37,8 @@ from actionwitness_core.security.limits import (
     MAX_TOOL_DESCRIPTION_CHARS,
     MAX_TOOL_NAME_CHARS,
 )
-from fastapi import APIRouter, Body, Path, Query
+from fastapi import APIRouter, Body, Header, Path, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from actionwitness_service.api.dependencies import (
@@ -45,6 +47,12 @@ from actionwitness_service.api.dependencies import (
     LocksDependency,
     RegistryDependency,
     WorkspaceDependency,
+)
+from actionwitness_service.api.event_stream import (
+    EVENT_STREAM_MEDIA_TYPE,
+    resume_cursor,
+    stream_events,
+    wants_event_stream,
 )
 from actionwitness_service.application.authorization import WorkspaceScope
 from actionwitness_service.application.comparison_service import ComparisonService
@@ -317,24 +325,50 @@ async def read_comparison(
     return dict(result.as_document())
 
 
-@router.get("/{run_id}/events")
+@router.get("/{run_id}/events", response_model=None)
 async def read_events(
     run_id: RunId,
     workspace_id: WorkspaceDependency,
     database: DatabaseDependency,
     after_sequence: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=EVENT_PAGE_MAX)] = EVENT_PAGE_DEFAULT,
-) -> dict[str, Any]:
-    """§15.3: "ordered events after a sequence".
+    accept: Annotated[str | None, Header()] = None,
+    last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
+) -> dict[str, Any] | StreamingResponse:
+    """§15.3: "ordered events after a sequence", paged or streamed.
 
     The bounds are declared rather than clamped. A request for `limit=500` is
     refused with §15.8's envelope instead of being quietly served 100, because a
     client that asked for 500, received 100, and was told nothing would conclude
     the timeline had ended.
 
-    Tier 3's SSE variant is explicitly out of scope here; §15.3 keeps this
-    endpoint as the fallback either way, so nothing about it is provisional.
+    **Paging is the contract; SSE is an enhancement** (§15.3: "retain the paged
+    endpoint as fallback"). A client reaches the stream only by naming
+    `text/event-stream` in `Accept` — `*/*`, which `fetch` sends by default,
+    gets JSON, because a caller that did not ask for a stream and cannot parse
+    one would hang waiting for a body that never ends.
+
+    The run is resolved *before* the stream opens. Once a `200` and a
+    `text/event-stream` header are on the wire it is too late to send §15.8's
+    envelope, so a run this workspace may not see has to fail here, as a plain
+    404, rather than as an empty stream a client has to interpret.
     """
+    if wants_event_stream(accept):
+        cursor = resume_cursor(last_event_id, after_sequence)
+        async with database.reading() as work:
+            await TimelineService(work, workspace_id).events(run_id, after_sequence=cursor, limit=1)
+        return StreamingResponse(
+            stream_events(database, workspace_id, run_id, after_sequence=cursor),
+            media_type=EVENT_STREAM_MEDIA_TYPE,
+            headers={
+                # Buffering a stream defeats it: a proxy that waits for the
+                # response to finish delivers a run's timeline all at once,
+                # after the run is over.
+                "Cache-Control": "no-store",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
     async with database.reading() as work:
         page = await TimelineService(work, workspace_id).events(
             run_id, after_sequence=after_sequence, limit=limit

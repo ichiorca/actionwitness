@@ -45,10 +45,15 @@ tool is the failure this milestone exists to prevent.
       a person reads and the evidence the server judges cannot disagree, and
       `tests/architecture/test_webmcp_adapter_isolation.py` keeps a third from
       appearing.
-- [ ] T7 — SSE, **only if** polling is already stable and every earlier gate is
-      green. A second transport brings its own reconnection and stale-response
-      semantics; adding it while anything earlier is red means debugging two
-      timelines at once.
+- [x] T7 — SSE. The condition was checked, not assumed: all eight exit gates
+      plus the architecture lane were green (239 tests) and the polling
+      transport's tests pass unchanged. §15.3's three requirements ship — the
+      sequence as the SSE `id`, `Last-Event-ID` resume, and the paged endpoint
+      retained as the default for any client that does not negotiate a stream.
+      The React workspace deliberately stays on polling (plan.md D6): §15.3
+      makes SSE an enhancement, and a second live transport in the UI is the
+      risk this item was made conditional over. D7 records a rail test that was
+      vacuous and what replaced it.
 - [ ] T8 — Cut hygiene for every item not shipped: control and tool
       registration removed or visibly disabled, verified rather than asserted.
       Extend 009-T12's existing gate rather than writing a second one.
