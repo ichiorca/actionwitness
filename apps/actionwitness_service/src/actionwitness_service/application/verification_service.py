@@ -48,6 +48,7 @@ from actionwitness_core.engine.policies import (
     PolicyEvidence,
     declared_contract_paths,
     evaluate_policies,
+    identity_mismatches,
     surface_evidence,
 )
 from actionwitness_core.engine.trajectory import evaluate_expected_tools
@@ -418,6 +419,7 @@ def _evaluate(
     # `not_evaluated` (§12.2, §16.1).
     changes = None if initial is None or final is None else diff_states(initial, final)
     baseline_recorded, observed_deltas = surface_evidence(events)
+    mismatched_tools = identity_mismatches(events)
 
     return Evaluation(
         assertions=assertions,
@@ -436,6 +438,7 @@ def _evaluate(
                 # fail closed rather than pass.
                 surface_baseline_recorded=baseline_recorded,
                 observed_surface_deltas=observed_deltas,
+                identity_mismatches=mismatched_tools,
             ),
         ),
         changes=changes,

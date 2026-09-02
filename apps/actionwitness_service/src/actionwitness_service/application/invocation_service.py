@@ -53,6 +53,7 @@ from actionwitness_core.evidence.effects import (
     effect_evidence,
     redacted_observation,
 )
+from actionwitness_core.evidence.enums import ToolNamespace
 from actionwitness_core.journeys.enums import (
     ConfirmationStatus,
     EventActor,
@@ -80,6 +81,7 @@ from actionwitness_service.application.confirmation_service import (
 )
 from actionwitness_service.application.guidance_service import GuidanceRecorder, current_guidance
 from actionwitness_service.application.limits import WorkspaceCeilings
+from actionwitness_service.application.surface_service import SurfaceService
 from actionwitness_service.persistence.database import Database, UnitOfWork
 from actionwitness_service.persistence.locks import WorkspaceLocks
 from actionwitness_service.persistence.repositories import EventRepository, new_id
@@ -304,19 +306,21 @@ class InvocationService:
     async def _start_or_trip(
         self, *args: Any, **kwargs: Any
     ) -> tuple[int, Mapping[str, Any] | None]:
-        """`_start`, with FR-008's ceiling refusal raised after its commit.
+        """`_start`, with its refusal raised after the commit that recorded it.
 
         Split out so the raise happens outside the `async with`: raising inside
         would roll back the boundary event that explains the stop, which is the
         bug 004-T8 caught and this must not reintroduce.
+
+        The refusal is *carried out* rather than inferred from `sequence == 0`.
+        Two paths now stop a start before it records one — FR-008's event
+        ceiling and FR-169's identity mismatch — and inferring the reason from
+        the sentinel would report whichever one the code happened to name,
+        which is how the identity refusal first surfaced as a ceiling error.
         """
-        sequence, pending = await self._start(*args, **kwargs)
-        if sequence == 0:
-            raise ApiError(
-                ApiErrorCode.EVENT_LIMIT_EXCEEDED,
-                "This run reached its event ceiling. It has been moved to error and its "
-                "evidence is preserved.",
-            )
+        sequence, pending, refusal = await self._start(*args, **kwargs)
+        if refusal is not None:
+            raise refusal
         return sequence, pending
 
     async def _invocable_run(
@@ -412,6 +416,55 @@ class InvocationService:
             # already caught one.
             return None
 
+    async def _identity_mismatch(
+        self,
+        work: UnitOfWork,
+        workspace_id: str,
+        run_id: str,
+        tool_name: str,
+        presented: str | None,
+    ) -> dict[str, Any] | None:
+        """Whether the presented identity disagrees with the armed baseline.
+
+        `None` in three cases, and each is deliberate:
+
+        * the caller presented no hash — the field is optional in §15.3, and a
+          client that cannot compute one must still be able to invoke;
+        * no baseline was captured — §16.1 already fails `stable_tool_surface`
+          closed for that run, and refusing every invocation as well would make
+          an un-instrumented browser unable to use the product at all;
+        * the baseline has no entry for this tool — it appeared mid-run, which
+          is an `added` delta for the surface policy to judge, not a reason to
+          refuse the call the agent is making right now.
+
+        Each of those is a *narrower* claim than "the definitions match". They
+        are separated so that adding a fourth is a deliberate act rather than a
+        widening of an existing one.
+        """
+        if presented is None:
+            return None
+        baseline = await SurfaceService(work, workspace_id).baseline(run_id)
+        if baseline is None:
+            return None
+        entry = baseline.by_name(ToolNamespace.TARGET).get(tool_name)
+        if entry is None:
+            return None
+
+        expected = entry.identity()
+        if expected.identity_hash == presented:
+            return None
+        return {
+            "reason": "the tool definition changed since the run was armed",
+            "tool_name": tool_name,
+            "expected_identity_hash": expected.identity_hash,
+            "presented_identity_hash": presented,
+            # The armed definition, so a reader can see what the agent thought
+            # it was calling. The current one is not available here — the caller
+            # sent a hash, not a definition — which is why FR-167's capture is
+            # the other half of this evidence.
+            "armed_definition": entry.canonical_document(),
+        }
+
     async def _start(
         self,
         workspace_id: str,
@@ -427,7 +480,7 @@ class InvocationService:
         arguments: Mapping[str, Any],
         verification_reservation: int,
         requirement: ConfirmationRequirement | None = None,
-    ) -> tuple[int, Mapping[str, Any] | None]:
+    ) -> tuple[int, Mapping[str, Any] | None, ApiError | None]:
         """Reserve the budget, open the run, and record the start (FR-031, FR-008).
 
         The event-budget refusal is *returned* by the ceiling rather than raised,
@@ -445,7 +498,7 @@ class InvocationService:
             if refusal is not None:
                 # The transaction still commits: it is carrying the boundary
                 # event that explains why this run stopped.
-                return 0, None
+                return 0, None, refusal
 
             if str(run["status"]) == str(RunState.ARMED.value):
                 # §11.5: "Armed --> Running: first target action". Validated
@@ -459,6 +512,45 @@ class InvocationService:
                 await GuidanceRecorder(work, workspace_id).transition(
                     await current_guidance(work, workspace_id), run_id=run_id
                 )
+
+            # FR-169's pre-invocation identity check. Inside this transaction so
+            # the mismatch event and the refusal commit together — a refusal
+            # whose evidence did not land would be an accusation with nothing
+            # behind it.
+            #
+            # Refused, not merely recorded. The agent chose this tool from a
+            # description that no longer describes it, so dispatching anyway
+            # would spend a human's consent on something other than what was
+            # consented to. FR-169 additionally requires the policy to fail on
+            # this "even if no `toolchange` event was observed", which the
+            # recorded event is what makes possible.
+            mismatch = await self._identity_mismatch(
+                work, workspace_id, run_id, spec.name, tool_identity_hash
+            )
+            if mismatch is not None:
+                await EventRepository(work).append(
+                    run_id,
+                    {
+                        "event_type": str(OutcomeEventType.TOOL_IDENTITY_MISMATCH.value),
+                        "actor": str(EventActor.HARNESS.value),
+                        "tool_name": spec.name,
+                        "tool_identity_hash": tool_identity_hash,
+                        "correlation_id": correlation_id,
+                        "request_id": request_id,
+                        "redacted_payload": mismatch,
+                    },
+                )
+                refusal = ApiError(
+                    ApiErrorCode.TOOL_IDENTITY_MISMATCH,
+                    "This tool's definition changed since the run was armed.",
+                    details=[
+                        {
+                            "path": "tool_identity_hash",
+                            "message": "does not match the armed baseline",
+                        }
+                    ],
+                )
+                return 0, None, refusal
 
             started = await EventRepository(work).append(
                 run_id,
@@ -488,7 +580,7 @@ class InvocationService:
             )
 
             if requirement is None:
-                return started, None
+                return started, None, None
 
             # §14.1: the request is created here, in the *same* transaction as
             # the start event it belongs to. A confirmation without its start
@@ -553,13 +645,17 @@ class InvocationService:
                 await current_guidance(work, workspace_id), run_id=run_id
             )
 
-            return started, {
-                "confirmation_id": confirmation_id,
-                "expires_at": expires_at.isoformat(),
-                "consequence": consequence,
-                "correlation_id": correlation_id,
-                "tool_name": spec.name,
-            }
+            return (
+                started,
+                {
+                    "confirmation_id": confirmation_id,
+                    "expires_at": expires_at.isoformat(),
+                    "consequence": consequence,
+                    "correlation_id": correlation_id,
+                    "tool_name": spec.name,
+                },
+                None,
+            )
 
     async def _resumed_start(self, run_id: str, correlation_id: str) -> int:
         """The sequence of the start event this invocation already wrote.

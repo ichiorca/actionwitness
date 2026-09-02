@@ -65,6 +65,7 @@ class ApiErrorCode(StrEnum):
 
     # Request safety (004): the boundary refusals that precede any handler
     ORIGIN_NOT_ALLOWED = "ORIGIN_NOT_ALLOWED"
+    TOOL_IDENTITY_MISMATCH = "TOOL_IDENTITY_MISMATCH"
     RESOURCE_NOT_FOUND = "RESOURCE_NOT_FOUND"
 
     # Capacity and availability
@@ -296,6 +297,20 @@ API_ERROR_DESCRIPTIONS: Mapping[ApiErrorCode, ApiErrorSpec] = {
         ),
         spec_ref="§20.1",
         provenance="project",
+    ),
+    ApiErrorCode.TOOL_IDENTITY_MISMATCH: ApiErrorSpec(
+        http_status=409,
+        retryable=False,
+        description=(
+            "The tool definition observed immediately before dispatch does not match "
+            "the one captured when the run was armed (FR-169). The invocation is "
+            "refused rather than dispatched: the agent chose this tool from a "
+            "description that no longer describes it, so consent given to the call "
+            "was consent to something else. Re-arming is the way forward, which is "
+            "why this is not retryable."
+        ),
+        spec_ref="FR-169",
+        provenance="spec",
     ),
     ApiErrorCode.RESOURCE_NOT_FOUND: ApiErrorSpec(
         http_status=404,

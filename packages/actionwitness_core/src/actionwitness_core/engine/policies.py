@@ -59,8 +59,24 @@ __all__ = [
     "declared_contract_paths",
     "evaluate_policies",
     "evaluate_policy",
+    "identity_mismatches",
     "surface_evidence",
 ]
+
+
+def identity_mismatches(events: Sequence[RunEvent]) -> tuple[str, ...]:
+    """Tools whose pre-invocation identity disagreed with the baseline (FR-169).
+
+    Read from the timeline like every other policy input, so a replayed run
+    sees what its source saw. `tool_identity_mismatch` exists as its own event
+    type precisely because "`tool_surface_changed` records an observed delta
+    and cannot carry that case" (§17.1).
+    """
+    return tuple(
+        str(event.tool_name)
+        for event in events
+        if event.event_type is OutcomeEventType.TOOL_IDENTITY_MISMATCH and event.tool_name
+    )
 
 
 def surface_evidence(events: Sequence[RunEvent]) -> tuple[bool, tuple[SurfaceDelta, ...]]:
@@ -185,6 +201,12 @@ class PolicyEvidence(CoreModel):
     changed_paths: tuple[ObservationPath, ...] | None = None
     #: Whether a `tool_surface_captured` baseline exists for this run (§16.1).
     surface_baseline_recorded: bool = False
+    #: Target tools whose pre-invocation identity disagreed with the armed
+    #: baseline (FR-169). Separate from the deltas because FR-169 is explicit
+    #: that a mismatch "shall fail the policy **even if no `toolchange` event
+    #: was observed**" — a page that swapped a definition without announcing it
+    #: produces no delta at all, and that silence is the interesting case.
+    identity_mismatches: tuple[str, ...] = ()
     #: Deltas observed against that baseline (§9.5, §9.11). Carries the tool
     #: name and namespace as well as the kind, because the policy has to ask
     #: three questions of each one — is it in the watched partition, is its kind
@@ -561,6 +583,28 @@ def _evaluate_stable_tool_surface(
     ]
     failing = [delta for delta in watched if delta.kind in policy.failing_delta_kinds]
     warned = sorted({delta.kind.value for delta in watched if delta not in failing})
+    mismatched = sorted(set(evidence.identity_mismatches))
+
+    if mismatched:
+        # Reported before the delta check and never merged into it. A mismatch
+        # with no accompanying delta is the *worst* case, not a lesser one: the
+        # surface changed and nothing announced it, so a reader who saw only
+        # "failing_delta_kinds: []" would conclude the surface was quiet.
+        return _finding(
+            policy,
+            CheckStatus.FAILED,
+            classification=FailureClassification.TOOL_SURFACE_MUTATION,
+            evidence={
+                "reason": (
+                    "a tool's definition at invocation time did not match the armed "
+                    "baseline (FR-169)"
+                ),
+                "identity_mismatches": mismatched,
+                "failing_delta_kinds": sorted({delta.kind.value for delta in failing}),
+                "warned_delta_kinds": warned,
+                "deltas": [delta.canonical_document() for delta in failing],
+            },
+        )
 
     if failing:
         return _finding(

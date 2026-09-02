@@ -293,3 +293,158 @@ async def test_another_workspace_cannot_capture_into_this_run(stack: FastAPI) ->
         response = await _capture(stranger, run_id, [descriptor()])
 
     assert response.status_code == 404, "someone else's run is indistinguishable from a missing one"
+
+
+# --- FR-169's pre-invocation identity check (014-T5) -------------------------
+#
+# "Each recorded target-tool invocation shall carry the identity hash of the tool
+# definition as observed at invocation time; a mismatch against the armed
+# baseline shall be recorded and shall fail the policy even if no `toolchange`
+# event was observed."
+#
+# The refusal matters as much as the record. The agent chose this tool from a
+# description that no longer describes it, so dispatching anyway would spend a
+# human's consent on something other than what was consented to.
+
+
+async def _identity_of(visitor: httpx.AsyncClient, run_id: str, tool: str) -> str:
+    events = await _events(visitor, run_id)
+    captured = next(e for e in events if e["event_type"] == "tool_surface_captured")
+    definition = next(
+        t for t in captured["redacted_payload"]["surface"]["tools"] if t["name"] == tool
+    )
+    return ToolDefinition.model_validate(definition).identity().identity_hash
+
+
+async def _invoke(
+    visitor: httpx.AsyncClient, run_id: str, tool: str, arguments: dict[str, Any], **body: Any
+) -> Any:
+    return await visitor.post(
+        f"{RUNS}/{run_id}/target-tools/{tool}:invoke",
+        json={"arguments": arguments, **body},
+    )
+
+
+async def test_a_matching_identity_dispatches_normally(stack: FastAPI) -> None:
+    """The guard on every refusal below: the honest path must still work."""
+    async with client(stack) as visitor:
+        run_id = await _armed_run(visitor)
+        await _capture(visitor, run_id, [descriptor("update_cart")])
+        presented = await _identity_of(visitor, run_id, "update_cart")
+
+        response = await _invoke(
+            visitor,
+            run_id,
+            "update_cart",
+            {"product_id": "mug-ceramic-001", "quantity": 1, "request_id": "req_addonemug"},
+            tool_identity_hash=presented,
+        )
+
+    assert response.status_code == 200, response.text
+
+
+async def test_a_changed_definition_refuses_the_invocation(stack: FastAPI) -> None:
+    """Refused, not merely recorded."""
+    async with client(stack) as visitor:
+        run_id = await _armed_run(visitor)
+        await _capture(visitor, run_id, [descriptor("update_cart")])
+
+        response = await _invoke(
+            visitor,
+            run_id,
+            "update_cart",
+            {"product_id": "mug-ceramic-001", "quantity": 1, "request_id": "req_addonemug"},
+            tool_identity_hash="sha256:" + "0" * 64,
+        )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "TOOL_IDENTITY_MISMATCH"
+    assert response.json()["error"]["retryable"] is False, (
+        "re-arming is the way forward; retrying the same call cannot help"
+    )
+
+
+async def test_the_refusal_records_its_own_evidence(stack: FastAPI) -> None:
+    """A refusal whose evidence did not land would be an accusation with nothing
+    behind it — and FR-169 needs the record to fail the policy later."""
+    async with client(stack) as visitor:
+        run_id = await _armed_run(visitor)
+        await _capture(visitor, run_id, [descriptor("update_cart")])
+        await _invoke(
+            visitor,
+            run_id,
+            "update_cart",
+            {"product_id": "mug-ceramic-001", "quantity": 1, "request_id": "req_addonemug"},
+            tool_identity_hash="sha256:" + "0" * 64,
+        )
+        events = await _events(visitor, run_id)
+
+    recorded = [e for e in events if e["event_type"] == "tool_identity_mismatch"]
+    assert len(recorded) == 1
+    payload = recorded[0]["redacted_payload"]
+    assert payload["tool_name"] == "update_cart"
+    assert payload["expected_identity_hash"] != payload["presented_identity_hash"]
+    assert payload["armed_definition"]["name"] == "update_cart"
+
+    # ...and nothing was dispatched.
+    assert [e for e in events if e["event_type"] == "tool_invocation_started"] == []
+
+
+async def test_an_absent_hash_still_dispatches(stack: FastAPI) -> None:
+    """§15.3 makes the field optional.
+
+    A client that cannot compute an identity must still be able to invoke, or
+    the check would become a requirement the specification did not impose.
+    """
+    async with client(stack) as visitor:
+        run_id = await _armed_run(visitor)
+        await _capture(visitor, run_id, [descriptor("update_cart")])
+        response = await _invoke(
+            visitor,
+            run_id,
+            "update_cart",
+            {"product_id": "mug-ceramic-001", "quantity": 1, "request_id": "req_addonemug"},
+        )
+
+    assert response.status_code == 200
+
+
+async def test_no_baseline_means_no_refusal(stack: FastAPI) -> None:
+    """§16.1 already fails `stable_tool_surface` closed for an uncaptured run.
+
+    Refusing every invocation as well would make a browser that never captured
+    unable to use the product at all — a second penalty for one condition.
+    """
+    async with client(stack) as visitor:
+        run_id = await _armed_run(visitor)
+        response = await _invoke(
+            visitor,
+            run_id,
+            "update_cart",
+            {"product_id": "mug-ceramic-001", "quantity": 1, "request_id": "req_addonemug"},
+            tool_identity_hash="sha256:" + "0" * 64,
+        )
+
+    assert response.status_code == 200
+
+
+async def test_a_tool_absent_from_the_baseline_is_a_delta_not_a_refusal(
+    stack: FastAPI,
+) -> None:
+    """It appeared mid-run, which is an `added` delta for the surface policy.
+
+    Refusing the call the agent is making right now would answer a question
+    about the *surface* by blocking an *invocation*.
+    """
+    async with client(stack) as visitor:
+        run_id = await _armed_run(visitor)
+        await _capture(visitor, run_id, [descriptor("search_catalog")])
+        response = await _invoke(
+            visitor,
+            run_id,
+            "update_cart",
+            {"product_id": "mug-ceramic-001", "quantity": 1, "request_id": "req_addonemug"},
+            tool_identity_hash="sha256:" + "0" * 64,
+        )
+
+    assert response.status_code == 200
