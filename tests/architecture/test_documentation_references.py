@@ -135,21 +135,100 @@ def test_the_unfiled_upstream_issue_is_drafted_and_pointed_at() -> None:
     whether the work was pending, lost, or decided against.
 
     So the draft is in the repository and the two places that used to say
-    "not filed" now say where it is. This asserts the pointer resolves. Filing
-    itself stays the operator's call: it publishes text on somebody else's
-    project, and neither this test nor any other should make that look automatic.
+    "not filed" now say so, and say where the text is kept.
+
+    The draft itself left the repository with the decision records
+    (`.gitignore`), so what this can still hold is the part a reader depends on:
+    that the item is declared open rather than silently dropped, and that the
+    version it was verified against survives. Asserting the file existed would
+    have been asserting the operator's working tree, which is not something a
+    clean checkout — or CI — can see.
+
+    Filing itself stays the operator's call: it publishes text on somebody
+    else's project, and neither this test nor any other should make that look
+    automatic.
     """
-    draft = REPO_ROOT / "docs" / "upstream" / "webmcp-evals-stable-trial-id.md"
-    assert draft.is_file(), "the drafted upstream issue is missing"
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
 
-    text = draft.read_text(encoding="utf-8")
-    assert "Status: drafted, not filed" in text
-    assert "fe33c1b" in text, "the draft no longer names the version it was verified against"
+    assert "drafted, not filed" in readme, (
+        "the README no longer declares the upstream issue as an open item"
+    )
+    # The pin the draft was written against. Without it the note dates itself to
+    # nothing, and a reader cannot tell whether it still describes the shipped
+    # evaluator.
+    assert "fe33c1b" in readme, (
+        "the README no longer names the evaluator version the draft was verified against"
+    )
 
-    for referrer in (
-        REPO_ROOT / "README.md",
-        REPO_ROOT / "docs/adr/0005-external-evaluator-binding.md",
-    ):
-        assert "docs/upstream/webmcp-evals-stable-trial-id.md" in referrer.read_text(
-            encoding="utf-8"
-        ), f"{referrer.name} no longer points at the draft"
+
+#: Directories that left the repository at the operator's direction
+#: (`.gitignore`). They still exist in an operator's working tree, which is
+#: exactly why a citation of one reads as fine locally and resolves to nothing
+#: in a clone.
+ABSENT_DOC_DIRS = ("docs/adr/", "docs/upstream/")
+
+#: Files allowed to name those paths, each for a stated reason.
+#:
+#: `webmcp-spike-checklist.md` is a procedure for the operator to run against
+#: their own tree, and it tells them which file to record the results in — the
+#: one reader it addresses is the one reader who has it.
+#:
+#: `rfc8785_vectors.json` carries the path as provenance metadata on a fixture,
+#: recording where the vectors came from. Rewriting it would erase the
+#: attribution to make a link check pass.
+#:
+#: `specs/**` is out of scope by construction: `_scanned_files` does not walk it,
+#: and it should not — those are records of work as it happened, and editing a
+#: completed task list to say something it did not say at the time would falsify
+#: the history the runway exists to keep.
+ABSENT_DOC_CITATION_ALLOWED = {
+    "tests/browser/webmcp-spike-checklist.md",
+    "tests/fixtures/canonicalization/rfc8785_vectors.json",
+}
+
+
+@pytest.mark.architecture
+def test_no_shipped_document_cites_a_path_the_repository_does_not_carry() -> None:
+    """A clone must not be pointed at a file it was never given.
+
+    This replaces the ADR-corpus gates. Those checked that `docs/adr/` held a
+    template, an index, and records whose statuses agreed — a reasonable thing to
+    assert while the corpus was tracked, and unrunnable once it was not: they
+    passed on a machine that still had the files and failed in CI, which is the
+    worst of both readings.
+
+    The obligation that survives the corpus leaving is the one a reader can be
+    hurt by. `ADR-0004` names a decision and costs nothing if the record is
+    elsewhere; ``docs/adr/0004-rfc-8785-canonicalization.md`` promises a file,
+    and a clone does not have it. So this gate holds the promise, not the
+    reference — and it checks content the repository actually carries, which is
+    the property that lets it run anywhere.
+    """
+    offenders = [
+        f"{path.relative_to(REPO_ROOT).as_posix()} cites {cited}"
+        for path in _scanned_files()
+        if path.relative_to(REPO_ROOT).as_posix() not in ABSENT_DOC_CITATION_ALLOWED
+        for cited in ABSENT_DOC_DIRS
+        if cited in path.read_text(encoding="utf-8", errors="ignore")
+    ]
+
+    assert offenders == [], (
+        "these ship in the repository and name a path it does not carry; cite the "
+        f"decision by number instead: {offenders}"
+    )
+
+
+@pytest.mark.architecture
+def test_the_readme_says_where_the_decision_records_are() -> None:
+    """The numbers are meaningless if nobody says what they refer to.
+
+    136 tracked files name an `ADR-000N`. With the records out of the
+    repository, a reader who meets one has no way to learn that the omission is
+    deliberate rather than a broken link somebody forgot — so the README says it
+    once, in the place the docket used to be.
+    """
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "outside this repository" in readme, (
+        "the README no longer explains that the ADR records are kept out of the repository"
+    )

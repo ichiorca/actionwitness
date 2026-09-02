@@ -23,7 +23,7 @@ Bridges core protocols to the storefront's versioned HTTP API.
 | `reader.py` | 366 | `read_report`, `ImportLimits`, `ReportRejected` | Size is checked **before** parsing (`_check_size`) — the precedent every import path follows. |
 | `normalize.py` | 297 | Report → `NormalizedTrial` | Never guesses a binding from position, similarity, or timestamps (FR-091). |
 | `live.py` | 249 | Live-evaluator screening | `screen_for_credential_material` refuses an import carrying credentials rather than redacting it — a secret in a persisted artifact is an incident, not a validation failure. |
-| `pins.py` | 63 | The pinned evaluator version | `tests/architecture/test_evaluator_pin.py` guards it; see ADR-0005 and `docs/upstream/webmcp-evals-stable-trial-id.md`. |
+| `pins.py` | 63 | The pinned evaluator version | `tests/architecture/test_evaluator_pin.py` guards it; see ADR-0005 and the drafted upstream issue that accompanies it. |
 
 ## `integrations/shopify` — split status, read carefully
 

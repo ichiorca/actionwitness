@@ -5,7 +5,7 @@ document and the spec disagree, the spec wins. Invariants cited as
 "constitution §N" come from `memory/constitution.md`.
 
 This document explains *why* the system is shaped the way it is. The README
-explains how to run it; the ADRs in `docs/adr/` record individual decisions; this
+explains how to run it; the numbered ADRs record individual decisions; this
 is the map between them.
 
 ---

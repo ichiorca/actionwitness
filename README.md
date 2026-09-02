@@ -389,8 +389,7 @@ re-implements that evaluator.
 POST /api/v1/benchmarks/{benchmark_id}/imports
 ```
 
-- **Pinned evaluator:** `webmcp-evals@0.0.4` (`fe33c1b`) — see
-  `docs/adr/0005-external-evaluator-binding.md`
+- **Pinned evaluator:** `webmcp-evals@0.0.4` (`fe33c1b`) — see ADR-0005
 - **Checked-in redacted fixture:** under `tests/fixtures/`, used by the import and
   correlation tests
 - **Binding rules:** binding is **explicit** and fails closed on weak addressing. A
@@ -402,9 +401,9 @@ POST /api/v1/benchmarks/{benchmark_id}/imports
   allowlisted schema before parsing, all displayed text is escaped, executable or
   HTML content is rejected, and replay is limited to allowlisted target tools.
 
-_Upstream stable-trial-ID reporter issue: **drafted, not filed** —
-`docs/upstream/webmcp-evals-stable-trial-id.md` carries the text, verified against
-`webmcp-evals` v0.0.4 (`fe33c1b`). Filing is an outward-facing act on another
+_Upstream stable-trial-ID reporter issue: **drafted, not filed** — the text is
+kept with the decision records outside this repository (see below), verified
+against `webmcp-evals` v0.0.4 (`fe33c1b`). Filing is an outward-facing act on another
 project's repository and is the operator's call (spec §25.3, ADR-0005)._
 
 ## Auditing a storefront you did not build
@@ -611,7 +610,7 @@ Other known limitations:
 ## Version pinning
 
 Filled from the §25.1 spike run of 2026-08-31; full readings and the decision
-rule are in `docs/adr/0002-webmcp-lifecycle-package.md`. Re-run the spike
+rule are in ADR-0002. Re-run the spike
 (`npm run dev`, open **`/spike.html`**) before changing any row.
 
 | Item | Pinned value |
@@ -624,7 +623,10 @@ rule are in `docs/adr/0002-webmcp-lifecycle-package.md`. Re-run the spike
 | `webmcp-evals` package + reporter schema + normalizer version | `webmcp-evals@0.0.4` (`fe33c1b`); explicit binding, fail-closed on weak addressing (ADR-0005) |
 | Primary demo client / fallback | ChatGPT in-app browser / Chrome 151 + `#enable-webmcp-testing` + DevTools (LD-18) |
 
-Decisions are recorded in `docs/adr/`; the docket is `docs/adr/README.md`.
+Decisions are recorded as numbered ADRs. **The records themselves are kept
+outside this repository at the operator's direction**, so the `ADR-000N`
+references here and throughout the source name a decision rather than a file you
+can open from a clone.
 
 ## Provenance
 
@@ -659,7 +661,7 @@ ActionWitness is Apache-2.0. It builds on, and requires the notices of:
 | [pytest](https://github.com/pytest-dev/pytest), [ruff](https://github.com/astral-sh/ruff), [uv](https://github.com/astral-sh/uv) | MIT / Apache-2.0 | Python test, lint, and packaging toolchain |
 
 RFC 8785 (JSON Canonicalization Scheme) is implemented from the specification; see
-`docs/adr/0004-rfc-8785-canonicalization.md`.
+ADR-0004.
 
 ## License
 

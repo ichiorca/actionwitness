@@ -1,6 +1,6 @@
 """RFC 8785 (JCS) canonical JSON and SHA-256 content hashing.
 
-Spec v1.9 §17.2; ADR-0004 (`docs/adr/0004-rfc-8785-canonicalization.md`) fixes the
+Spec v1.9 §17.2; ADR-0004 fixes the
 implementation contract, and `tests/fixtures/canonicalization/rfc8785_vectors.json`
 is the corpus it is judged against.
 

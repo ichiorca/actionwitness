@@ -36,10 +36,9 @@ to catch by eye.
 | `test_audit_guardrails.py` | Give an audit module a network client, or an audit request model a collection of origins. |
 | `test_harness_tool_surface.py` | Change the published harness tool set without noticing. |
 | `test_product_copy_claims.py` | Restate a third-party report as our own finding, drop an attribution or date, or promise more than an audit delivers. |
-| `test_documentation_references.py` | Cite a superseded spec version, or omit a required command from the README. |
+| `test_documentation_references.py` | Cite a superseded spec version, omit a required command from the README, or point a reader at a path a clone does not carry. |
 | `test_readme_commands.py` | Document a command that does not exist. |
 | `test_codemaps.py` | Let these maps name a path that does not exist, or drift out of the routing table. |
-| `test_adr_records.py` | Land an architectural decision with no ADR, or an ADR missing from the docket. |
 | `test_core_only_install.py` · `test_store_only_install.py` | Claim independent installability without proving it — the paired `scripts/*_isolation.py` build a fresh virtualenv and install exactly one distribution. |
 | `test_release_artifact_hygiene.py` | Ship secrets, local paths, build debris, or lose the single-worker pin. |
 | `test_bundle_shape.py` | Ship a bundle needing a CSP directive the policy does not grant. |
