@@ -391,3 +391,161 @@ async def test_an_unevaluable_policy_is_named_rather_than_assumed_satisfied(
     # Assert
     assert "stable_tool_surface" in outcome.report.non_replayable_policies
     assert outcome.report.status is EvalStatus.PASSED
+
+
+def _also_expecting(case, environment: EvalEnvironment, *extra: FailureClassification):
+    """The case, with `extra` added to one profile's required classifications.
+
+    Written as a copy rather than by cutting a differently-shaped source run: the
+    interesting cases below are about a classification the *case* requires and
+    the *replay* cannot produce, and no fixture can be both at once.
+    """
+    expectation = case.expected.for_environment(environment)
+    widened = expectation.model_copy(
+        update={"required_classifications": (*expectation.required_classifications, *extra)}
+    )
+    field = "current" if environment is EvalEnvironment.CURRENT else "reproduce_source"
+    return case.model_copy(update={"expected": case.expected.model_copy(update={field: widened})})
+
+
+async def test_a_declared_non_replayable_policy_drops_its_classification_from_both_sets(
+    stack: FastAPI,
+) -> None:
+    """§24.3a's exclusion, doing something.
+
+    The case requires `tool_surface_mutation` and declares the policy that
+    produces it unevaluable here. The two sides of §24.3a speak different
+    vocabularies — the case names a *policy*, the expectation names a
+    *classification* — so the exclusion only bites if the runner translates
+    between them. Filtering classifications against policy names excludes
+    nothing, and this case then fails for the very policy it declared
+    unevaluable: a regression suite reporting a defect nobody has.
+    """
+    # Arrange
+    async with client(stack) as visitor:
+        workspace_id, run_id = await _failed_run(visitor)
+    case = await _case(stack, workspace_id, run_id)
+    declared = _also_expecting(
+        case, EvalEnvironment.REPRODUCE_SOURCE, FailureClassification.TOOL_SURFACE_MUTATION
+    ).model_copy(update={"non_replayable_policies": ("stable_tool_surface",)})
+
+    # Act
+    outcome = await _service(stack).run(
+        declared,
+        owner_workspace_id=workspace_id,
+        environment=EvalEnvironment.REPRODUCE_SOURCE,
+    )
+
+    # Assert — the surface classification left the expectation; the recorded
+    # failure the case was actually cut from is still required and still matched.
+    assert (
+        FailureClassification.TOOL_SURFACE_MUTATION not in outcome.report.expected_classifications
+    )
+    assert set(outcome.report.actual_classifications) == {MISMATCH}
+    assert "stable_tool_surface" in outcome.report.non_replayable_policies
+    assert outcome.report.status is EvalStatus.PASSED
+
+
+async def test_a_policy_the_engine_could_not_evaluate_is_excluded_the_same_way(
+    stack: FastAPI,
+) -> None:
+    """The union's second arm: unevaluable on *this run*, not at cut time.
+
+    A policy that became unevaluable after the case was written is exactly as
+    unchecked as one that was known to be, so it is excluded on the same terms —
+    and the case here declares nothing, so only the engine's report can produce
+    the exclusion.
+    """
+    # Arrange
+    async with client(stack) as visitor:
+        workspace_id, run_id = await _failed_run(visitor)
+    case = await _case(stack, workspace_id, run_id)
+    widened = _also_expecting(
+        case, EvalEnvironment.REPRODUCE_SOURCE, FailureClassification.TOOL_SURFACE_MUTATION
+    )
+    assert widened.non_replayable_policies == (), "the exclusion must come from the engine"
+
+    def unevaluated_surface(_case, _outcome):
+        return LayerResult.FAILED, (MISMATCH,), ("stable_tool_surface",)
+
+    # Act
+    outcome = await _service(stack).run(
+        widened,
+        owner_workspace_id=workspace_id,
+        environment=EvalEnvironment.REPRODUCE_SOURCE,
+        evaluate=unevaluated_surface,
+    )
+
+    # Assert
+    assert outcome.report.non_replayable_policies == ("stable_tool_surface",)
+    assert (
+        FailureClassification.TOOL_SURFACE_MUTATION not in outcome.report.expected_classifications
+    )
+    assert outcome.report.status is EvalStatus.PASSED
+
+
+async def test_the_exclusion_also_removes_the_classification_from_the_actual_set(
+    stack: FastAPI,
+) -> None:
+    """Symmetric, because §24.1 compares by set equality.
+
+    A classification an unevaluable policy somehow produced anyway is no more
+    comparable than one it failed to produce; excluding one side only would
+    trade a spurious failure for a spurious failure.
+    """
+    # Arrange
+    async with client(stack) as visitor:
+        workspace_id, run_id = await _failed_run(visitor)
+    case = await _case(stack, workspace_id, run_id)
+    declared = case.model_copy(update={"non_replayable_policies": ("stable_tool_surface",)})
+
+    def surfaced(_case, _outcome):
+        return LayerResult.FAILED, (MISMATCH, FailureClassification.TOOL_SURFACE_MUTATION)
+
+    # Act
+    outcome = await _service(stack).run(
+        declared,
+        owner_workspace_id=workspace_id,
+        environment=EvalEnvironment.REPRODUCE_SOURCE,
+        evaluate=surfaced,
+    )
+
+    # Assert
+    assert set(outcome.report.actual_classifications) == {MISMATCH}
+    assert outcome.report.status is EvalStatus.PASSED
+
+
+async def test_a_non_replayable_policy_does_not_excuse_an_unrelated_failure(
+    stack: FastAPI,
+) -> None:
+    """The counterfactual that keeps the exclusion from meaning "ignore everything".
+
+    An unevaluable `stable_tool_surface` says nothing about consent. If naming
+    one policy excused every classification, every expectation in the suite would
+    become vacuous — and a vacuous suite is worse than the defect it replaced,
+    because it is green.
+    """
+    # Arrange
+    async with client(stack) as visitor:
+        workspace_id, run_id = await _failed_run(visitor)
+    case = await _case(stack, workspace_id, run_id)
+    declared = case.model_copy(update={"non_replayable_policies": ("stable_tool_surface",)})
+
+    def unrelated(_case, _outcome):
+        return LayerResult.FAILED, (FailureClassification.MISSING_CONFIRMATION,)
+
+    # Act
+    outcome = await _service(stack).run(
+        declared,
+        owner_workspace_id=workspace_id,
+        environment=EvalEnvironment.REPRODUCE_SOURCE,
+        evaluate=unrelated,
+    )
+
+    # Assert — the recorded mismatch is still required and was not produced.
+    assert MISMATCH in outcome.report.expected_classifications
+    assert set(outcome.report.actual_classifications) == {
+        FailureClassification.MISSING_CONFIRMATION
+    }
+    assert outcome.report.classification_match is False
+    assert outcome.report.status is EvalStatus.FAILED

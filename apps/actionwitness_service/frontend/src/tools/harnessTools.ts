@@ -25,7 +25,10 @@
  * silent gap would be the wrong kind of surprise at the Tier 1 gate.
  */
 
+import { useCallback, useState } from "react";
+
 import { request } from "../api/client";
+import { isRecord } from "../api/client";
 import {
   type WorkspaceStatus,
   parseFindings,
@@ -55,6 +58,34 @@ function isTerminal(phase: string): boolean {
 
 export interface HarnessToolset {
   readonly states: Readonly<Record<string, RegistrationState>>;
+  /** The case `run_regression_eval` will replay, or `null` when there is none. */
+  readonly evalCaseId: string | null;
+}
+
+export interface HarnessToolsetOptions {
+  /**
+   * Awaited before verification, so evidence still in flight is on the record.
+   *
+   * Verification seals the timeline. The tool-surface witness is debounced and
+   * asynchronous, so without this a delta read a moment before `verify_outcome`
+   * is posted a moment after it, meets a sealed timeline, and never reaches the
+   * verdict it was evidence for (014-T6's own race).
+   */
+  readonly beforeVerify?: () => Promise<void>;
+  /**
+   * The case a replay should target.
+   *
+   * Optional because the toolset already knows the case it just created: an
+   * agent that generates a regression case and then cannot replay it has half a
+   * capability, and AC-22 measures the §11.1 table for reachability rather than
+   * for existence.
+   *
+   * A caller that can see the workspace's whole list — the panel — passes the
+   * one it shows first, and that wins. It has to: a case cut in an earlier
+   * session is invisible to this hook's own memory, and a person and an agent
+   * looking at the same screen must be replaying the same case.
+   */
+  readonly evalCaseId?: string | null;
 }
 
 /**
@@ -67,8 +98,16 @@ export interface HarnessToolset {
 export function useHarnessToolset(
   status: WorkspaceStatus | null,
   refresh: () => Promise<void>,
-  evalCaseId: string | null = null,
+  options: HarnessToolsetOptions = {},
 ): HarnessToolset {
+  // The case this toolset generated, so `run_regression_eval` has something to
+  // replay without the caller having to plumb it back round.
+  const [createdCaseId, setCreatedCaseId] = useState<string | null>(null);
+  const evalCaseId = options.evalCaseId ?? createdCaseId;
+  const beforeVerify = options.beforeVerify;
+  const flushEvidence = useCallback(async () => {
+    await beforeVerify?.();
+  }, [beforeVerify]);
   // Before the first load there is no authoritative state. Defaulting to a
   // phase would publish acting tools against a workspace nobody has read yet —
   // `reset_workspace` in particular, whose default-phase reading is "enabled".
@@ -157,6 +196,10 @@ export function useHarnessToolset(
       if (runId === null) {
         throw new Error("No run is active.");
       }
+      // Evidence first, verdict second. Verification seals the timeline, so a
+      // capture that is still debounced when this runs would be judged by
+      // nothing.
+      await flushEvidence();
       const verdict = await request(`/runs/${runId}/verify`, {
         method: "POST",
         parse: (value) => value,
@@ -236,6 +279,12 @@ export function useHarnessToolset(
         method: "POST",
         parse: (value) => value,
       });
+      // Remembered so the replay tool becomes reachable. Read defensively: this
+      // is a response body, and a missing id must leave the replay unavailable
+      // rather than pointed at `"undefined"`.
+      if (isRecord(created) && typeof created["eval_case_id"] === "string") {
+        setCreatedCaseId(created["eval_case_id"]);
+      }
       await refresh();
       return created;
     },
@@ -277,6 +326,7 @@ export function useHarnessToolset(
   });
 
   return {
+    evalCaseId,
     states: {
       create_regression_eval: createEval,
       run_regression_eval: runEval,

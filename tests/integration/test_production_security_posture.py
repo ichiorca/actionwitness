@@ -270,6 +270,39 @@ async def test_a_mistyped_public_origin_falls_back_to_the_request_origin(
     assert refused.status_code == 403
 
 
+async def test_the_health_check_reports_an_unreadable_database_as_degraded(
+    tmp_path: Path,
+) -> None:
+    """§29.1's health check has to mean something after startup.
+
+    The schema version is captured once at startup, so an endpoint built only
+    from it answers `ok` for the life of the process — including after the
+    database file has been deleted underneath it. Both Render's health check and
+    the Docker `HEALTHCHECK` read this endpoint, so an instance whose source of
+    truth had vanished would stay in service, serving 500s.
+    """
+    # Arrange — a service that started healthy, then lost its schema.
+    application = create_app(environ=PRODUCTION_ENV, database_path=tmp_path / "harness.sqlite3")
+    async with application.router.lifespan_context(application), visitor(application) as client:
+        healthy = await client.get("/healthz")
+
+        # Act — the harness schema stops being readable while the process keeps
+        # running. Dropping the table rather than deleting the file: SQLite
+        # silently creates an empty database for a missing path, so a deleted
+        # file and a wrecked one arrive at the same place, and this one is the
+        # form the assertion can actually observe on every platform.
+        async with application.state.database.transaction() as work:
+            await work.execute("DROP TABLE workspaces")
+        degraded = await client.get("/healthz")
+
+    # Assert
+    assert healthy.status_code == 200
+    assert healthy.json()["database"] == "ok"
+    assert degraded.status_code == 503, "a dead database must not read as a healthy instance"
+    assert degraded.json()["database"] == "unavailable"
+    assert degraded.json()["status"] == "degraded"
+
+
 # --- §20.1 trusted-proxy handling --------------------------------------------
 #
 # The only two checks in this file that call a function rather than send a

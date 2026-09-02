@@ -23,6 +23,36 @@ and no endpoint may combine a contract with a different target." One `UPDATE`
 sets both columns, so there is no instant at which a workspace holds a contract
 and the wrong target. If the target that the contract names is unavailable,
 nothing is written at all and the refusal is `TARGET_UNAVAILABLE`.
+
+**Target-scoped validation runs at both moments, and refuses at neither when the
+adapter is absent.** §10.2/§10.3 hold rules a contract cannot be judged against
+on its own terms — every named tool must be one the selected adapter publishes,
+and a protected mutation must carry a confirmation policy. Those rules need the
+adapter's vocabulary, so they run here rather than in `parse_contract`, and they
+run *twice* because instantiation and selection are different moments with
+different adapter sets: a contract can be created while an integration is
+enabled and selected after a restart that disabled it, or created before an
+adapter's tool surface changed. Instantiation is where a person is standing in
+front of the form and can be told what is wrong; selection is the moment the
+contract is bound to the target a run will be judged against, and is therefore
+the check that cannot be bypassed by a contract stored some other way.
+
+Neither call fires when the named target resolves to no available adapter.
+§21.1 requires the harness to run with an integration absent from the
+environment entirely, and an absent adapter publishes no tools — validating
+against it would turn "this target is not installed" into "every tool this
+contract names is invented", which is a different and untrue statement. An
+absent target stays what it already was: nothing at instantiation, and
+`TARGET_UNAVAILABLE` at selection.
+
+**One hashing rule.** §17.2 hashes "its validated contract document", which
+`OutcomeContract.canonical_document()` is and a submitted document only might
+be. Every stored contract is therefore built through `ContractRecord.of`, so the
+document that is stored and the document that is hashed are the same document on
+every path. Hashing the raw submission instead once produced contracts whose
+stored hash disagreed with the hash §24.2 recomputes, and the failure surfaced
+far away — at eval-case generation, as "the source contract does not match its
+stored hash".
 """
 
 from __future__ import annotations
@@ -30,11 +60,20 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from actionwitness_core.contracts.models import ContractRecord, parse_contract
+from actionwitness_core.contracts.models import (
+    ContractRecord,
+    OutcomeContract,
+    parse_contract,
+)
+from actionwitness_core.ports.enums import SideEffectClass
 from actionwitness_core.security.canonical import content_hash
 
 from actionwitness_service.api.errors import ApiError, ApiErrorCode
-from actionwitness_service.application.adapter_registry import AdapterRegistry, TargetUnavailable
+from actionwitness_service.application.adapter_registry import (
+    AdapterRegistry,
+    AdapterSlot,
+    TargetUnavailable,
+)
 from actionwitness_service.application.authorization import WorkspaceScope
 from actionwitness_service.application.guidance_service import (
     GuidanceRecorder,
@@ -67,7 +106,17 @@ async def seed_templates(work: UnitOfWork, templates: Iterable[Any]) -> int:
     written = 0
     for template in templates:
         document = dict(template.document)
-        digest = content_hash(document)
+        # Validated through the core on the way in, even though it is our own
+        # data: constitution §4 requires persisted JSON to be validated on write,
+        # and a template that stopped parsing after a model change should fail
+        # at startup rather than at the first run armed against it. It happens
+        # before the already-seeded check rather than after, because the identity
+        # below is derived from the *validated* document and there is nothing to
+        # look up until it has been parsed. The cost is that every restart
+        # re-parses every template, which is the right way round: a template that
+        # stopped parsing should keep failing, not fail once and then be skipped.
+        contract = parse_contract(document)
+        digest = contract.content_hash()
         contract_id = f"tpl_{template.template_id}_{digest.removeprefix('sha256:')[:12]}"
 
         existing = await work.fetch_one(
@@ -76,26 +125,60 @@ async def seed_templates(work: UnitOfWork, templates: Iterable[Any]) -> int:
         if existing is not None:
             continue
 
-        # Validated through the core on the way in, even though it is our own
-        # data: constitution §4 requires persisted JSON to be validated on write,
-        # and a template that stopped parsing after a model change should fail
-        # at startup rather than at the first run armed against it.
-        parse_contract(document)
-        # The document is stored exactly as the template authored it. Its
-        # provenance goes in a column: anything written *into* the document
-        # would change the hash that is the contract's identity.
+        # A template is a *published* artifact: its text ships in the
+        # integration, and the digest of that text is half of the row id above.
+        # Storing a quietly normalised version would leave the shipped template
+        # and the seeded contract as two different documents under an identity
+        # derived from only one of them, so a template that is not already
+        # written in its own canonical form fails loudly at startup instead.
+        # `instantiate` below has no equivalent check because an expansion is
+        # generated rather than published: there is no authored text for the
+        # stored document to disagree with.
+        if content_hash(document) != digest:
+            raise ApiError(
+                ApiErrorCode.HARNESS_ERROR,
+                "A built-in contract template is not written in its canonical form.",
+            )
+        # Provenance goes in a column, never into the document: anything written
+        # *into* the document would change the hash that is the contract's
+        # identity.
         await repository.add(
-            ContractRecord(
-                contract_id=contract_id,
-                schema_version=str(document.get("schema_version", "1.0")),
-                content_hash=digest,
-                document=document,
-                created_at=seeded_at,
-            ),
+            ContractRecord.of(contract, contract_id=contract_id, created_at=seeded_at),
             source_template_id=template.template_id,
         )
         written += 1
     return written
+
+
+def _validate_against_target(contract: OutcomeContract, slot: AdapterSlot | None) -> None:
+    """Apply §10.2/§10.3's target-scoped rules, or none if the target is absent.
+
+    The core owns the rules and this owns the vocabulary, which is the split
+    `OutcomeContract.validate_against_target` was written for: it takes plain
+    names because the adapter registry is an application concern and a contract
+    model that imported one would drag composition into the domain.
+
+    Both lists come from the adapter's own published specs rather than from a
+    constant here. §9.1 makes the adapter the authority on its own surface, and
+    a harness that decided which tools sounded protected would be guessing about
+    a target it is not allowed to know.
+
+    An absent or unavailable adapter is a no-op and deliberately not a refusal.
+    See the module docstring: an empty tool set would make every tool a contract
+    names unpublished, and §21.1's "the integration is not installed" would
+    arrive at the caller as "this contract is invalid".
+    """
+    if slot is None or slot.factory is None:
+        return
+    adapter = slot.factory()
+    specs = adapter.tool_specs()
+    contract.validate_against_target(
+        target_id=adapter.descriptor.target_id,
+        tool_names=[spec.name for spec in specs],
+        protected_tools=[
+            spec.name for spec in specs if spec.side_effect is SideEffectClass.PROTECTED_MUTATING
+        ],
+    )
 
 
 class ContractService:
@@ -134,23 +217,29 @@ class ContractService:
         # Raises `ContractError`, which the boundary turns into §15.8's
         # envelope with field-level details — the same shape a rejected form
         # field produces, so a client parses one error format and not two.
-        parse_contract(document)
+        contract = parse_contract(document)
 
-        stored = dict(document)
-        digest = content_hash(stored)
-        record = ContractRecord(
-            contract_id=new_id("ctr"),
-            schema_version=str(stored.get("schema_version", "1.0")),
-            content_hash=digest,
-            document=stored,
-            created_at=self._work.instant(),
+        # §10.2/§10.3, against the adapter this contract names. This is the
+        # earlier of the two moments the rules can run, and the friendlier one:
+        # the person is still at the form. It is not the enforcing one — see the
+        # module docstring and `select`, which re-runs it against whatever
+        # adapter set exists at the moment the contract is bound to a run.
+        _validate_against_target(contract, self._registry.resolve(contract.target_id))
+
+        # `ContractRecord.of` is the whole of the one hashing rule: the document
+        # it stores and the document it hashes are both `canonical_document()`,
+        # so this contract's identity is the same identity the core would give
+        # it and the same one §24.2 recomputes when generating an eval case.
+        record = ContractRecord.of(
+            contract, contract_id=new_id("ctr"), created_at=self._work.instant()
         )
         await ContractRepository(self._work, self._workspace_id).add(
             record, source_template_id=source_template_id
         )
+        stored = dict(record.document)
         return {
             "contract_id": record.contract_id,
-            "content_hash": digest,
+            "content_hash": record.content_hash,
             "source_template_id": source_template_id,
             "name": str(stored.get("name", "")),
             "schema_version": record.schema_version,
@@ -189,6 +278,21 @@ class ContractService:
             "is_built_in": row["workspace_id"] is None,
         }
 
+    async def stored_document(self, contract_id: str) -> str | None:
+        """One contract's stored JSON text, by id alone, or `None`.
+
+        Deliberately *not* workspace-scoped, and deliberately narrower than
+        `read`: its caller is the replay path, which has already established
+        that this is the id the workspace itself selected, and which needs the
+        raw text rather than the response shape `read` builds. Kept here rather
+        than inlined in the route so the one query that reaches a contract
+        without a workspace term is visible in the service that owns contracts.
+        """
+        row = await self._work.fetch_one(
+            "SELECT document_json FROM contracts WHERE id = ?", (contract_id,)
+        )
+        return None if row is None else str(row["document_json"])
+
     async def select(self, contract_id: str) -> Mapping[str, Any]:
         """FR-024: select the contract and, atomically, the target it names.
 
@@ -215,6 +319,22 @@ class ContractService:
                 target_id or "unknown",
                 slot.state.reason if slot else "No adapter is registered for it.",
             )
+
+        # §10.2/§10.3, against the adapter that was *just* resolved. This is the
+        # enforcing call, and it is here rather than only at instantiation for
+        # two reasons. Selection is the moment the contract stops being a
+        # document and becomes the thing a run is judged against, so it is the
+        # last point at which a mismatch can still be an honest refusal instead
+        # of a `missing_expected_tool` finding blamed on the agent. And it is
+        # the only point every contract passes through: a seeded template, a
+        # contract created before an adapter's surface changed, and one created
+        # while a different set of integrations was enabled all arrive here.
+        #
+        # The document was verified against its stored hash by `read` above, so
+        # re-parsing it costs a validation of data the harness itself wrote — a
+        # stored contract that no longer parses is a real refusal, not a
+        # formality.
+        _validate_against_target(parse_contract(contract["document"]), slot)
 
         # One statement, both columns. There is no instant at which the
         # workspace holds this contract and a different target.

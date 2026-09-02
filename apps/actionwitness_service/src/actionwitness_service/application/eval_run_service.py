@@ -32,7 +32,7 @@ from actionwitness_core.evals.interaction import provider_for
 from actionwitness_core.evals.models import (
     EvalReport,
     RegressionEvalCase,
-    expectation_matches,
+    compare_replay_to_expectation,
 )
 from actionwitness_core.reports.enums import LayerResult
 
@@ -237,15 +237,18 @@ class EvalRunService:
         # not evaluate on this run. The union is what the report names, because
         # a policy that became unevaluable after the case was cut is exactly as
         # unchecked as one that was known to be.
-        excluded = frozenset(case.non_replayable_policies) | frozenset(unevaluated)
-        actual = tuple(c for c in actual_classifications if c.value not in excluded)
-        expected = tuple(c for c in expectation.required_classifications if c.value not in excluded)
-
-        matched = expectation_matches(
-            expectation.model_copy(update={"required_classifications": expected}),
+        #
+        # Both are *policy* names, and both classification sets are named in the
+        # *classification* vocabulary. The core owns that translation
+        # (`policy_critical_classifications`) and performs the removal once;
+        # filtering the sets here against the policy names — as this did — is a
+        # comparison between two disjoint enums, which silently excludes nothing
+        # and fails the case for the very policy it declared unevaluable.
+        comparison = compare_replay_to_expectation(
+            expectation,
             actual_result=actual_result,
-            actual_classifications=actual,
-            non_replayable=tuple(excluded),
+            actual_classifications=actual_classifications,
+            non_replayable_policies=(*case.non_replayable_policies, *unevaluated),
         )
 
         return EvalReport(
@@ -254,17 +257,20 @@ class EvalRunService:
             implementation_version=self._implementation_version,
             build_commit=self._build_commit,
             environment=environment,
-            status=EvalStatus.PASSED if matched else EvalStatus.FAILED,
+            status=EvalStatus.PASSED if comparison.matched else EvalStatus.FAILED,
             overall_result=actual_result,
-            actual_classifications=actual,
-            expected_classifications=expected,
-            classification_match=frozenset(actual) == frozenset(expected),
+            actual_classifications=comparison.actual_classifications,
+            expected_classifications=comparison.expected_classifications,
+            classification_match=(
+                frozenset(comparison.actual_classifications)
+                == frozenset(comparison.expected_classifications)
+            ),
             replayed_trajectory=outcome.steps,
             final_state=dict(outcome.after.payload),
-            non_replayable_policies=tuple(sorted(excluded)),
+            non_replayable_policies=comparison.excluded_policies,
             detail=(
                 "reproduced the recorded outcome"
-                if matched and actual_result is not LayerResult.PASSED
+                if comparison.matched and actual_result is not LayerResult.PASSED
                 else ""
             ),
         )
@@ -352,6 +358,9 @@ class EvalRunService:
                 effect_map=effect_map or {},
                 contract_paths=declared_contract_paths(case.contract.document),
                 changed_paths=changed_paths_of(replayed_changes),
+                # The same FR-159 excerpts the interactive path carries, so a
+                # replayed run reports a change exactly as its source run did.
+                changes=replayed_changes,
                 surface_baseline_recorded=baseline_recorded,
                 observed_surface_deltas=observed_deltas,
             ),

@@ -128,7 +128,9 @@ async def test_the_source_run_fails_on_the_side_effect_alone(stack: FastAPI) -> 
     layers = report["layers"]
     assert layers["business_outcome"] == "passed", "every named assertion must pass"
     assert layers["safety_policy"] == "failed"
-    assert report["undeclared_changes"]["paths"] == [NOTE_PATH]
+    # §23.1 renders each entry as `{path, before, after, attributed_cause}`, so
+    # the path is read out of the entry rather than compared to it.
+    assert [entry["path"] for entry in report["undeclared_changes"]["paths"]] == [NOTE_PATH]
     assert workspace_id
 
 

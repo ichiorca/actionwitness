@@ -17,6 +17,8 @@
  * who cannot see the red.
  */
 
+import { useState } from "react";
+
 import type { BenchmarkView, Rate } from "../api/benchmark";
 import type { CapabilityReport, Finding, TimelineEvent, WorkspaceStatus } from "../api/workspace";
 import type { ToolGroupReconciliation, ToolReconciliation } from "../webmcp/adapter";
@@ -308,9 +310,16 @@ export interface RunTimelineProps {
   readonly events: readonly TimelineEvent[];
   readonly runStatus: string | null;
   readonly polling: boolean;
+  /** Why the last poll did not land, or `null` when it did. */
+  readonly error: string | null;
 }
 
-export function RunTimeline({ events, runStatus, polling }: RunTimelineProps): React.ReactElement {
+export function RunTimeline({
+  events,
+  runStatus,
+  polling,
+  error,
+}: RunTimelineProps): React.ReactElement {
   return (
     <section className="panel" aria-label="Agent activity">
       <h3>Agent activity</h3>
@@ -319,6 +328,17 @@ export function RunTimeline({ events, runStatus, polling }: RunTimelineProps): R
           ? "No run yet."
           : `Run is ${runStatus}${polling ? " — watching for new activity." : "."}`}
       </p>
+      {/* A dropped connection has to be visible. `useRunTimeline` keeps trying
+          and keeps what it already has, so this is a statement about the
+          connection rather than about the run — and the events below stay on
+          screen, which is why it says the list may be behind rather than that
+          something failed. An `alert`, because a reader who has looked away
+          needs to be told the page stopped keeping up. */}
+      {error === null ? null : (
+        <p role="alert" className="panel__error">
+          {error} The activity below may be behind; this page keeps retrying.
+        </p>
+      )}
       <ol className="timeline">
         {events.map((event) => (
           <li key={event.id} data-event-type={event.eventType}>
@@ -361,15 +381,17 @@ export function FindingsPanel({
         <p>No verdict yet.</p>
       ) : (
         // Spelled out, never signalled by colour alone: a failed run has to
-        // read as failed to someone who cannot see the red.
+        // read as failed to someone who cannot see the red. `data-status`
+        // echoes the word so colour can follow it as a second channel.
         <p>
-          <span className="panel__label">Result:</span> <strong>{overallResult}</strong>
+          <span className="panel__label">Result:</span>{" "}
+          <strong data-status={overallResult}>{overallResult}</strong>
         </p>
       )}
       <ul>
         {findings.map((finding) => (
           <li key={finding.checkId}>
-            <strong>{finding.status}</strong> — {finding.checkId}
+            <strong data-status={finding.status}>{finding.status}</strong> — {finding.checkId}
             {finding.classification === null ? null : ` (${finding.classification})`}
             {finding.path === null ? null : <div className="finding__path">at {finding.path}</div>}
             <div className="finding__values">
@@ -437,7 +459,8 @@ export function UndeclaredChangesPanel({
         <>
           {/* Stated in words, never by colour alone. */}
           <p>
-            <span className="panel__label">Result:</span> <strong>{finding.status}</strong> —{" "}
+            <span className="panel__label">Result:</span>{" "}
+            <strong data-status={finding.status}>{finding.status}</strong> —{" "}
             {finding.paths.length} path{finding.paths.length === 1 ? "" : "s"} changed that no
             assertion, precondition, or executed tool&rsquo;s declared effect covered.
           </p>
@@ -501,7 +524,8 @@ export function ToolSurfacePanel({ findings }: ToolSurfacePanelProps): React.Rea
     <section className="panel" aria-label="Tool surface">
       <h3>Tool surface</h3>
       <p>
-        <span className="panel__label">Result:</span> <strong>{finding.status}</strong>
+        <span className="panel__label">Result:</span>{" "}
+        <strong data-status={finding.status}>{finding.status}</strong>
         {finding.identityMismatches.length === 0 ? null : (
           <>
             {" "}
@@ -585,6 +609,45 @@ function isTerminal(status: string): boolean {
   return TERMINAL.includes(status);
 }
 
+/**
+ * Copy one content hash to the clipboard, saying what happened in words.
+ *
+ * The hash itself stays fully in the DOM (the row is identified by it, in
+ * tests and by people); the visual shortening is CSS ellipsis only, and this
+ * button is how the whole value travels. The outcome label is deterministic
+ * state, not a timer: it flips on the copy's own promise and stays until the
+ * next attempt, so nothing here depends on wall-clock time.
+ */
+function CopyHashButton({ hash }: { readonly hash: string }): React.ReactElement {
+  const [outcome, setOutcome] = useState<"idle" | "copied" | "failed">("idle");
+
+  const copy = async (): Promise<void> => {
+    // `navigator.clipboard` is absent off secure contexts; that is a fact
+    // about the browser and gets said as one, never swallowed.
+    if (typeof navigator === "undefined" || navigator.clipboard === undefined) {
+      setOutcome("failed");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(hash);
+      setOutcome("copied");
+    } catch {
+      setOutcome("failed");
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      className="eval__copy"
+      aria-label={`Copy content hash ${hash}`}
+      onClick={() => void copy()}
+    >
+      {outcome === "idle" ? "Copy" : outcome === "copied" ? "Copied" : "Copy failed"}
+    </button>
+  );
+}
+
 export interface EvalCaseSummary {
   readonly evalCaseId: string;
   readonly name: string;
@@ -634,15 +697,25 @@ export function EvalPanel({
         {cases.map((entry) => (
           <li key={entry.evalCaseId}>
             <strong>{entry.name}</strong>
-            <div className="eval__hash">{entry.contentHash}</div>
+            <div className="eval__hash">
+              {/* The full hash, always in the DOM: shortening is CSS ellipsis
+                  only, so the identity a row is found by never changes. */}
+              <code title={entry.contentHash}>{entry.contentHash}</code>
+              <CopyHashButton hash={entry.contentHash} />
+            </div>
             {entry.latestStatus === null ? (
               <div>Not replayed yet.</div>
             ) : (
               <div>
-                {/* Two labelled facts, never one merged verdict. */}
-                <span className="panel__label">Eval:</span> <strong>{entry.latestStatus}</strong>{" "}
+                {/* Two labelled facts, never one merged verdict. The
+                    `data-status` echoes the server's word so colour can
+                    follow it; the word itself stays the signal (§8.4). */}
+                <span className="panel__label">Eval:</span>{" "}
+                <strong data-status={entry.latestStatus}>{entry.latestStatus}</strong>{" "}
                 <span className="panel__label">Target outcome:</span>{" "}
-                <strong>{entry.latestOutcome ?? "not evaluated"}</strong>{" "}
+                <strong data-status={entry.latestOutcome ?? undefined}>
+                  {entry.latestOutcome ?? "not evaluated"}
+                </strong>{" "}
                 <span className="panel__label">Environment:</span> {entry.latestEnvironment}
               </div>
             )}

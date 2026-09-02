@@ -20,11 +20,11 @@ from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import httpx
 from actionwitness_core.kernel import CoreError
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
@@ -50,6 +50,7 @@ from actionwitness_service.application.adapter_registry import AdapterRegistry
 from actionwitness_service.application.artifacts import ArtifactStore
 from actionwitness_service.application.cleanup import WorkspaceCleaner
 from actionwitness_service.application.contract_service import seed_templates
+from actionwitness_service.application.limits import EventStreamSlots
 from actionwitness_service.application.rate_limits import RateLimiter
 from actionwitness_service.application.template_catalogue import (
     ExpansionRejected,
@@ -70,6 +71,12 @@ API_PREFIX = "/api/v1"
 #: Separate from the structured request logger: this one carries a traceback, so
 #: it must never be the channel §21.5 describes.
 _unhandled_logger = logging.getLogger("actionwitness.unhandled")
+
+#: Every phase of a target call — connect, read, write, pool. The target is a
+#: local or operator-configured origin, so this is generous rather than tight:
+#: it exists to stop a hung observation from pinning a run open forever, not to
+#: police a slow one.
+TARGET_TIMEOUT_SECONDS: Final = 5.0
 
 
 def create_app(
@@ -96,7 +103,16 @@ def create_app(
     database = Database(database_path or settings.harness.database_path, clock=clock)
     workspaces = WorkspaceStore(database)
     limiter = RateLimiter(clock=clock)
-    cleaner = WorkspaceCleaner(database, artifact_root=settings.harness.artifact_root, clock=clock)
+    cleaner = WorkspaceCleaner(
+        database,
+        artifact_root=settings.harness.artifact_root,
+        clock=clock,
+        # The limiter's per-client buckets are the one piece of in-memory state
+        # that grows with unique traffic rather than with stored data. Without
+        # this the process keeps one entry per address it has ever seen, for as
+        # long as it lives — `release_idle` exists for exactly this call.
+        on_sweep=limiter.release_idle,
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -109,7 +125,14 @@ def create_app(
         # business.
         owned_client = target_client is None
         client = target_client or httpx.AsyncClient(
-            base_url=settings.buggy_store.base_url if settings.buggy_store else ""
+            base_url=settings.buggy_store.base_url if settings.buggy_store else "",
+            # Stated rather than inherited. httpx's default happens to be 5s on
+            # every phase, but a timeout the constitution requires to be
+            # explicit is one a reader should be able to find without knowing
+            # the library's defaults — and without a silent change of behaviour
+            # if a future httpx alters them. An observation that never returns
+            # is a run that never reaches a verdict.
+            timeout=httpx.Timeout(TARGET_TIMEOUT_SECONDS),
         )
         app.state.adapters = AdapterRegistry(settings, client=client)
         # The `/demo/api/v1` proxy (§29.1) reaches the store over the same client
@@ -160,6 +183,12 @@ def create_app(
     app.state.workspaces = workspaces
     app.state.locks = WorkspaceLocks()
     app.state.limiter = limiter
+    # FR-008's "two concurrent event-stream connections", counted per workspace.
+    # Owned by the application rather than by the module that streams, so two
+    # applications in one process — which the tests build routinely — do not
+    # share a ceiling, and so the count dies with the connections it counts.
+    # It needs no cleanup hook: an entry exists only while a stream is open.
+    app.state.event_streams = EventStreamSlots()
     app.state.artifacts = ArtifactStore(settings.harness.artifact_root)
     app.state.cleaner = cleaner
 
@@ -259,7 +288,7 @@ def create_app(
         return JSONResponse(status_code=refusal.http_status, content=refusal.as_envelope())
 
     @app.get("/healthz")
-    async def healthz() -> dict[str, object]:  # spec §29.1
+    async def healthz(response: Response) -> dict[str, object]:  # spec §29.1
         """Liveness, plus the two facts an operator cannot get any other way.
 
         `public_origin` is reported because it is the single most common
@@ -271,12 +300,43 @@ def create_app(
 
         `assets_mounted` distinguishes "the image shipped without a frontend"
         from "the frontend failed to load", which look identical in a browser.
+
+        `database` is read on every call rather than remembered from startup.
+        A schema version captured once says the database opened an hour ago, not
+        that it is readable now — so a deleted, corrupted, or unreadable file
+        would leave this endpoint reporting `ok` while every real request failed,
+        and both Render's health check and the Docker `HEALTHCHECK` would keep
+        the instance in service.
+
+        The probe reads a *table* rather than `SELECT 1`, because SQLite creates
+        an empty database for a path that no longer exists: a constant select
+        would answer just as happily from the empty file it had silently made,
+        which is precisely the deleted-volume case this is here to catch. One
+        indexed row at most, so it costs a connection and nothing else.
         """
+        database_reachable = True
+        try:
+            async with database.reading() as work:
+                await work.fetch_one("SELECT 1 FROM workspaces LIMIT 1")
+        except Exception:
+            # Never re-raised: an unreachable database is what this endpoint
+            # exists to report, and a 500 here would report only that the health
+            # check itself broke.
+            database_reachable = False
+            _unhandled_logger.exception("health check could not read the database")
+
+        if not database_reachable:
+            # 503 rather than a healthy-looking body with a bad field in it:
+            # the platform reads the status code, and a health check that
+            # answers 200 while the source of truth is gone is the failure mode
+            # this branch was added to remove.
+            response.status_code = 503
         return {
-            "status": "ok",
+            "status": "ok" if database_reachable else "degraded",
             "schema_version": getattr(app.state, "schema_version", None),
             "public_origin": settings.harness.public_origin,
             "assets_mounted": app.state.assets_mounted,
+            "database": "ok" if database_reachable else "unavailable",
         }
 
     app.include_router(workspace_routes.router, prefix=API_PREFIX)
@@ -295,9 +355,14 @@ def create_app(
     register_demo_proxy(app, enabled=settings.is_enabled("buggy_store"))
     app.state.assets_mounted = mount_static_applications(app, settings.harness.static_root)
 
-    # TODO(M8): §15.2's from-candidates and published endpoints
-    # TODO(005): the rest of §15.3 — run read, paged events, invocation,
-    # confirmation decisions, verify, report, and comparison
+    # TODO(M8): §15.2's from-candidates and published endpoints. Both depend on
+    # proposal-mode runs and assertion candidates, which `run_service` still
+    # refuses by name, so neither can be written before that lands.
+    #
+    # §15.3 is no longer listed here: run read, paged events, invocation,
+    # confirmation decisions, verify, report and comparison are all implemented
+    # in `routes/runs.py` and mounted above. The note outlived the work and read,
+    # to anyone auditing this file, as a much larger hole than actually exists.
     return app
 
 

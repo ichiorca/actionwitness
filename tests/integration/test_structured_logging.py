@@ -26,6 +26,8 @@ from actionwitness_service.api.app import create_app
 from actionwitness_service.api.dependencies import WorkspaceDependency
 from actionwitness_service.telemetry import (
     LOGGER_NAME,
+    MAX_LOGGED_IDENTIFIER_CHARS,
+    TRUNCATION_MARKER,
     UNHANDLED_ERROR_CODE,
     UNHANDLED_STATUS,
     UNMATCHED_ROUTE,
@@ -162,6 +164,55 @@ async def test_a_route_template_is_logged_rather_than_the_expanded_path(
     assert "run-does-not-exist" not in str(line["route"])
     # The identifier still reaches the log — in the field meant for it.
     assert line["run_id"] == "run-does-not-exist"
+
+
+async def test_the_eval_case_and_tool_name_fields_read_the_routers_own_parameters(
+    app: FastAPI, caplog: pytest.LogCaptureFixture
+) -> None:
+    """§21.5 names both, and both were silently empty until the names agreed.
+
+    The failure this pins is not a crash: `eval_case_id` was read from a
+    `case_id` parameter no route declares, and `tool_name` from a
+    `request.state` attribute nothing assigns, so each logged `None` on exactly
+    the requests that should have carried it. A missing field and a misspelled
+    one look identical in the output, which is why the agreement needs a test
+    rather than a reading.
+    """
+    caplog.set_level(logging.INFO, logger=LOGGER_NAME)
+
+    async with visitor(app) as client:
+        await client.get("/api/v1/evals/eval-does-not-exist")
+        await client.post(
+            "/api/v1/runs/run-does-not-exist/target-tools/get_cart:invoke", json={"arguments": {}}
+        )
+
+    by_route = {str(line["route"]): line for line in emitted(caplog)}
+
+    eval_line = next(line for route, line in by_route.items() if "{eval_case_id}" in route)
+    assert eval_line["eval_case_id"] == "eval-does-not-exist"
+
+    invoke_line = next(line for route, line in by_route.items() if "{tool_name}" in route)
+    assert invoke_line["tool_name"] == "get_cart"
+
+
+async def test_an_oversized_identifier_is_bounded_before_it_reaches_the_line(
+    app: FastAPI, caplog: pytest.LogCaptureFixture
+) -> None:
+    """`path_params` is populated when the pattern matches, not when it validates.
+
+    A request refused with a 422 still emits a line, so the only thing standing
+    between a caller and an arbitrarily long log field is this bound.
+    """
+    caplog.set_level(logging.INFO, logger=LOGGER_NAME)
+    oversized = "r" * (MAX_LOGGED_IDENTIFIER_CHARS * 3)
+
+    async with visitor(app) as client:
+        await client.get(f"/api/v1/runs/{oversized}")
+
+    logged = str(emitted(caplog)[0]["run_id"])
+    assert logged.endswith(TRUNCATION_MARKER)
+    assert len(logged) == MAX_LOGGED_IDENTIFIER_CHARS + len(TRUNCATION_MARKER)
+    assert oversized not in logged
 
 
 # --- what a line must never carry (§21.5, §20.3) ----------------------------

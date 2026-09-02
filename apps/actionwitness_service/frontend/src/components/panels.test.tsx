@@ -17,8 +17,8 @@
  * class names.
  */
 
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Finding } from "../api/workspace";
 import type { ToolGroupReconciliation, ToolReconciliation } from "../webmcp/adapter";
@@ -31,6 +31,7 @@ import {
   ConfigPanel,
   ToolRegistrationPanel,
   EvalPanel,
+  RunTimeline,
   ToolSurfacePanel,
   UndeclaredChangesPanel,
   FindingsPanel,
@@ -362,6 +363,40 @@ describe("ConfirmationDialog (§14.4, AC-06)", () => {
     expect(screen.getByRole("button", { name: /approve/i }).getAttribute("disabled")).not.toBeNull();
     expect(screen.getByRole("button", { name: /deny/i }).getAttribute("disabled")).not.toBeNull();
   });
+
+  it("traps Tab at the end, wrapping focus back to the first control", () => {
+    // The dialog is the consent gate for an irreversible action (AGENTS.md:
+    // confirmation tests must cover keyboard operation). A trap that only
+    // caught forward Tab at one end and not the other would let a keyboard
+    // user Tab straight out of the modal.
+    renderDialog();
+
+    const approve = screen.getByRole("button", { name: /approve once/i });
+    const deny = screen.getByRole("button", { name: /deny/i });
+
+    deny.focus();
+    expect(document.activeElement).toBe(deny);
+
+    // Dispatched on `document`, matching where the component itself
+    // listens (`document.addEventListener("keydown", ...)`).
+    fireEvent.keyDown(document, { key: "Tab" });
+
+    expect(document.activeElement).toBe(approve);
+  });
+
+  it("traps Shift+Tab at the start, wrapping focus back to the last control", () => {
+    renderDialog();
+
+    const approve = screen.getByRole("button", { name: /approve once/i });
+    const deny = screen.getByRole("button", { name: /deny/i });
+
+    approve.focus();
+    expect(document.activeElement).toBe(approve);
+
+    fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
+
+    expect(document.activeElement).toBe(deny);
+  });
 });
 
 describe("EvalPanel (§24.3)", () => {
@@ -373,6 +408,12 @@ describe("EvalPanel (§24.3)", () => {
     latestOutcome: "failed",
     latestEnvironment: "reproduce_source",
   };
+
+  // The clipboard stub must not leak between tests: the "no clipboard" case
+  // below depends on jsdom's real absence of one, whatever the order.
+  afterEach(() => {
+    Reflect.deleteProperty(window.navigator, "clipboard");
+  });
 
   it("never merges eval status with business outcome", () => {
     render(
@@ -427,6 +468,46 @@ describe("EvalPanel (§24.3)", () => {
     fireEvent.click(screen.getByRole("button", { name: /replay against source/i }));
 
     expect(onReplay).toHaveBeenCalledWith("eval_1", "reproduce_source");
+  });
+
+  it("keeps the full content hash in the DOM and copies the whole value", async () => {
+    // The row is identified by its hash — the e2e suite filters on the full
+    // string, and a person selects it — so shortening must stay CSS-only.
+    // The copy button is how the complete value travels.
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(window.navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+
+    render(
+      <EvalPanel cases={[summary]} busy={false} canCreate onCreate={vi.fn()} onReplay={vi.fn()} />,
+    );
+
+    expect(screen.getByText("sha256:abc")).toBeDefined();
+
+    const copy = screen.getByRole("button", { name: /copy content hash/i });
+    fireEvent.click(copy);
+
+    await waitFor(() => {
+      expect(copy.textContent).toBe("Copied");
+    });
+    expect(writeText).toHaveBeenCalledWith("sha256:abc");
+  });
+
+  it("says the copy failed instead of pretending, when the browser has no clipboard", async () => {
+    // jsdom (like any non-secure context) exposes no `navigator.clipboard`;
+    // the button must say so rather than flash "Copied" over a no-op.
+    render(
+      <EvalPanel cases={[summary]} busy={false} canCreate onCreate={vi.fn()} onReplay={vi.fn()} />,
+    );
+
+    const copy = screen.getByRole("button", { name: /copy content hash/i });
+    fireEvent.click(copy);
+
+    await waitFor(() => {
+      expect(copy.textContent).toBe("Copy failed");
+    });
   });
 
   it("withholds creation when the run cannot produce a case", () => {
@@ -725,5 +806,75 @@ describe("ToolRegistrationPanel", () => {
     // Assert — AC-09: the workspace still works, and the copy has to say so or
     // a person will reasonably assume it does not.
     expect(screen.getByText(/can be done by hand/)).toBeTruthy();
+  });
+});
+
+describe("RunTimeline", () => {
+  const EVENT = {
+    id: "evt_1",
+    sequenceNumber: 1,
+    eventType: "run_armed",
+    actor: "human",
+    toolName: null,
+    status: null,
+    reportedStatus: null,
+    createdAt: "2026-06-01T12:00:00Z",
+  };
+
+  it("says a run is being watched while it is live", () => {
+    render(<RunTimeline events={[EVENT]} runStatus="armed" polling error={null} />);
+
+    expect(screen.getByText(/watching for new activity/)).toBeDefined();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("says out loud that the timeline could not be read", () => {
+    // `useRunTimeline` has always computed this and nothing rendered it, so a
+    // dropped connection looked exactly like a quiet run: the events froze, the
+    // banner still said the page was watching, and there was no way to tell.
+    render(
+      <RunTimeline
+        events={[EVENT]}
+        runStatus="armed"
+        polling
+        error="The timeline could not be read."
+      />,
+    );
+
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toContain("The timeline could not be read.");
+    // A statement about the connection, not about the run: the hook keeps
+    // retrying and keeps what it already has.
+    expect(alert.textContent).toContain("keeps retrying");
+  });
+
+  it("keeps the events it already had while the connection is down", () => {
+    // A failed poll must not rewind the record in front of the reader, which is
+    // the reason the message says the list may be behind rather than gone.
+    render(
+      <RunTimeline
+        events={[EVENT]}
+        runStatus="armed"
+        polling
+        error="The timeline could not be read."
+      />,
+    );
+
+    expect(screen.getByText("run_armed")).toBeDefined();
+  });
+
+  it("labels the tool's own claim as a claim", () => {
+    // §23.1 keeps the self-report and the observation distinguishable; a
+    // timeline showing one status would hide the disagreement a run is judged on.
+    render(
+      <RunTimeline
+        events={[{ ...EVENT, id: "evt_2", eventType: "tool_invocation_completed", actor: "agent", toolName: "apply_discount", reportedStatus: "success" }]}
+        runStatus="running"
+        polling
+        error={null}
+      />,
+    );
+
+    expect(screen.getByText(/reported: success/)).toBeDefined();
   });
 });

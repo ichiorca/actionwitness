@@ -19,6 +19,7 @@ that nothing was written.
 from __future__ import annotations
 
 import json
+import sqlite3
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -34,7 +35,10 @@ from actionwitness_core.benchmarks.enums import (
 from actionwitness_core.benchmarks.models import NormalizedTrial
 from actionwitness_core.kernel import CoreError
 from actionwitness_service.application.artifacts import ArtifactStore
-from actionwitness_service.application.benchmark_service import BenchmarkService
+from actionwitness_service.application.benchmark_service import (
+    BenchmarkService,
+    write_benchmark_report,
+)
 from actionwitness_service.persistence.database import Database
 
 pytestmark = pytest.mark.integration
@@ -112,8 +116,19 @@ async def _suite(
 
 
 async def _finalize(database: Database, store: ArtifactStore, benchmark_id: str) -> str:
+    """The route's three phases, in the order ADR-0003 requires them.
+
+    The report is written between the two transactions rather than inside one,
+    so this helper is also what keeps the tests honest about where the file
+    write happens.
+    """
+    async with database.reading() as work:
+        prepared = await BenchmarkService(work, WORKSPACE).prepare_finalize(benchmark_id)
+    written = write_benchmark_report(store, WORKSPACE, prepared)
     async with database.transaction() as work:
-        return await BenchmarkService(work, WORKSPACE).finalize(benchmark_id, store)
+        return await BenchmarkService(work, WORKSPACE).seal_finalize(
+            benchmark_id, prepared, written, store
+        )
 
 
 # --- the happy path ----------------------------------------------------------
@@ -250,7 +265,7 @@ async def test_a_replay_suite_must_pass_through_running(
     # Act / Assert
     async with database.transaction() as work:
         with pytest.raises(CoreError):
-            await BenchmarkService(work, WORKSPACE).finalize(benchmark_id, store)
+            await BenchmarkService(work, WORKSPACE).prepare_finalize(benchmark_id)
 
     # …and it succeeds once the suite has actually run.
     async with database.transaction() as work:
@@ -270,7 +285,7 @@ async def test_a_completed_suite_cannot_be_finalized_again(
     # Act / Assert
     async with database.transaction() as work:
         with pytest.raises(CoreError):
-            await BenchmarkService(work, WORKSPACE).finalize(benchmark_id, store)
+            await BenchmarkService(work, WORKSPACE).prepare_finalize(benchmark_id)
 
 
 async def test_a_draft_suite_cannot_be_finalized(database: Database, store: ArtifactStore) -> None:
@@ -282,7 +297,7 @@ async def test_a_draft_suite_cannot_be_finalized(database: Database, store: Arti
     # Act / Assert
     async with database.transaction() as work:
         with pytest.raises(CoreError):
-            await BenchmarkService(work, WORKSPACE).finalize(benchmark_id, store)
+            await BenchmarkService(work, WORKSPACE).prepare_finalize(benchmark_id)
 
 
 # --- atomicity ---------------------------------------------------------------
@@ -304,7 +319,7 @@ async def test_a_refused_finalization_leaves_no_partial_result(
     # Act
     async with database.transaction() as work:
         with pytest.raises(CoreError):
-            await BenchmarkService(work, WORKSPACE).finalize(benchmark_id, store)
+            await BenchmarkService(work, WORKSPACE).prepare_finalize(benchmark_id)
 
     # Assert
     async with database.transaction() as work:
@@ -332,7 +347,7 @@ async def test_a_failed_finalization_can_be_recorded_as_an_error(
     benchmark_id = await _suite(database, _trial("t1", mode=REPLAY), mode=REPLAY)
     async with database.transaction() as work:
         with pytest.raises(CoreError):
-            await BenchmarkService(work, WORKSPACE).finalize(benchmark_id, store)
+            await BenchmarkService(work, WORKSPACE).prepare_finalize(benchmark_id)
 
     # Act
     async with database.transaction() as work:
@@ -344,6 +359,56 @@ async def test_a_failed_finalization_can_be_recorded_as_an_error(
         suite = await BenchmarkService(work, WORKSPACE).get(benchmark_id)
     assert suite["status"] == "error"
     assert suite["result_artifact_id"] is None
+
+
+class _ProbingStore(ArtifactStore):
+    """An `ArtifactStore` that asks the database a question mid-write.
+
+    The question is ADR-0003's rule, and SQLite itself answers it: a second
+    connection can take `BEGIN IMMEDIATE` with no wait at all only while no
+    other write transaction is open. The answer is recorded rather than
+    asserted here so a regression fails the test that names the invariant,
+    instead of surfacing as a lock error raised from inside a fixture.
+    """
+
+    def __init__(self, root: Path, database_path: str) -> None:
+        super().__init__(root)
+        self._database_path = database_path
+        self.write_lock_was_free: bool | None = None
+
+    def write(self, *args: object, **kwargs: object) -> object:
+        probe = sqlite3.connect(self._database_path, timeout=0, isolation_level=None)
+        try:
+            probe.execute("BEGIN IMMEDIATE")
+            probe.execute("ROLLBACK")
+            self.write_lock_was_free = True
+        except sqlite3.OperationalError:
+            self.write_lock_was_free = False
+        finally:
+            probe.close()
+        return super().write(*args, **kwargs)  # type: ignore[arg-type]
+
+
+async def test_the_report_is_written_with_no_write_transaction_open(
+    database: Database, artifact_root: Path
+) -> None:
+    """ADR-0003: "no transaction opened here may span" file I/O.
+
+    `BEGIN IMMEDIATE` is SQLite's single writer for the whole database, not for
+    one workspace, so a report written inside it stalls every other workspace's
+    mutation for the length of the write. The probe pins the fix directly: at
+    the moment the report reaches disk, the write lock is free.
+    """
+    # Arrange
+    store = _ProbingStore(artifact_root, database.path)
+    benchmark_id = await _suite(database, _trial("t1"))
+
+    # Act
+    artifact_id = await _finalize(database, store, benchmark_id)
+
+    # Assert
+    assert artifact_id
+    assert store.write_lock_was_free is True
 
 
 # --- isolation ---------------------------------------------------------------
@@ -364,7 +429,7 @@ async def test_another_workspace_cannot_finalize_the_suite(
     # Act / Assert
     async with database.transaction() as work:
         with pytest.raises(Exception):  # noqa: B017 - ApiError, asserted by code below
-            await BenchmarkService(work, "ws-2").finalize(benchmark_id, store)
+            await BenchmarkService(work, "ws-2").prepare_finalize(benchmark_id)
     async with database.transaction() as work:
         suite = await BenchmarkService(work, WORKSPACE).get(benchmark_id)
     assert suite["status"] == BenchmarkStatus.READY.value

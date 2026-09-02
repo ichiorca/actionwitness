@@ -116,9 +116,17 @@ class RateLimiter:
         )
 
     def allow_workspace_creation(self, key: str) -> TokenBucket | None:
-        """The stricter bucket. Checked only when a workspace would be created,
-        so a returning visitor never spends from it — otherwise a single user
-        refreshing a page would exhaust an hour's allowance in a minute."""
+        """The stricter bucket, spent at the moment a workspace is issued.
+
+        Its caller is the resolution path, not the request path, because only
+        resolution knows whether a workspace is about to exist: a cookie naming
+        a workspace that was never issued — or that FR-009's cleanup has since
+        removed — creates one exactly like no cookie at all. Charging on the
+        cookie's absence instead would meter nothing, since a client can present
+        a different invented value every time; charging on every request would
+        meter the wrong thing, since one visitor refreshing a page would exhaust
+        an hour's allowance in a minute.
+        """
         return self._take(
             self._creations,
             key,

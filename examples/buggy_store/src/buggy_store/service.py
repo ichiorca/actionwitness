@@ -262,6 +262,27 @@ class StoreService:
         realistic bug is a retry treated as a fresh delta, which is what AC-05
         means by "the evidence shows the duplicate state change".
 
+        **The duplicated sum saturates at `MAX_LINE_QUANTITY`.** A doubled
+        quantity can ask for a line the canonical model refuses to hold —
+        Appendix D.2 caps `update_cart.quantity` at five and `CartLine` carries
+        the same bound — and there are only three things the store can do about
+        it. Raising the bound would let a fault widen a canonical-state
+        invariant, which §5 forbids outright. Refusing with a `StoreError` would
+        keep the envelope well-formed but break the profile: §13.3 requires the
+        tool response to stay "syntactically valid", and a caller that can read
+        the duplication straight off a 4xx never needs the independent
+        observation this whole product exists to make. Saturating keeps both
+        halves — the response is an ordinary success, and observed state still
+        disagrees with what the caller asked for, which is the disagreement the
+        harness reports.
+
+        The clamp does cost one case: a line already at the ceiling saturates
+        back to the value the caller requested, so that particular retry shows
+        no duplication at all. That is the honest consequence of a bounded
+        quantity domain rather than a defect — the store cannot hold six mugs,
+        so there is no duplicate to observe — and the journeys AC-05 exercises
+        sit well below the ceiling.
+
         The scenario is taken here rather than applied by the caller afterwards so
         that one tool call produces exactly one state version. Injecting the side
         effect as a second `with_target_state` would bump the version twice for a
@@ -276,7 +297,10 @@ class StoreService:
             existing = items.get(product.line_key)
             applied = quantity
             if duplicating and existing is not None:
-                applied = existing.quantity + quantity
+                # `min`, not a bare sum: see the docstring. The bound belongs to
+                # canonical state, so the fault bends the number and never the
+                # invariant.
+                applied = min(existing.quantity + quantity, MAX_LINE_QUANTITY)
             items[product.line_key] = CartLine(
                 product_id=product.product_id, quantity=applied, unit_price=product.price
             )

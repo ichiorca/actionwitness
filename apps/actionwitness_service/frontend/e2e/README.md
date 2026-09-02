@@ -101,46 +101,49 @@ workspace and a per-client request budget both make concurrency wrong here.
 
 ## What building this lane surfaced
 
-Findings in the product, recorded here because they are the reason several
-assertions below read the way they do. None are fixed by this change.
+Eight defects, none of which any existing layer could see. All are fixed; each
+now has a regression test at the layer that owns it, and the browser test that
+found it.
 
-1. **A `toolchange` that arrives during an in-flight capture is dropped.**
-   `webmcp/surface.ts` guards with `if (inFlight) return` and schedules nothing
-   afterwards, so a mid-run tool injection can go unrecorded and
-   `stable_tool_surface` passes. Observed intermittently with the
-   `tool_surface_poisoned` profile, whose look-alike registers in the same
-   commit that arms the run — racing the baseline POST it is supposed to follow.
-2. **Surface captures race verification.** The witness is debounced
-   (`TOOLCHANGE_QUIET_PERIOD_MS`) and `verify_outcome` waits for nothing, so a
-   delta recorded after the run is sealed does not reach the verdict.
-   `06-tool-surface` waits for the capture to be on the record before verifying,
-   which is why it is deterministic.
-3. **Tool hints are read from the wrong level.** `describeTool` takes
+1. **A `toolchange` during an in-flight capture was dropped.**
+   `webmcp/surface.ts` guarded with `if (inFlight) return` and scheduled nothing
+   afterwards, so a mid-run injection could go unrecorded and
+   `stable_tool_surface` passed. Reproduced with the `tool_surface_poisoned`
+   profile, whose look-alike registers in the same commit that arms the run —
+   inside the baseline's own POST. Now deferred and re-captured.
+2. **Surface captures raced verification.** The witness is debounced and
+   `verify_outcome` waited for nothing, so a delta recorded after the run sealed
+   never reached the verdict. `useToolSurfaceWitness` now returns a `flush()`
+   that every verifying path awaits.
+3. **Tool hints were read from the wrong level.** `describeTool` took
    `readOnlyHint` / `untrustedContentHint` from the top of a `getTools()`
-   descriptor, but `webmcp-types` nests them under `annotations`. Captured
-   surfaces therefore always carry `null` for both, and `hint_change` — listed
-   in `one_mug_stable_surface`'s `failing_delta_kinds` — cannot fire. The jsdom
-   double nests them per the spec, so the vitest suite cannot see this.
-4. **The timeline's error state is never rendered.** `useRunTimeline` computes an
-   `error`; `App` passes only `events`, `runStatus` and `polling` to
-   `RunTimeline`. A dropped connection is invisible to the reader — confirmed in
-   the browser with `setOffline(true)` in `09-timeline-and-recovery`.
-5. **A failed target invocation reaches the agent as a non-error result.** The
-   invoke route answers `200` for a completed invocation whose `terminal_event`
-   is `tool_invocation_failed`, and the adapter normalizes a resolved value as a
-   success — so an agent branching on `isError` reads a refused, key-reused
-   mutation as one that worked (`14-idempotency`).
-6. **`run_regression_eval` can never register.** `App` calls
-   `useHarnessToolset(status, refresh)` with two arguments, so `evalCaseId` is
-   always `null` and the tool's `enabled` is always false. AC-22 measures "every
-   capability is reachable by tool" (`12-regression-eval`).
-7. **`EvalPanel` and `BenchmarkPanel` are exported and unit-tested but never
-   rendered** by `App`, and there is no audit panel for the §15.9 routes. Those
-   surfaces have no human path in the shipped page, so no browser test can reach
-   them.
-8. **`GET /` is inside the request bucket.** FR-009 exempts health and static
-   only, so a burst of navigations serves the JSON error envelope as the page
-   body rather than a readable refusal. Per spec, but worth a look.
+   descriptor; `webmcp-types` nests them under `annotations`. Every captured
+   hint was `null`, so `hint_change` — listed in `one_mug_stable_surface`'s
+   `failing_delta_kinds` — could never fire. The jsdom double nests them per the
+   spec, which is why the vitest suite could not see it.
+4. **The timeline's error was computed and never rendered.** A dropped
+   connection looked exactly like a quiet run. `RunTimeline` now says so, and
+   keeps the events it already had.
+5. **A failed invocation reached the agent as a success.** The invoke route
+   answers `200` for a completed round trip, and the tool's own outcome lives in
+   `terminal_event` — which nothing read, so a mutation refused for a reused
+   idempotency key normalized as a success. The bridge now throws, and the
+   adapter's existing `isError` path carries it.
+6. **`run_regression_eval` could never register.** `App` supplied no case id, so
+   an agent could cut a regression case and had no way to replay it. The toolset
+   now remembers the case it created, and a caller's selection wins.
+7. **`EvalPanel` was exported, unit-tested, and never rendered.** The regression
+   surface had no human path at all. It is now wired to §15.4 through
+   `api/evals.ts`. **Still open:** `BenchmarkPanel` is likewise unrendered, and
+   there is no panel for the §15.9 audit routes — both need import/creation
+   flows that do not exist yet (spec 008's and 015's UI), which is a scope
+   decision rather than a defect.
+8. **`GET /` was inside the request bucket**, so a burst of ordinary navigations
+   answered with the JSON envelope rendered as the page body. It is a static
+   `index.html`, which FR-009 exempts; it was metered only because
+   `startswith("/")` matches everything. The two buckets are now decided
+   independently, so `/` is unmetered per minute while still spending the
+   stricter workspace-creation allowance it issues cookies from.
 
 ## What this lane does not prove
 
@@ -159,3 +162,13 @@ Everything lands under `apps/actionwitness_service/frontend/.e2e/`, which is
 git-ignored: both SQLite databases, the artifact root, the assembled static
 tree, and Playwright's traces and screenshots. The databases are discarded on
 every run, so the suite cannot become order-dependent.
+
+**Run it through `npm run test:e2e`, not `npx playwright test`.** The wipe lives
+in `scripts/build-e2e-static.mjs`, which the npm script chains and a bare
+Playwright invocation skips. State then carries between runs, and the first
+thing to break is a per-workspace ceiling: `EVAL_CASES_PER_WORKSPACE` is ten,
+`12-regression-eval` cuts about four per run, and FR-013's purge removes
+terminal runs but not the cases cut from them — so the third or fourth
+back-to-back bare run starts failing on a limit rather than on a defect. Use
+`AW_E2E_SKIP_BUILD=1 npm run test:e2e` to iterate: it reuses the bundles and
+still discards the databases.

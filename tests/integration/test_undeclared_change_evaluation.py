@@ -186,7 +186,10 @@ def test_the_block_and_the_finding_never_disagree() -> None:
     policy = _policy_finding(evaluation)
 
     assert block is not None
-    assert block.paths == policy.paths
+    # §23.1's entries are objects carrying FR-159's values and attribution, so
+    # the projection is compared on the paths they name rather than on identity
+    # with the finding's own path column.
+    assert tuple(entry.path for entry in block.paths) == policy.paths
     assert block.undeclared == len(policy.paths)
     assert block.changed_paths == len(evaluation.changes or ())
     assert block.declared == block.changed_paths - block.undeclared

@@ -161,8 +161,24 @@ async def test_gate_2_the_failure_is_classified_and_names_its_paths(stack: FastA
     assert failed[0]["classification"] == "undeclared_state_change"
     assert failed[0]["paths"] == [NOTE_PATH]
 
+    # §23.1 renders each entry as an object - `{path, before, after,
+    # attributed_cause}` - not a bare string, and FR-159 requires the causal
+    # attribution to be one of them. Attribution is by adjacency, so the tool
+    # whose recorded canonical state hashes moved is named even though nothing
+    # declared an effect on this path.
     block = report["undeclared_changes"]
-    assert block["paths"] == [NOTE_PATH]
+    assert [entry["path"] for entry in block["paths"]] == [NOTE_PATH]
+    assert block["paths"][0]["attributed_cause"].startswith("tool_action:update_cart@")
+
+    # AC-24's other half: the entry says what the value changed *from* and *to*,
+    # not merely that it moved. The diff computes these excerpts, and for a long
+    # time the service dropped them on the way to the policy — a report that
+    # named a path but could never say what happened to it. Asserted through the
+    # live report rather than the core, because that drop happened in the wiring
+    # and only an end-to-end read can see it.
+    entry = block["paths"][0]
+    assert entry["after"] is not None, "the report named a change but not its new value"
+    assert entry["before"] != entry["after"]
     assert block["undeclared"] == 1
     assert block["declared"] == block["changed_paths"] - block["undeclared"]
     assert block["effect_metadata_published"] is True

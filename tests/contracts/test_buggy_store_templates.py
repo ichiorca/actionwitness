@@ -173,6 +173,42 @@ def test_every_template_is_written_in_its_own_canonical_form(template) -> None:
 
 
 @pytest.mark.contracts
+@pytest.mark.parametrize("template", TEMPLATES, ids=lambda t: t.template_id)
+def test_every_expansion_is_written_in_its_own_canonical_form(template) -> None:
+    """The same rule, for the document `POST /contracts` actually stores.
+
+    The guard above covers the template as shipped. What reaches the service is
+    the *expansion* — the template with its assertion values, name, description
+    and intent rewritten from the caller's scalars — and nothing held that to
+    the same rule. An expansion is built with `{**document, ...}` today, so it
+    inherits the template's canonical form; a future expander that dropped a
+    defaulted field, or added a term without one, would reintroduce exactly the
+    divergence the guard above exists to catch, and would do it on the path a
+    person uses rather than on the seeded set.
+
+    Both the default parameters and a supplied set are exercised, because the
+    scalars are what the expander rewrites and a form only some values reach is
+    a guard with a hole in it.
+    """
+    from integrations.buggy_store.templates import expand
+
+    allowlisted = {"quantity": 2, "discount_code": next(iter(sorted(ALLOWED_DISCOUNT_CODES)))}
+    # `contract_name` is accepted by every template rather than allowlisted per
+    # template, and it is applied last, after the expansion — so it belongs in
+    # the supplied case whatever else the template accepts.
+    supplied = {key: allowlisted[key] for key in template.parameters} | {
+        "contract_name": "an operator's chosen name"
+    }
+    for parameters in ({}, supplied):
+        document = dict(expand(template.template_id, parameters))
+        canonical = parse_contract(document).canonical_document()
+        assert content_hash(document) == content_hash(canonical), (
+            f"{template.template_id} expanded with {parameters} is not in canonical "
+            "form; the stored contract would not be the document its own hash names"
+        )
+
+
+@pytest.mark.contracts
 def test_the_adapter_advertises_exactly_the_profiles_the_store_implements() -> None:
     """The duplication that closes 012-T8's hole must not become the hole.
 

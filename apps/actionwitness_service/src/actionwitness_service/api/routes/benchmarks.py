@@ -46,7 +46,10 @@ from actionwitness_service.api.dependencies import (
     WorkspaceDependency,
 )
 from actionwitness_service.api.errors import ApiError, ApiErrorCode
-from actionwitness_service.application.benchmark_service import BenchmarkService
+from actionwitness_service.application.benchmark_service import (
+    BenchmarkService,
+    write_benchmark_report,
+)
 
 __all__ = ["router"]
 
@@ -209,11 +212,15 @@ async def import_evaluator_report(
     except CredentialMaterialRejected as carried:
         raise ApiError(ApiErrorCode.CONTRACT_VALIDATION_FAILED, str(carried)) from carried
 
-    async with locks.hold(workspace_id), database.transaction() as work:
-        service = BenchmarkService(work, workspace_id)
-        suite = await service.get(benchmark_id)
-        mode = CorrelationMode(str(suite["correlation_mode"]))
-        normalized = normalize(imported, correlation_mode=mode)
+    # The workspace lock is held across both transactions, so the suite cannot
+    # move between the refusal check and the recording. What is deliberately
+    # *not* held across the file write is the database transaction: ADR-0003
+    # forbids it, and `BEGIN IMMEDIATE` is SQLite's single writer for every
+    # workspace, not just this one.
+    async with locks.hold(workspace_id):
+        async with database.reading() as work:
+            prepared = await BenchmarkService(work, workspace_id).prepare_import(benchmark_id)
+        normalized = normalize(imported, correlation_mode=prepared.correlation_mode)
 
         # The *redacted* document is the artifact, hashed as stored.
         written = artifacts.write(
@@ -223,30 +230,32 @@ async def import_evaluator_report(
             artifact_type="evaluator_report",
             schema_version=imported.reporter_schema,
         )
-        source_artifact_id = await artifacts.record(
-            work,
-            workspace_id,
-            None,
-            written,
-            # FR-101: the live evaluator report is persisted as an immutable
-            # benchmark *source*. The source kind travels with it so the
-            # artifact can be identified later without consulting the suite —
-            # a suite can be deleted with its workspace, and an artifact that
-            # could not say what kind of run produced it would be unusable
-            # evidence.
-            metadata={
-                "reporter_schema": imported.reporter_schema,
-                "redacted": imported.redacted,
-                "source_kind": str(suite["source_kind"]),
-            },
-            benchmark_suite_id=benchmark_id,
-        )
-        await service.record_import(
-            benchmark_id,
-            source_artifact_id=source_artifact_id,
-            trials=normalized.trials,
-            manifest_fields=normalized.manifest_fields,
-        )
+        async with database.transaction() as work:
+            service = BenchmarkService(work, workspace_id)
+            source_artifact_id = await artifacts.record(
+                work,
+                workspace_id,
+                None,
+                written,
+                # FR-101: the live evaluator report is persisted as an immutable
+                # benchmark *source*. The source kind travels with it so the
+                # artifact can be identified later without consulting the suite —
+                # a suite can be deleted with its workspace, and an artifact that
+                # could not say what kind of run produced it would be unusable
+                # evidence.
+                metadata={
+                    "reporter_schema": imported.reporter_schema,
+                    "redacted": imported.redacted,
+                    "source_kind": prepared.source_kind,
+                },
+                benchmark_suite_id=benchmark_id,
+            )
+            await service.record_import(
+                benchmark_id,
+                source_artifact_id=source_artifact_id,
+                trials=normalized.trials,
+                manifest_fields=normalized.manifest_fields,
+            )
 
     return {
         "benchmark_id": benchmark_id,
@@ -390,10 +399,19 @@ async def finalize_benchmark(
     in a fresh one so no partial result survives.
     """
     try:
-        async with locks.hold(workspace_id), database.transaction() as work:
-            artifact_id = await BenchmarkService(work, workspace_id).finalize(
-                benchmark_id, artifacts
-            )
+        # Three phases, and the middle one is why: the report is written with no
+        # transaction open (ADR-0003), because a file write inside
+        # `BEGIN IMMEDIATE` holds SQLite's single writer against every other
+        # workspace. The workspace lock spans all three, so the suite cannot
+        # move underneath the write.
+        async with locks.hold(workspace_id):
+            async with database.reading() as work:
+                prepared = await BenchmarkService(work, workspace_id).prepare_finalize(benchmark_id)
+            written = write_benchmark_report(artifacts, workspace_id, prepared)
+            async with database.transaction() as work:
+                artifact_id = await BenchmarkService(work, workspace_id).seal_finalize(
+                    benchmark_id, prepared, written, artifacts
+                )
     except CoreError as refused:
         async with locks.hold(workspace_id), database.transaction() as work:
             await BenchmarkService(work, workspace_id).mark_error(benchmark_id)
@@ -515,15 +533,12 @@ async def download_benchmark_report(
                 ApiErrorCode.PRECONDITION_FAILED,
                 "This benchmark has not been finalized, so there is no report yet.",
             )
-        row = await work.fetch_one(
-            "SELECT relative_path FROM artifacts WHERE id = ? AND workspace_id = ?",
-            (str(artifact_id), workspace_id),
-        )
-    if row is None:  # pragma: no cover - finalization commits both together
+        relative_path = await artifacts.relative_path(work, workspace_id, str(artifact_id))
+    if relative_path is None:  # pragma: no cover - finalization commits both together
         raise ApiError(ApiErrorCode.HARNESS_ERROR, "The benchmark artifact has gone.")
 
     return Response(
-        content=artifacts.read_bytes(str(row["relative_path"])),
+        content=artifacts.read_bytes(relative_path),
         media_type="application/json",
     )
 
@@ -562,11 +577,11 @@ async def _scenario_inputs(database: Any, registry: Any, workspace_id: str) -> t
     """
     from actionwitness_core.contracts.models import OutcomeContract
 
+    from actionwitness_service.application.contract_service import ContractService
+    from actionwitness_service.application.workspaces import WorkspaceStore
+
     async with database.reading() as work:
-        row = await work.fetch_one(
-            "SELECT selected_contract_id, selected_target_id FROM workspaces WHERE id = ?",
-            (workspace_id,),
-        )
+        row = await WorkspaceStore(database).get(work, workspace_id)
         contract_id = None if row is None else row["selected_contract_id"]
         if contract_id is None:
             raise ApiError(
@@ -574,8 +589,8 @@ async def _scenario_inputs(database: Any, registry: Any, workspace_id: str) -> t
                 "Select an outcome contract before replaying: a replay with no "
                 "contract has nothing to judge the target against.",
             )
-        document = await work.fetch_one(
-            "SELECT document_json FROM contracts WHERE id = ?", (str(contract_id),)
+        document = await ContractService(work, workspace_id, registry).stored_document(
+            str(contract_id)
         )
     if document is None:  # pragma: no cover - contracts are immutable
         raise ApiError(ApiErrorCode.HARNESS_ERROR, "The selected contract has gone.")
@@ -589,5 +604,5 @@ async def _scenario_inputs(database: Any, registry: Any, workspace_id: str) -> t
             "No target adapter is selected for this workspace, so there is nothing "
             "to replay the imported trajectory through.",
         )
-    contract = OutcomeContract.model_validate(json.loads(str(document["document_json"])))
+    contract = OutcomeContract.model_validate(json.loads(document))
     return contract, slot.name

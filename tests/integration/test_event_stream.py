@@ -31,6 +31,8 @@ be slow and, worse, flaky on a loaded machine (constitution §6).
 
 from __future__ import annotations
 
+import asyncio
+import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -39,6 +41,7 @@ from typing import Any
 import httpx
 import pytest
 from actionwitness_service.api.app import API_PREFIX, create_app
+from actionwitness_service.api.errors import ApiErrorCode
 from actionwitness_service.api.event_stream import (
     MAX_IDLE_SECONDS,
     POLL_INTERVAL_SECONDS,
@@ -46,6 +49,7 @@ from actionwitness_service.api.event_stream import (
     stream_events,
     wants_event_stream,
 )
+from actionwitness_service.application.limits import CONCURRENT_EVENT_STREAMS
 from buggy_store.api import create_app as create_store
 from fastapi import FastAPI
 
@@ -57,6 +61,7 @@ RUNS = f"{API_PREFIX}/runs"
 CANONICAL = "one_mug_save20_no_checkout"
 MUG = "mug-ceramic-001"
 STREAM = {"Accept": "text/event-stream"}
+EVENT_STREAM_ACCEPT = b"text/event-stream"
 
 
 @pytest.fixture
@@ -89,8 +94,13 @@ async def visitor(stack: FastAPI) -> AsyncIterator[httpx.AsyncClient]:
         yield client
 
 
-async def _armed_run(visitor: httpx.AsyncClient) -> str:
-    """A run with a few real events on its timeline."""
+async def _armed_run(visitor: httpx.AsyncClient, *, request_id: str = "req_sse_mug") -> str:
+    """A run with a few real events on its timeline.
+
+    `request_id` is a parameter so two workspaces can each arm one in the same
+    test without sharing an idempotency key — a key identifies one intent, and
+    reusing it across two of them is the thing the harness exists to catch.
+    """
     templates = (await visitor.get(f"{CONTRACTS}/templates")).json()["templates"]
     chosen = next(t for t in templates if t["source_template_id"] == CANONICAL)
     await visitor.post(f"{CONTRACTS}/{chosen['contract_id']}/select")
@@ -102,7 +112,7 @@ async def _armed_run(visitor: httpx.AsyncClient) -> str:
     )
     await visitor.post(
         f"{RUNS}/{run_id}/target-tools/update_cart:invoke",
-        json={"arguments": {"product_id": MUG, "quantity": 1, "request_id": "req_sse_mug"}},
+        json={"arguments": {"product_id": MUG, "quantity": 1, "request_id": request_id}},
     )
     return run_id
 
@@ -416,3 +426,310 @@ def test_a_malformed_resume_header_falls_back_rather_than_failing(
     resume header should cost a client duplicate events, never the stream.
     """
     assert resume_cursor(header, 3) == expected
+
+
+# --- FR-008's two concurrent connections --------------------------------------
+#
+# "One interactive workspace may retain at most ... two concurrent event-stream
+# connections." Each open stream is a held HTTP connection plus a poll of SQLite
+# every second, against a single-worker deployment (§29.1), so the failure this
+# cap prevents is a workspace with thirty tabs — or one hostile client with
+# three hundred — rather than anything a single user does by accident.
+
+#: Every wait below is bounded, and the refusals are probed through the same
+#: driver rather than through httpx. That is not a preference: a request that
+#: negotiates a stream against a *live* run and is wrongly admitted never
+#: returns, so an httpx probe would turn a broken ceiling into a suite that
+#: hangs for five minutes of real clock instead of a test that fails. This was
+#: found by removing the ceiling and watching the first version hang.
+_CONNECT_TIMEOUT = 5.0
+
+
+class _HeldConnection:
+    """One SSE connection, held open against the real ASGI application.
+
+    httpx's `ASGITransport` awaits the entire application call and buffers the
+    body before returning a response, so a stream that stays open cannot be held
+    through it: the request would not return until the run reached a verdict or
+    the stream idled out five minutes later. Two connections open *at the same
+    time* is precisely the state this ceiling is about, so the app is driven
+    directly here.
+
+    It is also the only way to produce the ending that matters. A tab that goes
+    away does not close a generator politely; it stops answering, and the server
+    learns about it as `http.disconnect`. `disconnect()` below is that, and the
+    slot has to come back from it.
+    """
+
+    def __init__(self, app: FastAPI, *, cookie: str, path: str) -> None:
+        self._app = app
+        self._incoming: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        self._request_sent = False
+        self._started = asyncio.Event()
+        self._task: asyncio.Task[None] | None = None
+        self.status: int | None = None
+        self.headers: dict[str, str] = {}
+        self._body: list[bytes] = []
+        self._keepalive = asyncio.Event()
+        self._scope: dict[str, Any] = {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": "GET",
+            "path": path,
+            "raw_path": path.encode(),
+            "query_string": b"",
+            "root_path": "",
+            "scheme": "https",
+            "server": ("harness.test", 443),
+            "client": ("127.0.0.1", 123),
+            "headers": [
+                (b"host", b"harness.test"),
+                (b"accept", EVENT_STREAM_ACCEPT),
+                (b"cookie", cookie.encode()),
+            ],
+        }
+
+    async def _receive(self) -> dict[str, Any]:
+        if not self._request_sent:
+            self._request_sent = True
+            return {"type": "http.request", "body": b"", "more_body": False}
+        return await self._incoming.get()
+
+    async def _send(self, message: dict[str, Any]) -> None:
+        if message["type"] == "http.response.start":
+            self.status = int(message["status"])
+            self.headers = {
+                name.decode().lower(): value.decode() for name, value in message.get("headers", ())
+            }
+            self._started.set()
+        elif message["type"] == "http.response.body":
+            body = message.get("body", b"")
+            self._body.append(body)
+            if body.startswith(b":"):
+                # A keepalive comment. The statement after it in `stream_events`
+                # is the poll interval's sleep, so seeing one places the
+                # generator between two database reads rather than inside one.
+                self._keepalive.set()
+
+    async def open(self) -> int:
+        """Send the request; return the status once the response has begun.
+
+        The slot is taken inside the route, before the response starts, so a
+        status is proof the connection is holding one.
+        """
+        task = asyncio.create_task(self._app(self._scope, self._receive, self._send))
+        self._task = task
+        # Releases the wait when the application finishes without ever starting
+        # a response, so a failure is a failed assertion rather than a timeout.
+        task.add_done_callback(lambda _finished: self._started.set())
+        await asyncio.wait_for(self._started.wait(), timeout=_CONNECT_TIMEOUT)
+        if task.done():
+            task.result()
+        assert self.status is not None
+        return self.status
+
+    async def envelope(self) -> dict[str, Any]:
+        """The refusal body, once the application has finished answering.
+
+        Bounded like everything else here: a request that was admitted when it
+        should have been refused would never finish, and waiting on it forever
+        is how a broken ceiling turns into a silent suite.
+        """
+        assert self._task is not None
+        await asyncio.wait_for(self._task, timeout=_CONNECT_TIMEOUT)
+        decoded = json.loads(b"".join(self._body))
+        assert isinstance(decoded, dict)
+        return decoded
+
+    async def _wait_for_keepalive(self) -> None:
+        """Park the stream between polls before interrupting it.
+
+        Not politeness, and not a sleep: `Database.connect()` closes its
+        connection in a `finally`, and a cancellation delivered *inside* that
+        close is delivered again at the `await` that closes it — so a stream
+        interrupted mid-read leaves an aiosqlite connection and its worker
+        thread alive until the loop dies, which surfaces later as an unhandled
+        `Event loop is closed` in whichever test happens to be running. That is
+        a real defect in the cancellation path (see the report accompanying this
+        change), and it lives outside this file; waiting for a keepalive keeps
+        these tests from being the place it shows up at random.
+        """
+        self._keepalive.clear()
+        await asyncio.wait_for(self._keepalive.wait(), timeout=_CONNECT_TIMEOUT)
+
+    async def disconnect(self) -> None:
+        """What a closed tab looks like from the server's side. Idempotent."""
+        task = self._task
+        if task is None or task.done():
+            return
+        await self._wait_for_keepalive()
+        await self._incoming.put({"type": "http.disconnect"})
+        await asyncio.wait_for(task, timeout=_CONNECT_TIMEOUT)
+
+
+def _cookie_header(client: httpx.AsyncClient) -> str:
+    return "; ".join(f"{name}={value}" for name, value in client.cookies.items())
+
+
+@asynccontextmanager
+async def _held_stream(
+    stack: FastAPI, visitor: httpx.AsyncClient, run_id: str
+) -> AsyncIterator[_HeldConnection]:
+    """One open stream for `visitor`'s workspace, closed however the test ends."""
+    connection = _HeldConnection(
+        stack, cookie=_cookie_header(visitor), path=f"{RUNS}/{run_id}/events"
+    )
+    try:
+        yield connection
+    finally:
+        await connection.disconnect()
+
+
+async def test_the_third_concurrent_stream_is_refused_before_it_opens(
+    stack: FastAPI, visitor: httpx.AsyncClient
+) -> None:
+    """FR-008's ceiling, and §15.8's envelope rather than a broken stream.
+
+    The refusal has to arrive as ordinary JSON. Once `200 text/event-stream` is
+    on the wire a client is reading a stream, and a connection that opened and
+    then closed silently is indistinguishable from a network fault — so it would
+    be retried, forever, by the browser's own reconnect.
+    """
+    # Arrange — a live run, so its streams stay open rather than ending.
+    run_id = await _armed_run(visitor)
+
+    # Act
+    async with (
+        _held_stream(stack, visitor, run_id) as first,
+        _held_stream(stack, visitor, run_id) as second,
+        _held_stream(stack, visitor, run_id) as third,
+    ):
+        assert await first.open() == 200
+        assert await second.open() == 200
+        status = await third.open()
+        assert status == 409
+        # Assert — §15.8's envelope, not a stream that closes without saying why.
+        assert third.headers["content-type"].startswith("application/json")
+        error = (await third.envelope())["error"]
+
+    assert error["code"] == ApiErrorCode.WORKSPACE_LIMIT_EXCEEDED.value
+    assert error["retryable"] is False
+    assert error["details"] == []
+    assert error["message"]
+
+
+async def test_a_disconnected_stream_frees_exactly_one_slot(
+    stack: FastAPI, visitor: httpx.AsyncClient
+) -> None:
+    """The leak test, taken through the ending nobody codes for.
+
+    A slot released only when a generator finishes tidily would pass every test
+    that closed its streams politely and leak on the first dropped tab — and a
+    leaked slot lowers this workspace's ceiling for the life of the process,
+    which is worse than no ceiling at all.
+
+    One slot, not all of them: the connection still open must still be counted.
+    """
+    # Arrange — at the ceiling, then one connection goes away.
+    run_id = await _armed_run(visitor)
+    async with (
+        _held_stream(stack, visitor, run_id) as kept,
+        _held_stream(stack, visitor, run_id) as dropped,
+        _held_stream(stack, visitor, run_id) as replacement,
+        _held_stream(stack, visitor, run_id) as over,
+    ):
+        assert await kept.open() == 200
+        assert await dropped.open() == 200
+
+        # Act
+        await dropped.disconnect()
+
+        # Assert — exactly one slot came back: the replacement is admitted and
+        # the one after it is not, so `kept` is still being counted.
+        assert await replacement.open() == 200
+        assert await over.open() == 409
+        error = (await over.envelope())["error"]
+
+    assert error["code"] == ApiErrorCode.WORKSPACE_LIMIT_EXCEEDED.value
+
+
+async def test_one_workspaces_streams_do_not_spend_anothers_budget(stack: FastAPI) -> None:
+    """The workspace is the isolation boundary, and so is its connection budget.
+
+    A counter that was global rather than keyed would pass the two tests above
+    and let any visitor close the streams of every other one.
+    """
+    # Arrange — two workspaces, each with a live run of its own.
+    transport = httpx.ASGITransport(app=stack, raise_app_exceptions=False)
+    async with (
+        httpx.AsyncClient(transport=transport, base_url="https://harness.test") as owner,
+        httpx.AsyncClient(transport=transport, base_url="https://harness.test") as neighbour,
+    ):
+        owned_run = await _armed_run(owner)
+        neighbour_run = await _armed_run(neighbour, request_id="req_sse_mug_neighbour")
+
+        # Act — the first workspace takes its whole allowance.
+        async with (
+            _held_stream(stack, owner, owned_run) as first,
+            _held_stream(stack, owner, owned_run) as second,
+            _held_stream(stack, neighbour, neighbour_run) as across,
+            _held_stream(stack, owner, owned_run) as owner_over,
+        ):
+            assert await first.open() == 200
+            assert await second.open() == 200
+
+            # Assert — the owner is at its ceiling, and the neighbour is not.
+            assert await owner_over.open() == 409
+            assert await across.open() == 200
+
+
+async def test_the_paged_fallback_is_never_capped(
+    stack: FastAPI, visitor: httpx.AsyncClient
+) -> None:
+    """§15.3 keeps paging as the contract and SSE as the enhancement.
+
+    A paged read is an ordinary request that ends when it is answered, so it
+    holds nothing to cap. Capping it would take the enhancement's failure mode
+    and hand it to the fallback that exists for clients which cannot stream.
+    """
+    # Arrange — the workspace is at its stream ceiling.
+    run_id = await _armed_run(visitor)
+    async with (
+        _held_stream(stack, visitor, run_id) as first,
+        _held_stream(stack, visitor, run_id) as second,
+    ):
+        assert await first.open() == 200
+        assert await second.open() == 200
+
+        # Act — repeatedly, because a cap would show up on the first refusal.
+        pages = [await visitor.get(f"{RUNS}/{run_id}/events?limit=50") for _ in range(3)]
+
+    # Assert
+    assert [page.status_code for page in pages] == [200, 200, 200], pages[-1].text
+    assert all(page.json()["events"] for page in pages)
+
+
+async def test_the_ceiling_is_the_number_fr_008_states(
+    stack: FastAPI, visitor: httpx.AsyncClient
+) -> None:
+    """Two, not "some". The count is read from the application's own counter, so
+    the assertion is about what the ceiling admitted rather than about the
+    constant being equal to itself."""
+    # Arrange
+    run_id = await _armed_run(visitor)
+
+    # Act
+    async with (
+        _held_stream(stack, visitor, run_id) as first,
+        _held_stream(stack, visitor, run_id) as second,
+    ):
+        await first.open()
+        await second.open()
+        workspace_id = (await visitor.get(WORKSPACE)).json()["workspace_id"]
+        held = stack.state.event_streams.open_streams(workspace_id)
+
+    # Assert — and the counter empties itself rather than keeping the workspace.
+    assert held == CONCURRENT_EVENT_STREAMS
+    assert stack.state.event_streams.open_streams(workspace_id) == 0
+    assert len(stack.state.event_streams) == 0

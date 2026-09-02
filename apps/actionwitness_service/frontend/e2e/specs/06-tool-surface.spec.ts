@@ -12,21 +12,20 @@
  * re-reads and posts a delta, and the server — which computes every hash and
  * every namespace itself — decides whether that surface was acceptable.
  *
- * ## Why the injection is driven from the test rather than by the demo profile
+ * ## Two orderings, because they used to have two outcomes
  *
- * `usePoisonedToolSurface` registers its look-alike in the same commit that
- * arms the run, which puts its `toolchange` in a race with the baseline capture
- * that is still being posted — and `useToolSurfaceWitness` **drops** a
- * `toolchange` that arrives while a capture is in flight (`if (inFlight)
- * return`, with nothing scheduled afterwards). Against a loaded server the
- * injection is therefore sometimes never recorded and the run passes. That is a
- * finding about the product, reported separately; a test that depended on
- * losing the race would be flaky, and one that depended on winning it would be
- * asserting a coin toss.
+ * The first group injects *after* the baseline is on the record — the ordering
+ * AC-25 describes in words, "a look-alike tool registered mid-run".
  *
- * So the injection here happens *after* the baseline is on the record, which is
- * the ordering AC-25 actually describes — "a look-alike tool registered
- * mid-run" — and exercises exactly the same product path.
+ * The second uses the demo's own profile, whose look-alike registers in the
+ * same commit that arms the run. That puts its `toolchange` squarely inside the
+ * baseline's own POST, and the witness used to *drop* a change that arrived
+ * while a capture was in flight — so the injection was sometimes never recorded
+ * and the run passed. It is now deferred rather than dropped, and `flush()`
+ * puts any outstanding capture on the record before verification seals the
+ * timeline, so both orderings reach the same verdict. Keeping both is the point:
+ * they diverged once, and the cheapest way for them to diverge again is for
+ * nobody to be watching the harder one.
  */
 
 import {
@@ -177,7 +176,7 @@ test.describe("a look-alike tool registered mid-run", () => {
 });
 
 test.describe("the demo's own injected profile", () => {
-  test("registers a labelled look-alike into the browser's registry", async ({
+  test("is caught even though it registers inside the baseline's own capture", async ({
     workspace,
     agent,
     harness,
@@ -203,6 +202,10 @@ test.describe("the demo's own injected profile", () => {
 
     // And it performs nothing: the business state must stay correct, or the
     // demonstration collapses into an ordinary assertion failure.
+    //
+    // No waiting for the delta to be recorded here, deliberately. Verification
+    // flushes the witness, so this is the path a person or an agent actually
+    // takes — and it is the path that used to lose the race and pass.
     await agent.call(UPDATE_CART, {
       product_id: MUG,
       quantity: 1,
@@ -216,6 +219,10 @@ test.describe("the demo's own injected profile", () => {
     const byId = new Map(findings.map((finding) => [finding["check_id"], finding]));
     expect(byId.get("mug-quantity")?.["status"], JSON.stringify(findings)).toBe("passed");
     expect(byId.get("cart-total-is-list-price")?.["status"]).toBe("passed");
+    // §13.3's whole demonstration: the cart is right and the run fails anyway.
+    expect(byId.get("stable_tool_surface")?.["status"]).toBe("failed");
+    expect(byId.get("stable_tool_surface")?.["classification"]).toBe("tool_surface_mutation");
+    await workspace.expectPhase("failed");
   });
 });
 

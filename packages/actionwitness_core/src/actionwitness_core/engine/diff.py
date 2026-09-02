@@ -22,6 +22,36 @@ Comparing them as strings makes a target that reformats a total emit a spurious
 rule is applied to numbers too: JSON has one number type, so `1` and `1.0` are
 the same value for the same reason.
 
+That reinterpretation is narrow on purpose, because it is the one rule here that
+can make a change *disappear*, and the docstring above says why that is the worst
+outcome available. A string is compared as a decimal only when it is written in
+**plain finite decimal notation** — an optional minus sign, an integer part with
+no redundant leading zero, and an optional fractional part. Everything else falls
+back to exact string equality, which keeps two facts true at once: identical
+strings are always equal, and different strings are only ever equal when §17.2
+actually says so.
+
+Two families of string are excluded by that rule, and both were bugs before it
+existed.
+
+* **Non-finite spellings.** `Decimal` happily parses `"NaN"`, `"sNaN"` and
+  `"Infinity"`, and neither result can be compared safely. Two `"NaN"` strings
+  compare *unequal*, so an untouched path was reported as changed — a spurious
+  critical failure on state that never moved. A *signaling* `"sNaN"` is worse:
+  the comparison itself raises `InvalidOperation`, so one string in an untrusted
+  target payload killed verification mid-diff. §17.2 rejects non-finite numbers
+  before serialization, so no legitimate snapshot loses anything here.
+* **Alternative spellings of the same number.** `"007"` and `"7"`, or `"1e2"`
+  and `"100"`, are equal as decimals and are not the same string. A SKU, order
+  code, or external identifier that a target rewrote from one to the other is a
+  real edit, and the old rule dropped it silently. §17.2's normative example is
+  a reformatted *decimal fraction* — `"20.00"` becoming `"20.0"` — and that is
+  the whole of what this rule is licensed to forgive.
+
+Both exclusions match `engine.assertions._as_exact`, which already refuses a
+non-finite decimal for the same reason. Whatever the payload, comparison is
+**total**: it returns a bool for any pair of values and never raises.
+
 **Arrays compare positionally.** RFC 8785 sorts object keys and *preserves* array
 order, so position is meaningful in the canonical form and index `0` is a stable
 identity. The alternative — matching elements by content — would need a rule for
@@ -42,6 +72,7 @@ unbounded payload copied out of a snapshot.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
@@ -275,6 +306,15 @@ def _excerpt(value: JsonValue, limit: int) -> str:
 # --- comparison (§17.2) -------------------------------------------------------
 
 
+#: The only string shape §17.2's decimal rule may reinterpret: an optional minus
+#: sign, an integer part carrying no redundant leading zero, and an optional
+#: fractional part. Deliberately narrower than what `Decimal` will parse — it
+#: admits `"20.00"` and `"-0.0"` and refuses `"007"`, `"1e2"`, `"+7"`, `".5"`,
+#: `"NaN"`, `"sNaN"` and `"Infinity"`. Matched with `fullmatch`, so no anchors
+#: and no `$` newline tolerance.
+_PLAIN_DECIMAL: Final = re.compile(r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?")
+
+
 def _is_array(value: JsonValue) -> bool:
     """A JSON array. `str` and `bytes` are sequences in Python and are not."""
     return isinstance(value, Sequence) and not isinstance(value, str | bytes)
@@ -303,6 +343,11 @@ def _equal(before: JsonValue, after: JsonValue) -> bool:
         left, right = _as_decimal(before), _as_decimal(after)
         if left is not None and right is not None:
             return left == right
+        # One side the decimal rule may not reinterpret — a non-finite spelling,
+        # an exponent, a padded integer — so the strings answer for themselves.
+        # This is what makes the comparison total as well as honest: identical
+        # strings are equal whatever they spell, and `"sNaN"` never reaches a
+        # `Decimal` comparison that would raise.
         return before == after
     return before == after and type(before) is type(after)
 
@@ -319,12 +364,34 @@ def _is_number(value: JsonValue) -> bool:
 
 
 def _as_decimal(value: JsonValue) -> Decimal | None:
-    """The decimal value of a number or decimal string, or `None`."""
+    """The decimal value of a number or plain decimal string, or `None`.
+
+    `None` is not "zero" and not "unparseable": it means *this side is not
+    something §17.2's decimal rule is allowed to reinterpret*, and `_equal` then
+    falls back to exact equality. Both filters below produce it, and the module
+    docstring records why each one exists.
+
+    **Finiteness**, the same refusal `engine.assertions._as_exact` already makes.
+    A non-finite `Decimal` cannot be compared safely: quiet `NaN` compares
+    unequal to itself, and signaling `sNaN` raises from the comparison operator.
+    Neither may reach `==`.
+
+    **Plain notation** for strings: `-?(0|[1-9][0-9]*)(\\.[0-9]+)?`. Anything
+    else — a leading zero, an exponent, a `+`, a bare `.5`, a non-finite
+    spelling — is a *different string*, and only exact equality can say whether
+    it changed. Numbers skip this filter because they are not strings: JSON has
+    one number type and no spelling to preserve.
+    """
     if _is_number(value):
-        return Decimal(str(value))
-    if isinstance(value, str):
+        candidate = Decimal(str(value))
+        return candidate if candidate.is_finite() else None
+    if isinstance(value, str) and _PLAIN_DECIMAL.fullmatch(value):
         try:
-            return Decimal(value)
-        except (InvalidOperation, ValueError):
+            candidate = Decimal(value)
+        except InvalidOperation:  # pragma: no cover - the pattern admits nothing else
+            # Kept anyway: this comparison's contract is totality. A diff that
+            # raises on an untrusted payload stops verification, and no payload
+            # is entitled to do that.
             return None
+        return candidate if candidate.is_finite() else None
     return None

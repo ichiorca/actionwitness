@@ -1,0 +1,662 @@
+/**
+ * The Tier 1 workspace stylesheet (§8.4).
+ *
+ * Presentation only. Every status this file colours is already spelled out in
+ * words by the component that renders it (§8.4: never colour alone), so every
+ * rule here is a second channel, never the first. Nothing in this file may
+ * hide, reorder, or disable a control the server offered — enablement belongs
+ * to the phase the server reported, and layout must not become a second
+ * opinion about it.
+ *
+ * Structure hooks it styles were already in the markup: `.panel`, `.banner__*`,
+ * `.timeline`, `.benchmark__*`, `.dialog`, plus the lifecycle `.stage` grouping
+ * App.tsx renders. Selectors stay on classes and data attributes the components
+ * emit; nothing here depends on DOM order, so the e2e locators (role + label)
+ * are untouched.
+ */
+
+:root {
+  --bg: #f5f6f8;
+  --surface: #ffffff;
+  --surface-muted: #eef0f4;
+  --border: #d8dce3;
+  --border-strong: #b9bfca;
+  --text: #1c2430;
+  --text-muted: #5b6675;
+  --accent: #3652c4;
+  --accent-soft: #e8ecfb;
+  --ok: #1d7a43;
+  --ok-soft: #e2f3e8;
+  --warn: #92610a;
+  --warn-soft: #fdf1da;
+  --bad: #b3312e;
+  --bad-soft: #fbe7e6;
+  --wait: #6d3fb4;
+  --wait-soft: #f0e9fb;
+  --mono: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
+  --radius: 8px;
+  --shadow: 0 1px 2px rgb(16 24 40 / 0.06), 0 1px 3px rgb(16 24 40 / 0.08);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14181f;
+    --surface: #1c222c;
+    --surface-muted: #232a36;
+    --border: #323b49;
+    --border-strong: #475263;
+    --text: #e6e9ee;
+    --text-muted: #99a3b1;
+    --accent: #8ca0f0;
+    --accent-soft: #232c4a;
+    --ok: #55c283;
+    --ok-soft: #17301f;
+    --warn: #e0af57;
+    --warn-soft: #33290f;
+    --bad: #ec7f77;
+    --bad-soft: #3a1a18;
+    --wait: #b795ea;
+    --wait-soft: #2a1f3d;
+    --shadow: 0 1px 2px rgb(0 0 0 / 0.4);
+  }
+}
+
+/* ---- Base ------------------------------------------------------------- */
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+code,
+pre {
+  font-family: var(--mono);
+  font-size: 0.9em;
+}
+
+a {
+  color: var(--accent);
+}
+
+button {
+  font: inherit;
+  padding: 0.35rem 0.85rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+input,
+select {
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 0.25rem 0.5rem;
+}
+
+fieldset {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 0 0 0.75rem;
+}
+
+legend {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  padding: 0 0.35rem;
+}
+
+label {
+  margin-right: 0.75rem;
+}
+
+/* Top-level errors (role="alert" outside any panel). */
+.workspace > [role="alert"] {
+  border: 1px solid var(--bad);
+  border-left-width: 4px;
+  border-radius: var(--radius);
+  background: var(--bad-soft);
+  padding: 0.6rem 0.9rem;
+}
+
+/* ---- Page frame ------------------------------------------------------- */
+
+.workspace {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 1.25rem 1.5rem 4rem;
+}
+
+.workspace__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem 1.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.workspace h1 {
+  font-size: 1.35rem;
+  letter-spacing: 0.01em;
+  margin: 0;
+}
+
+/* The compact run summary beside the title: the one line that must survive
+   scrolling past ten panels. Words carry the status; colour never does. */
+.workspace__status {
+  margin: 0;
+  padding: 0.15rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 0.85rem;
+}
+
+/* ---- Capability bar --------------------------------------------------- */
+
+.capabilities {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 1.5rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin-bottom: 0.75rem;
+}
+
+.capabilities p {
+  margin: 0;
+}
+
+.capabilities__targets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.25rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.capabilities strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* ---- Guidance banner -------------------------------------------------- */
+
+/* Sticky: "whose turn is it" must not scroll away while a person hunts for
+   the control the instruction names. */
+.banner {
+  position: sticky;
+  top: 0.5rem;
+  z-index: 10;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 5px solid var(--accent);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 0.75rem 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.banner__headline {
+  font-size: 1.05rem;
+  margin: 0 0 0.35rem;
+}
+
+.banner p {
+  margin: 0.15rem 0;
+  font-size: 0.9rem;
+}
+
+.banner__label {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-right: 0.25rem;
+}
+
+.banner__action {
+  font-weight: 600;
+}
+
+/* Phase tint — a second channel behind the banner's own words. */
+.banner[data-phase="awaiting_confirmation"] {
+  border-left-color: var(--wait);
+  background: var(--wait-soft);
+}
+
+.banner[data-phase="passed"] {
+  border-left-color: var(--ok);
+}
+
+.banner[data-phase="passed_with_warnings"] {
+  border-left-color: var(--warn);
+}
+
+.banner[data-phase="failed"],
+.banner[data-phase="error"] {
+  border-left-color: var(--bad);
+}
+
+/* ---- Lifecycle stages ------------------------------------------------- */
+
+.workspace__panels {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.stage {
+  border: 1px solid transparent;
+  border-radius: calc(var(--radius) + 4px);
+  padding: 0.25rem 0.75rem 0.75rem;
+}
+
+/* The stage the reported phase belongs to. Supplementary: the banner names
+   the phase in words, and the stage title carries a text badge too. */
+.stage[data-active="true"] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent-soft) 35%, transparent);
+}
+
+.stage__title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin: 0.35rem 0 0.6rem;
+}
+
+.stage__step {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  background: var(--surface);
+}
+
+.stage[data-active="true"] .stage__title {
+  color: var(--accent);
+}
+
+.stage[data-active="true"] .stage__step {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.stage__badge {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: lowercase;
+  letter-spacing: 0.03em;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 0 0.5rem;
+}
+
+.stage__panels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: 0.9rem;
+  align-items: start;
+}
+
+/* ---- Panels ----------------------------------------------------------- */
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 0.85rem 1rem;
+  min-width: 0;
+}
+
+.panel h3 {
+  font-size: 0.95rem;
+  margin: 0 0 0.5rem;
+}
+
+.panel h4 {
+  font-size: 0.85rem;
+  margin: 0.9rem 0 0.35rem;
+}
+
+.panel p {
+  margin: 0.35rem 0;
+}
+
+.panel ul,
+.panel ol {
+  margin: 0.35rem 0;
+  padding-left: 1.25rem;
+}
+
+.panel li {
+  margin: 0.25rem 0;
+}
+
+.panel__label,
+.dialog__label {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.panel__note {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  border-left: 3px solid var(--border);
+  padding-left: 0.6rem;
+}
+
+.panel__error {
+  color: var(--bad);
+  font-size: 0.85rem;
+}
+
+.panel button {
+  margin: 0.35rem 0.5rem 0.1rem 0;
+}
+
+/* ---- Status words, tinted --------------------------------------------- */
+
+/* The value is server text rendered verbatim; the attribute merely echoes it
+   so colour can follow the words. Unknown values keep the neutral style. */
+[data-status] {
+  display: inline-block;
+  border-radius: 4px;
+  padding: 0 0.35rem;
+  background: var(--surface-muted);
+}
+
+[data-status="passed"] {
+  color: var(--ok);
+  background: var(--ok-soft);
+}
+
+[data-status="passed_with_warnings"] {
+  color: var(--warn);
+  background: var(--warn-soft);
+}
+
+[data-status="failed"],
+[data-status="error"] {
+  color: var(--bad);
+  background: var(--bad-soft);
+}
+
+/* ---- Timeline --------------------------------------------------------- */
+
+.timeline {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  font-family: var(--mono);
+  font-size: 0.82rem;
+}
+
+.timeline li {
+  border-left: 3px solid var(--border);
+  padding: 0.15rem 0 0.15rem 0.6rem;
+  margin: 0;
+}
+
+.timeline li[data-event-type="run_armed"],
+.timeline li[data-event-type="snapshot_captured"] {
+  border-left-color: var(--accent);
+}
+
+.timeline li[data-event-type="tool_invocation_started"] {
+  border-left-color: var(--wait);
+}
+
+.timeline li[data-event-type="tool_invocation_completed"] {
+  border-left-color: var(--ok);
+}
+
+.timeline__sequence {
+  color: var(--text-muted);
+}
+
+.timeline__actor {
+  font-weight: 600;
+}
+
+.timeline__tool {
+  color: var(--accent);
+}
+
+/* A tool's own claim, visually set apart from what the harness observed. */
+.timeline__reported {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* ---- Findings --------------------------------------------------------- */
+
+.finding__path,
+.finding__values {
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
+.finding__values {
+  color: var(--text-muted);
+}
+
+/* ---- Tool-surface diff ------------------------------------------------ */
+
+.tool-diff {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.15rem 0.75rem;
+  margin: 0.35rem 0;
+}
+
+.tool-diff dt {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.tool-diff dd {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
+/* ---- Regression evals ------------------------------------------------- */
+
+.eval__hash {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+/* Visual truncation only: the full hash stays in the DOM (tests and readers
+   who select the text rely on it), the ellipsis is cosmetic, and the copy
+   button hands over the whole value. */
+.eval__hash code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 22ch;
+  color: var(--text-muted);
+}
+
+.eval__copy {
+  font-size: 0.78rem;
+  padding: 0.1rem 0.5rem;
+}
+
+/* ---- Benchmark -------------------------------------------------------- */
+
+.benchmark__matrix {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.5rem 0;
+  font-size: 0.88rem;
+}
+
+.benchmark__matrix caption {
+  caption-side: top;
+  text-align: left;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  padding-bottom: 0.25rem;
+}
+
+.benchmark__matrix th,
+.benchmark__matrix td {
+  border: 1px solid var(--border);
+  padding: 0.3rem 0.6rem;
+  text-align: left;
+}
+
+.benchmark__matrix thead th {
+  background: var(--surface-muted);
+}
+
+/* The cell the product exists to surface: calls looked right, state was not. */
+.benchmark__row--signal {
+  background: var(--bad-soft);
+}
+
+.benchmark__coverage,
+.benchmark__metrics,
+.benchmark__manifest {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.15rem 1rem;
+  margin: 0.5rem 0;
+}
+
+.benchmark__coverage dt,
+.benchmark__metrics dt,
+.benchmark__manifest dt {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.benchmark__coverage dd,
+.benchmark__metrics dd,
+.benchmark__manifest dd {
+  margin: 0;
+}
+
+.benchmark__rate--absent,
+.benchmark__caveat,
+.benchmark__excluded,
+.benchmark__unaddressable {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.benchmark__breakdown,
+.benchmark__trials {
+  list-style: none;
+  padding: 0;
+}
+
+/* ---- Confirmation dialog ---------------------------------------------- */
+
+/* Fixed and centred with a scrim, because this is the one moment the whole
+   page is waiting on a person. The scrim is the border-box shadow trick, so
+   no markup changed and focus behaviour is untouched. */
+.dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 100;
+  width: min(30rem, calc(100vw - 2rem));
+  max-height: min(85vh, 40rem);
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 1rem 1.25rem;
+  box-shadow: 0 0 0 100vmax rgb(12 16 24 / 0.5), 0 12px 32px rgb(0 0 0 / 0.25);
+}
+
+.dialog h2 {
+  font-size: 1.1rem;
+  margin: 0 0 0.5rem;
+}
+
+.dialog__consequence {
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  overflow-x: auto;
+  margin: 0.35rem 0;
+}
+
+.dialog__note,
+.dialog__status,
+.dialog__elsewhere {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.dialog__choices {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+
+/* ---- Narrow screens --------------------------------------------------- */
+
+@media (max-width: 640px) {
+  .workspace {
+    padding: 0.75rem 0.75rem 3rem;
+  }
+
+  .banner {
+    position: static;
+  }
+
+  .stage__panels {
+    grid-template-columns: 1fr;
+  }
+}

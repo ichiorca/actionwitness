@@ -100,7 +100,11 @@ def configure_logging(level: int = logging.INFO) -> None:
         handler = logging.StreamHandler()
         handler.setFormatter(logging.Formatter("%(message)s"))
         root.addHandler(handler)
-    root.setLevel(min(root.level or level, level))
+        # Set only alongside the handler this function installed. Setting it
+        # unconditionally made the "keeps its configuration" promise above only
+        # half true: a deployment that had deliberately raised the root logger
+        # to WARNING got quietly lowered back to INFO by building an app.
+        root.setLevel(level)
 
 
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
@@ -157,8 +161,15 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             duration_ms=duration_ms,
             workspace_id=getattr(request.state, "workspace_id", None),
             run_id=_path_param(request, "run_id"),
-            eval_case_id=_path_param(request, "case_id"),
-            tool_name=getattr(request.state, "tool_name", None),
+            # Both of these read the router's own parameter names. An earlier
+            # version guessed at `case_id` and at a `request.state.tool_name`
+            # nothing ever assigned, so two of §21.5's required fields logged
+            # `None` on every request that should have carried them — silently,
+            # because a field that is legitimately absent looks identical to a
+            # field that is misspelled. The names below are the ones the eval and
+            # invoke routes declare, and a test holds them in agreement.
+            eval_case_id=_path_param(request, "eval_case_id"),
+            tool_name=_path_param(request, "tool_name"),
             error_code=error_code,
         )
         _logger.info(entry.render())
@@ -168,6 +179,16 @@ def _elapsed_ms(started: float) -> int:
     """Monotonic, so a system clock adjustment cannot produce a negative one."""
     return int((time.perf_counter() - started) * 1000)
 
+
+#: The longest identifier this line will carry. Every identifier the service
+#: mints is far shorter (`ws_`/`run_`/`inv_` plus hex), and the longest name a
+#: valid tool may have is `MAX_TOOL_NAME_CHARS`; the bound exists for the values
+#: that never were valid — see `_path_param`.
+MAX_LOGGED_IDENTIFIER_CHARS: Final = 64
+
+#: Appended to a truncated identifier so a reader can tell a bounded value from
+#: a complete one, rather than chasing an id that was never that short.
+TRUNCATION_MARKER: Final = "..."
 
 #: Logged in place of a path that matched no route.
 #:
@@ -231,6 +252,18 @@ def _path_param(request: Request, name: str) -> str | None:
     Read from `path_params` rather than parsed out of the URL: the router has
     already decided what is an identifier and what is a literal segment, and
     re-deriving that here would be a second parser to keep in agreement.
+
+    Bounded, because the router populates `path_params` when the *pattern*
+    matches, which is before the annotated types (`RunId`, `ToolName`) have
+    rejected anything. A request that is about to be refused with a 422 still
+    reaches this line, so an identifier here is only as short as the caller
+    chose to make it. Truncating marks the value as unusable rather than
+    letting one request decide how long a log line is.
     """
     value = request.scope.get("path_params", {}).get(name)
-    return str(value) if value is not None else None
+    if value is None:
+        return None
+    text = str(value)
+    if len(text) <= MAX_LOGGED_IDENTIFIER_CHARS:
+        return text
+    return text[:MAX_LOGGED_IDENTIFIER_CHARS] + TRUNCATION_MARKER

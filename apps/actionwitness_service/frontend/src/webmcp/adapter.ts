@@ -310,6 +310,103 @@ export function useNativeTool(tool: NativeToolDefinition): RegistrationState {
   return state;
 }
 
+export interface RawToolDefinition {
+  readonly name: string;
+  readonly description: string;
+  readonly inputSchema?: object;
+  readonly enabled: boolean;
+  /**
+   * Already shaped as WebMCP's own wire result (`WebMCP.ToolExecuteCallback`'s
+   * return, e.g. `{ content: [...] }`) rather than a business value bound for
+   * `normalizeResult`. Typed directly against the pinned package so no escape
+   * hatch is needed at the call site — see the function doc for why that
+   * distinction exists.
+   */
+  readonly execute: WebMCP.ToolExecuteCallback;
+}
+
+/**
+ * Register a tool exactly as the caller shaped it: no result normalization,
+ * no invocation-signal forwarding, and no re-derivation of the wire shape.
+ *
+ * This is deliberately narrower than `useNativeTool` and `useHarnessTool`, and
+ * exists for one caller: `usePoisonedToolSurface` (§13.3's injected
+ * mid-session tool-surface fault). That fixture already returns
+ * `{ content: [...] }` — the wire shape itself, because the point of the demo
+ * is what a look-alike *tool definition* looks like to `getTools()`, not a
+ * business value for this adapter to wrap. Routing it through
+ * `useNativeTool` would re-stringify an already-shaped result via
+ * `normalizeResult`, changing what the injected tool actually returns and
+ * quietly fixing the fixture's observable misbehaviour along the way. Prefer
+ * `useNativeTool` or `useHarnessTool` for anything that is not this.
+ *
+ * The lifecycle is the same as `useNativeTool`'s: registration keyed on
+ * content rather than closure identity, an `AbortController` whose abort
+ * *is* the unregistration, and a `live` guard so a registration that resolves
+ * after StrictMode's first pass unmounted cannot overwrite the second pass's
+ * state.
+ */
+export function useRawNativeTool(tool: RawToolDefinition): RegistrationState {
+  const [state, setState] = useState<RegistrationState>(UNSUPPORTED);
+  const { name, description, enabled } = tool;
+
+  const latest = useRef(tool);
+  latest.current = tool;
+
+  const shape = JSON.stringify(tool.inputSchema ?? null);
+
+  useEffect(() => {
+    if (!enabled) {
+      setState({ phase: "registering", detail: "Not available in this state." });
+      return;
+    }
+    const modelContext = document.modelContext;
+    if (modelContext === undefined) {
+      setState(UNSUPPORTED);
+      return;
+    }
+
+    const controller = new AbortController();
+    let live = true;
+    setState({ phase: "registering", detail: `Registering ${name}…` });
+
+    void modelContext
+      .registerTool(
+        {
+          name,
+          description,
+          ...(latest.current.inputSchema === undefined
+            ? {}
+            : { inputSchema: latest.current.inputSchema }),
+          execute: (args, context) => latest.current.execute(args, context),
+        },
+        { signal: controller.signal },
+      )
+      .then(
+        () => {
+          if (live) {
+            setState({ phase: "registered", detail: "Registered." });
+          }
+        },
+        (error: unknown) => {
+          if (live) {
+            setState({
+              phase: "failed",
+              detail: error instanceof Error ? error.message : String(error),
+            });
+          }
+        },
+      );
+
+    return () => {
+      live = false;
+      controller.abort();
+    };
+  }, [name, description, enabled, shape]);
+
+  return state;
+}
+
 /**
  * §25.2's declarative registration — the third mechanism, and the odd one out.
  *
@@ -479,11 +576,32 @@ export function describeTool(value: unknown): CapturedTool | null {
     description: typeof record["description"] === "string" ? record["description"] : "",
     // Absent stays absent. A tool that stopped *declaring* itself read-only
     // changed its hints, and coercing the absence to `false` would hide that.
-    read_only_hint: typeof record["readOnlyHint"] === "boolean" ? record["readOnlyHint"] : null,
-    untrusted_content_hint:
-      typeof record["untrustedContentHint"] === "boolean" ? record["untrustedContentHint"] : null,
+    read_only_hint: hintOf(record, "readOnlyHint"),
+    untrusted_content_hint: hintOf(record, "untrustedContentHint"),
     input_schema: isPlainRecord(record["inputSchema"]) ? record["inputSchema"] : {},
   };
+}
+
+/**
+ * One behavioural hint from a `getTools()` descriptor.
+ *
+ * `webmcp-types` nests both hints inside `RegisteredTool.annotations`, so that
+ * is where they are read from. Until this was fixed the top level was read
+ * instead and every captured hint was therefore `null` — which made
+ * `hint_change` a delta kind no run could ever produce, silently, while
+ * `one_mug_stable_surface` listed it among the kinds that must fail a run.
+ *
+ * The top level is still accepted as a fallback. Both readings come from the
+ * same registry and carry exactly the same trust — none — so preferring the
+ * declared shape while tolerating a flattened one costs nothing and keeps the
+ * capture working against a browser that reports the older layout.
+ */
+function hintOf(record: Record<string, unknown>, name: string): boolean | null {
+  const annotations = record["annotations"];
+  if (isPlainRecord(annotations) && typeof annotations[name] === "boolean") {
+    return annotations[name];
+  }
+  return typeof record[name] === "boolean" ? record[name] : null;
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {

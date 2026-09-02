@@ -20,7 +20,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // product has one `getTools()` call, shared by the capture and the
 // registration view, so the two cannot disagree about what is registered.
 import { describeTool, readSurface } from "./adapter";
-import { useToolSurfaceWitness } from "./surface";
+import { TOOLCHANGE_QUIET_PERIOD_MS, useToolSurfaceWitness } from "./surface";
 import { type InstalledDouble, installModelContextDouble } from "../test/modelContextDouble";
 
 let installed: InstalledDouble | null = null;
@@ -78,7 +78,39 @@ describe("describeTool", () => {
   it("keeps an absent hint absent rather than defaulting it to false", () => {
     // A tool that stopped *declaring* itself read-only changed its hints.
     expect(describeTool({ name: "a" })?.read_only_hint).toBeNull();
-    expect(describeTool({ name: "a", readOnlyHint: false })?.read_only_hint).toBe(false);
+    expect(describeTool({ name: "a", annotations: {} })?.read_only_hint).toBeNull();
+  });
+
+  it("reads both hints from `annotations`, where getTools() puts them", () => {
+    // `webmcp-types` nests them inside `RegisteredTool.annotations`. Reading the
+    // top level instead — which is what this did — made every captured hint
+    // `null`, and so made `hint_change` a delta kind no run could ever produce
+    // while `one_mug_stable_surface` listed it among the kinds that fail a run.
+    const captured = describeTool({
+      name: "a",
+      annotations: { readOnlyHint: false, untrustedContentHint: true },
+    });
+
+    expect(captured?.read_only_hint).toBe(false);
+    expect(captured?.untrusted_content_hint).toBe(true);
+  });
+
+  it("still reads a flattened hint, because the registry is untrusted either way", () => {
+    // Both readings come from the same place and carry the same trust — none —
+    // so tolerating the older layout costs nothing and keeps the capture
+    // working against a browser that reports it.
+    expect(describeTool({ name: "a", readOnlyHint: true })?.read_only_hint).toBe(true);
+    // The declared shape wins when both are present.
+    expect(
+      describeTool({ name: "a", readOnlyHint: true, annotations: { readOnlyHint: false } })
+        ?.read_only_hint,
+    ).toBe(false);
+  });
+
+  it("ignores a non-boolean hint rather than coercing it", () => {
+    expect(describeTool({ name: "a", annotations: { readOnlyHint: "yes" } })?.read_only_hint)
+      .toBeNull();
+    expect(describeTool({ name: "a", annotations: "not a record" })?.read_only_hint).toBeNull();
   });
 
   it("submits no hash and no namespace", () => {
@@ -106,6 +138,17 @@ describe("describeTool", () => {
 describe("readSurface", () => {
   it("returns null when the browser has no WebMCP", async () => {
     await expect(readSurface()).resolves.toBeNull();
+  });
+
+  it("carries a declared hint through to the captured surface", async () => {
+    // The end-to-end half of the fix above: `registerTool` takes `annotations`,
+    // `getTools()` reports them nested, and the capture has to survive both.
+    installed = installModelContextDouble();
+    await register("search_catalog", { annotations: { readOnlyHint: true } });
+
+    const surface = await readSurface();
+
+    expect(surface?.[0]?.read_only_hint).toBe(true);
   });
 
   it("reads from getTools rather than from what this app registered", async () => {
@@ -225,6 +268,108 @@ describe("useToolSurfaceWitness", () => {
     // order the surfaces were read in, and the baseline is whichever landed
     // first.
     expect(posted.length).toBeLessThanOrEqual(2);
+  });
+
+  it("re-captures a change that arrived while a capture was posting", async () => {
+    // The defect this replaces: the in-flight guard *returned* on a change that
+    // landed during a post, and scheduled nothing afterwards — so the change
+    // was dropped, not deferred. The demo's own look-alike registers in the
+    // same commit that arms the run, which puts its `toolchange` squarely
+    // inside the baseline's POST, and a run whose injection went unrecorded
+    // passes `stable_tool_surface`.
+    let release: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let call = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const raw = init?.body;
+        // Narrowed rather than stringified, for the reason the shared stub
+        // gives: most of `BodyInit` stringifies to "[object Object]", which
+        // would record a capture nobody sent.
+        if (typeof raw !== "string") {
+          throw new TypeError(`the capture client must send a JSON string; got ${typeof raw}`);
+        }
+        posted.push({ url, body: JSON.parse(raw) as unknown });
+        // Only the first post is held open, so the change below has to arrive
+        // while a capture is genuinely in flight.
+        if (++call === 1) {
+          await held;
+        }
+        return new Response("{}", { status: 201 });
+      }),
+    );
+
+    installed = installModelContextDouble();
+    await register("apply_discount");
+    renderHook(() => useToolSurfaceWitness("run_1"));
+    await waitFor(() => expect(posted).toHaveLength(1));
+
+    // Arrive mid-post, then let the baseline finish.
+    await act(async () => {
+      await register("look_alike");
+    });
+    await new Promise((resolve) => setTimeout(resolve, TOOLCHANGE_QUIET_PERIOD_MS + 50));
+    await act(async () => {
+      release?.();
+      await held;
+    });
+
+    await waitFor(() => expect(posted).toHaveLength(2), { timeout: 2000 });
+    const caught = posted[1]?.body as { tools: { name: string }[] };
+    expect(caught.tools.map((tool) => tool.name).sort()).toEqual([
+      "apply_discount",
+      "look_alike",
+    ]);
+  });
+
+  it("flushes a debounced capture on demand, before anything seals the run", async () => {
+    // Verification seals the timeline and the witness is debounced, so without
+    // this a delta read a moment before `verify_outcome` is posted a moment
+    // after it and is judged by nothing.
+    installed = installModelContextDouble();
+    const { result } = renderHook(() => useToolSurfaceWitness("run_1"));
+    await waitFor(() => expect(posted).toHaveLength(1));
+
+    await act(async () => {
+      await register("look_alike");
+      // No waiting out the quiet period: the caller is about to verify.
+      await result.current.flush();
+    });
+
+    expect(posted).toHaveLength(2);
+    const flushed = posted[1]?.body as { tools: { name: string }[] };
+    expect(flushed.tools.map((tool) => tool.name)).toEqual(["look_alike"]);
+  });
+
+  it("costs nothing to flush a surface that has not moved", async () => {
+    // A flush runs before every verification, and a request per verdict spent
+    // re-reading an unchanged surface is a request the page's own polling does
+    // not get to make — FR-009's budget is shared across the whole client.
+    installed = installModelContextDouble();
+    await register("apply_discount");
+    const { result } = renderHook(() => useToolSurfaceWitness("run_1"));
+    await waitFor(() => expect(posted).toHaveLength(1));
+
+    await act(async () => {
+      await result.current.flush();
+      await result.current.flush();
+    });
+
+    expect(posted).toHaveLength(1);
+  });
+
+  it("resolves a flush when there is no run and no browser support", async () => {
+    // "There is no evidence to flush" and "the evidence is flushed" are the same
+    // postcondition, so neither case may hang the caller that awaits it.
+    const withoutRun = renderHook(() => useToolSurfaceWitness(null));
+    await expect(withoutRun.result.current.flush()).resolves.toBeUndefined();
+
+    const withoutWebMcp = renderHook(() => useToolSurfaceWitness("run_1"));
+    await expect(withoutWebMcp.result.current.flush()).resolves.toBeUndefined();
+    expect(posted).toEqual([]);
   });
 
   it("does not fail the page when a capture is rejected", async () => {

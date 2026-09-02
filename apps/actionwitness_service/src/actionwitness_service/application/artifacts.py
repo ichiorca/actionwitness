@@ -162,6 +162,23 @@ class ArtifactStore:
         )
         return artifact_id
 
+    async def relative_path(
+        self, work: UnitOfWork, workspace_id: str, artifact_id: str
+    ) -> str | None:
+        """Where one workspace's artifact was stored, or `None` if it is not hers.
+
+        The workspace term is not a convenience: an artifact id is guessable in
+        the way every opaque id is, and a lookup without it would let a caller
+        who learned an id read another workspace's evidence through the download
+        route. `None` rather than a raise, because the caller knows whether a
+        missing row is a 404 or an internal inconsistency and this does not.
+        """
+        row = await work.fetch_one(
+            "SELECT relative_path FROM artifacts WHERE id = ? AND workspace_id = ?",
+            (artifact_id, workspace_id),
+        )
+        return None if row is None else str(row["relative_path"])
+
     def read_bytes(self, relative_path: str) -> bytes:
         """The stored bytes, exactly as written.
 

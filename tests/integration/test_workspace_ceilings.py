@@ -19,7 +19,7 @@ import pytest
 from actionwitness_core.journeys.enums import EventActor, OutcomeEventType, RunState
 from actionwitness_service.api.errors import ApiError, ApiErrorCode
 from actionwitness_service.application import limits as fr008
-from actionwitness_service.application.limits import WorkspaceCeilings
+from actionwitness_service.application.limits import EventStreamSlots, WorkspaceCeilings
 from actionwitness_service.persistence.database import Database, UnitOfWork
 from actionwitness_service.persistence.repositories import EventRepository
 
@@ -81,6 +81,11 @@ async def test_every_fr_008_ceiling_is_declared_with_its_exact_value() -> None:
     assert fr008.TRIALS_PER_SUITE == 100
     assert fr008.SHOPIFY_PAIRINGS_PER_WORKSPACE == 5
     assert fr008.ARTIFACTS_PER_WORKSPACE == 25
+    # Transcription only. This assertion says the constant matches the sentence;
+    # it says nothing about anything enforcing it, and for a long time nothing
+    # did — the constant was declared, exported, and referenced by this line and
+    # by no other code in the repository. The behaviour is in
+    # `--- the ceiling that counts connections, not rows ---` below.
     assert fr008.CONCURRENT_EVENT_STREAMS == 2
 
 
@@ -390,3 +395,129 @@ async def test_the_ceiling_cannot_be_tripped_from_another_workspace(
         total = await work.fetch_one("SELECT COUNT(*) AS n FROM events WHERE run_id = 'run_a'")
     assert run["status"] == "running"
     assert total["n"] == fr008.ORDINARY_EVENTS_PER_RUN
+
+
+# --- the ceiling that counts connections, not rows --------------------------
+#
+# FR-008 caps "two concurrent event-stream connections" per workspace. Nothing
+# stores a connection, so this ceiling is counted in process memory and its
+# tests are about *release* rather than about arithmetic: a slot that is taken
+# and not given back lowers the ceiling permanently, which is worse than having
+# no ceiling, because a cap that only ever shrinks eventually refuses everything.
+
+
+def _refused_stream(slots: EventStreamSlots, workspace_id: str) -> ApiError:
+    """Try to open one more stream and return the refusal it produced.
+
+    The refusal happens on the way *in* to the block, which is the property that
+    makes the route able to answer with §15.8's envelope instead of a stream
+    that opens and then stops.
+    """
+    with pytest.raises(ApiError) as caught, slots.reserve(workspace_id):
+        pass  # pragma: no cover - the reservation raises before this runs
+    return caught.value
+
+
+async def test_the_third_concurrent_stream_in_one_workspace_is_refused() -> None:
+    """FR-008's number, enforced rather than transcribed."""
+    # Arrange
+    slots = EventStreamSlots()
+
+    # Act / Assert — the cap's worth open, and the next one refused.
+    with slots.reserve("ws_a"), slots.reserve("ws_a"):
+        assert slots.open_streams("ws_a") == fr008.CONCURRENT_EVENT_STREAMS
+        refusal = _refused_stream(slots, "ws_a")
+
+    assert refusal.code is ApiErrorCode.WORKSPACE_LIMIT_EXCEEDED
+
+
+async def test_the_stream_refusal_names_a_way_out() -> None:
+    """A refusal that named no remedy would leave a user at a wall we built.
+
+    Not FR-008's purge action, deliberately: purging stored data frees no
+    connection. The two things that do are closing a tab and reading the same
+    timeline from the paged endpoint, so those are what the message says.
+    """
+    # Arrange
+    slots = EventStreamSlots()
+
+    # Act
+    with slots.reserve("ws_a"), slots.reserve("ws_a"):
+        refusal = _refused_stream(slots, "ws_a")
+
+    # Assert
+    assert "paged" in refusal.message.lower()
+
+
+async def test_closing_one_stream_frees_exactly_one_slot() -> None:
+    """One back, not all of them and not none."""
+    # Arrange
+    slots = EventStreamSlots()
+
+    # Act
+    with slots.reserve("ws_a"):
+        with slots.reserve("ws_a"):
+            pass
+        # Assert — the freed slot is available, and the still-open one is not.
+        assert slots.open_streams("ws_a") == 1
+        with slots.reserve("ws_a"):
+            assert slots.open_streams("ws_a") == fr008.CONCURRENT_EVENT_STREAMS
+
+
+async def test_a_stream_that_fails_frees_its_slot() -> None:
+    """The path that matters: a connection almost never ends by being tidy.
+
+    A slot released only on the happy path would survive every test that closed
+    its streams politely and leak in production on the first dropped tab.
+    """
+
+    # Arrange
+    class Disconnected(Exception):
+        pass
+
+    slots = EventStreamSlots()
+
+    # Act
+    with pytest.raises(Disconnected), slots.reserve("ws_a"):
+        raise Disconnected
+
+    # Assert
+    assert slots.open_streams("ws_a") == 0
+    with slots.reserve("ws_a"):
+        assert slots.open_streams("ws_a") == 1
+
+
+async def test_one_workspaces_streams_do_not_consume_anothers() -> None:
+    """The workspace is the isolation boundary; so is its connection budget."""
+    # Arrange / Act — ws_a at its ceiling.
+    slots = EventStreamSlots()
+
+    # Assert — ws_b still has its own full allowance, and its own ceiling.
+    with (
+        slots.reserve("ws_a"),
+        slots.reserve("ws_a"),
+        slots.reserve("ws_b"),
+        slots.reserve("ws_b"),
+    ):
+        assert slots.open_streams("ws_b") == fr008.CONCURRENT_EVENT_STREAMS
+        assert _refused_stream(slots, "ws_b").code is ApiErrorCode.WORKSPACE_LIMIT_EXCEEDED
+
+
+async def test_a_workspace_is_forgotten_once_its_last_stream_closes() -> None:
+    """The same leak class `RateLimiter.release_idle` exists to avoid.
+
+    Workspaces are anonymous and free to create (FR-009), so a map that kept one
+    entry per workspace ever seen would grow with traffic forever. Here the
+    entry is reference-counted away instead, which needs no sweep at all.
+    """
+    # Arrange
+    slots = EventStreamSlots()
+
+    # Act
+    for workspace_id in ("ws_a", "ws_b", "ws_c"):
+        with slots.reserve(workspace_id):
+            assert len(slots) == 1
+
+    # Assert — nothing accumulated, and the sweep finds nothing left to do.
+    assert len(slots) == 0
+    assert slots.release_idle() == 0

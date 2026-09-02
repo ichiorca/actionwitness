@@ -50,7 +50,6 @@ def test_an_identical_document_reports_nothing() -> None:
         ("20.00", "20.0"),
         ("20.0", "20"),
         ("0.10", "0.1000"),
-        ("1E+2", "100"),
         ("-0.0", "0.0"),
     ],
 )
@@ -60,6 +59,11 @@ def test_a_reformatted_decimal_is_not_a_change(before: str, after: str) -> None:
     Without this a target that renders `20.0` where it once rendered `20.00`
     fails a critical policy for a cosmetic difference — which is exactly the
     spurious `undeclared_state_change` the rule exists to prevent.
+
+    Every case here is plain decimal notation differing only in how the
+    fraction is written, which is the whole of what §17.2's example licenses.
+    `"1E+2"` used to sit in this list and now does not: see
+    `test_a_respelled_number_string_is_a_change`.
     """
     assert not values_differ(before, after)
     assert diff_states({"target": {"total": before}}, {"target": {"total": after}}) == ()
@@ -73,6 +77,55 @@ def test_an_actual_decimal_change_is_still_a_change() -> None:
     assert changes[0].kind is ChangeKind.CHANGED
     assert changes[0].before == '"25.00"'
     assert changes[0].after == '"20.00"'
+
+
+@pytest.mark.parametrize("spelling", ["NaN", "nan", "sNaN", "Infinity", "-Infinity"])
+def test_a_non_finite_spelling_compares_as_a_string_and_never_raises(spelling: str) -> None:
+    """`Decimal` parses these, and neither result can be compared safely.
+
+    Two quiet `NaN`s compare *unequal*, which reported an untouched path as
+    changed — a spurious critical `undeclared_state_change` on state that never
+    moved. A signaling `sNaN` raises `InvalidOperation` from the comparison
+    itself, so one string in an untrusted target payload stopped verification
+    mid-diff. Both are excluded from the decimal rule, so the strings answer
+    for themselves and identical ones are identical.
+    """
+    state = {"target": {"x": spelling}}
+
+    assert not values_differ(spelling, spelling)
+    assert diff_states(state, dict(state)) == ()
+
+
+def test_two_different_non_finite_spellings_are_a_change() -> None:
+    """The guard on the rule above: falling back to strings must still see movement."""
+    changes = diff_states({"target": {"x": "NaN"}}, {"target": {"x": "Infinity"}})
+
+    assert paths_of(changes) == ["target.x"]
+    assert changes[0].kind is ChangeKind.CHANGED
+
+
+@pytest.mark.parametrize(
+    "before,after",
+    [
+        ("007", "7"),
+        ("1e2", "100"),
+        ("1E+2", "100"),
+        ("+7", "7"),
+        (".5", "0.5"),
+    ],
+)
+def test_a_respelled_number_string_is_a_change(before: str, after: str) -> None:
+    """A numeric-looking SKU, code, or identifier that was rewritten really changed.
+
+    These pairs are equal as `Decimal` values and are not the same string, and
+    treating them as equal made a real edit invisible — the outcome this
+    module's docstring calls the worst one available, because under-reporting is
+    neither visible nor waivable through `allow_paths`. §17.2's normative
+    example is a reformatted decimal *fraction*, so the rule is confined to
+    plain decimal notation and every other spelling compares exactly.
+    """
+    assert values_differ(before, after)
+    assert paths_of(diff_states({"t": {"sku": before}}, {"t": {"sku": after}})) == ["t.sku"]
 
 
 def test_a_boolean_never_compares_equal_to_a_number() -> None:

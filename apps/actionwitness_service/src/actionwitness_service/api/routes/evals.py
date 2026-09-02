@@ -104,13 +104,9 @@ async def read_eval_case(
 ) -> dict[str, Any]:
     """§15.4: "Get eval metadata and latest result"."""
     async with database.reading() as work:
-        case, row = await EvalCaseService(work, workspace_id).get(eval_case_id)
-        latest = await work.fetch_one(
-            "SELECT id, status, overall_result, environment_profile, started_at, completed_at "
-            "FROM evaluation_runs WHERE evaluation_case_id = ? AND owner_workspace_id = ? "
-            "ORDER BY started_at DESC, id DESC LIMIT 1",
-            (eval_case_id, workspace_id),
-        )
+        cases = EvalCaseService(work, workspace_id)
+        case, row = await cases.get(eval_case_id)
+        latest = await cases.latest_run(eval_case_id)
 
     return {
         "eval_case_id": eval_case_id,
@@ -153,14 +149,11 @@ async def download_eval_case(
     most needs to check it.
     """
     async with database.reading() as work:
-        row = await work.fetch_one(
-            "SELECT case_json FROM evaluation_cases WHERE id = ? AND workspace_id = ?",
-            (eval_case_id, workspace_id),
-        )
-    if row is None:
+        stored = await EvalCaseService(work, workspace_id).stored_document(eval_case_id)
+    if stored is None:
         raise ApiError(ApiErrorCode.RESOURCE_NOT_FOUND, "No such eval case.")
     return Response(
-        content=str(row["case_json"]),
+        content=stored,
         media_type="application/json",
         headers={"Content-Disposition": f'attachment; filename="{eval_case_id}.json"'},
     )
@@ -208,11 +201,7 @@ async def read_eval_run(
 ) -> dict[str, Any]:
     """§15.4: "Get eval-run status and JSON report"."""
     async with database.reading() as work:
-        row = await work.fetch_one(
-            "SELECT * FROM evaluation_runs WHERE id = ? AND evaluation_case_id = ? "
-            "AND owner_workspace_id = ?",
-            (eval_run_id, eval_case_id, workspace_id),
-        )
+        row = await EvalCaseService(work, workspace_id).run(eval_case_id, eval_run_id)
     if row is None:
         raise ApiError(ApiErrorCode.RESOURCE_NOT_FOUND, "No such eval run.")
 

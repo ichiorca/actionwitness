@@ -28,6 +28,7 @@ keep every other expired workspace alive forever.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Callable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
@@ -46,6 +47,11 @@ __all__ = [
     "WorkspaceCleaner",
     "purge_eval_workspace_state",
 ]
+
+#: The background sweep's own logger. Named for the task rather than the module
+#: so an operator can raise or silence cleanup noise without touching the rest
+#: of the application layer's logging.
+_logger = logging.getLogger("actionwitness.cleanup")
 
 #: "inactive for 24 hours"
 INTERACTIVE_WORKSPACE_TTL_HOURS: Final = 24
@@ -72,10 +78,20 @@ class WorkspaceCleaner:
         *,
         artifact_root: Path | str,
         clock: Callable[[], datetime] | None = None,
+        on_sweep: Callable[[], object] | None = None,
     ) -> None:
+        """`on_sweep` is the process's other periodic maintenance.
+
+        In-memory state that expires on a timer — the rate limiter's per-client
+        buckets today — shares this task's wakeup rather than starting a second
+        one. The cleaner deliberately knows nothing about what it calls: it owns
+        the schedule, not the work, so nothing here depends on the application
+        layer it is being called from.
+        """
         self._database = database
         self._artifact_root = Path(artifact_root)
         self._clock = clock or (lambda: datetime.now(UTC))
+        self.on_sweep = on_sweep
 
     async def sweep(self) -> CleanupResult:
         """Remove every expired workspace, its rows, and its artifact files.
@@ -120,11 +136,43 @@ class WorkspaceCleaner:
         """
         while not stop.is_set():
             try:
-                await self.sweep()
+                result = await self.sweep()
             except asyncio.CancelledError:
                 raise
             except Exception:
-                pass
+                # Logged, not swallowed. The loop surviving a failed sweep is
+                # the point of this `except`; leaving no trace of *why* it
+                # failed is how FR-009 cleanup stops running for the life of a
+                # process while `/healthz` keeps reporting `ok`.
+                _logger.exception("workspace cleanup sweep failed")
+            else:
+                # A sweep that removed nothing is the ordinary case and says so
+                # at debug; one that stranded a file is the operator's problem
+                # and says so at warning, because nothing else in the service
+                # will ever mention that file again.
+                if result.files_failed:
+                    _logger.warning(
+                        "workspace cleanup swept %d workspace(s), removed %d file(s), "
+                        "failed to remove %d",
+                        result.workspaces_removed,
+                        result.files_removed,
+                        result.files_failed,
+                    )
+                else:
+                    _logger.debug(
+                        "workspace cleanup swept %d workspace(s), removed %d file(s)",
+                        result.workspaces_removed,
+                        result.files_removed,
+                    )
+            if self.on_sweep is not None:
+                try:
+                    self.on_sweep()
+                except Exception:
+                    # Isolated from the sweep for the same reason the sweep is
+                    # isolated from the loop: maintenance of somebody else's
+                    # in-memory state must not be able to stop this task from
+                    # expiring workspaces.
+                    _logger.exception("periodic maintenance hook failed")
             with suppress(TimeoutError):
                 await asyncio.wait_for(stop.wait(), timeout=CLEANUP_INTERVAL_SECONDS)
 

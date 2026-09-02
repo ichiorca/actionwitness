@@ -62,8 +62,16 @@ PROVENANCE: Final = "platform_session_api"
 
 SCHEMA_VERSION: Final = "1.0"
 
-#: FR-117's bound on a submitted cart payload. Enforced before parsing: a
-#: payload rejected after `json.loads` has already been decoded into memory.
+#: FR-117's bound on a submitted cart payload, in bytes.
+#:
+#: Declared here and enforced nowhere yet, which is worth stating plainly: the
+#: bound belongs to the §15.9 observation route that reads raw request bytes,
+#: and that route does not exist. `normalize_cart` below cannot apply it — it
+#: receives a payload that has already been parsed, by which point the decode
+#: this bound exists to prevent has happened.
+#:
+#: The previous note claimed it was "enforced before parsing". Nothing enforced
+#: it, so the comment described a protection the reader did not have.
 MAX_CART_PAYLOAD_BYTES: Final = 256 * 1024
 
 #: §9.3's conventional namespace, so a contract author writes `target.cart.total`

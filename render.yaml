@@ -14,6 +14,26 @@ services:
     envVars:
       - key: HARNESS_PUBLIC_ORIGIN
         sync: false
+      # Peer addresses whose forwarding header may be believed (§20.1). It is
+      # `sync: false` because the value is a fact about the platform, not about
+      # this repository: it must be the address the app actually sees as
+      # `request.client.host` behind Render's load balancer, read off a
+      # deployed request rather than guessed here.
+      #
+      # It is declared even though it is empty, because an unset value is not
+      # neutral. Unset, `docker-entrypoint.sh` passes uvicorn
+      # `--forwarded-allow-ips 127.0.0.1` and the app keeps `trusted_proxies`
+      # empty, so `X-Forwarded-For` is ignored and every visitor is keyed by the
+      # load balancer's address — one shared bucket for the whole deployment.
+      # The 120/min and FR-009 creation limits then apply to all traffic
+      # together, and concurrent judges rate-limit each other out.
+      #
+      # Leaving it unset is the safe failure (a shared bucket refuses too much;
+      # trusting the wrong peer would let any client forge its own identity by
+      # sending the header), which is why this is a declaration plus an
+      # operator note rather than a value invented in this file.
+      - key: HARNESS_TRUSTED_PROXIES
+        sync: false
       # Tier 3 Shopify module (optional; absent values disable only that module):
       - key: SHOPIFY_STORE_ORIGIN
         sync: false

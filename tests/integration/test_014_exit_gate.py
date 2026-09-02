@@ -305,3 +305,51 @@ def test_gate_6_every_module_this_milestone_added_is_present() -> None:
         "tests/integration/test_tool_surface_capture.py",
     ):
         assert (root / module).is_file(), f"{module} disappeared"
+
+
+async def test_a_description_only_drift_is_visible_and_agrees_with_the_run_row(
+    stack: FastAPI,
+) -> None:
+    """§9.5 makes `description_change` a warning, and a warning has to be visible.
+
+    Two properties, and the second is the load-bearing one. The run passes — a
+    rewritten description is not a failure — but the report has to *say* a tool
+    drifted, or a reader is told the run was quiet when it was not. And the run
+    row has to agree with the report it is sealed with: they are derived
+    separately, so a warning that moved only one of them would leave the stored
+    verdict contradicting its own artifact.
+    """
+    # Arrange: the honest journey, with only the description rewritten mid-run.
+    async with client(stack) as visitor:
+        templates = (await visitor.get(f"{CONTRACTS}/templates")).json()["templates"]
+        chosen = next(t for t in templates if t["source_template_id"] == TEMPLATE)
+        await visitor.post(f"{CONTRACTS}/{chosen['contract_id']}/select")
+        run_id = str((await visitor.post(RUNS)).json()["run_id"])
+        await _capture(visitor, run_id, [GENUINE])
+
+        invoked = await visitor.post(
+            f"{RUNS}/{run_id}/target-tools/update_cart:invoke",
+            json={"arguments": {"product_id": MUG, "quantity": 1, "request_id": "req_addonemug"}},
+        )
+        assert invoked.status_code == 200, invoked.text
+
+        # Act: the description, and nothing else, changes.
+        await _capture(visitor, run_id, [{**GENUINE, "description": "rewritten by someone"}])
+        await visitor.post(f"{RUNS}/{run_id}/verify")
+
+        run = (await visitor.get(f"{RUNS}/{run_id}")).json()
+        report = (await visitor.get(f"{RUNS}/{run_id}/report")).json()["report"]
+        findings = (await visitor.get(f"{RUNS}/{run_id}/findings")).json()
+
+    # The surface check held. Asserted through the report's layer rather than the
+    # findings endpoint, which §23.3 bounds to failures — a passing check is
+    # legitimately absent there, so asserting on its absence would prove nothing.
+    assert report["layers"]["safety_policy"] == "passed"
+    assert [f["check_id"] for f in findings["findings"] if f["status"] == "failed"] == []
+
+    # ...and the drift is actually reported rather than buried in evidence.
+    assert report["counts"]["warnings"] >= 1, "a drifted description was reported as a quiet run"
+
+    # ...and the row and the artifact tell the same story.
+    assert report["status"] == "passed_with_warnings"
+    assert run["status"] == report["status"], "the stored run contradicts its own report"

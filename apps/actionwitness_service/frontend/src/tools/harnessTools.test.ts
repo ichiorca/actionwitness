@@ -13,7 +13,7 @@
  * cannot see. `test_an_enabled_tool_still_reports_a_server_refusal` pins that.
  */
 
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { type InstalledDouble, installModelContextDouble } from "../test/modelContextDouble";
@@ -234,5 +234,103 @@ describe("budgets", () => {
     // The untruncated total travels with the bounded list, or an agent reading
     // one finding would conclude there was one.
     expect(text).toContain('"total":9');
+  });
+});
+
+describe("evidence is on the record before a verdict is taken", () => {
+  it("awaits the surface flush before posting the verification", async () => {
+    // Verification seals the timeline, and the tool-surface witness is debounced
+    // and asynchronous. Without this ordering a delta read a moment before
+    // `verify_outcome` is posted a moment after it, meets a sealed timeline, and
+    // never reaches the verdict it was evidence for.
+    const order: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        order.push(`fetch:${url}`);
+        return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
+      }),
+    );
+    const beforeVerify = async (): Promise<void> => {
+      order.push("flush");
+    };
+
+    const { result } = renderHook(() =>
+      useHarnessToolset(workspace("running"), noop, { beforeVerify }),
+    );
+    await waitFor(() => expect(result.current.states["verify_outcome"]?.phase).toBe("registered"));
+
+    await installed?.modelContext.invoke("verify_outcome");
+
+    expect(order[0]).toBe("flush");
+    expect(order[1]).toBe("fetch:/api/v1/runs/run_1/verify");
+  });
+
+  it("verifies with no flusher supplied", async () => {
+    // The option is optional, and a caller that supplies none must not have its
+    // verification blocked on a hook that does not exist.
+    const { result } = renderHook(() => useHarnessToolset(workspace("running"), noop));
+    await waitFor(() => expect(result.current.states["verify_outcome"]?.phase).toBe("registered"));
+
+    const outcome = await installed?.modelContext.invoke("verify_outcome");
+
+    expect((outcome as { isError?: boolean }).isError).toBeFalsy();
+  });
+});
+
+describe("a generated case is replayable by the agent that generated it", () => {
+  it("publishes the replay tool once a case has been created", async () => {
+    // AC-22 measures the §11.1 table for *reachability*. `run_regression_eval`
+    // was declared `enabled: evalCaseId !== null` while `App` supplied no case
+    // id, so the tool could never register: an agent could cut a regression
+    // case and then had no way to replay it.
+    respondWith({ eval_case_id: "eval_1", created: true });
+    const { result } = renderHook(() => useHarnessToolset(workspace("failed"), noop));
+    await waitFor(() =>
+      expect(result.current.states["create_regression_eval"]?.phase).toBe("registered"),
+    );
+    expect(result.current.states["run_regression_eval"]?.phase).not.toBe("registered");
+
+    // Wrapped: the handler stores the created id, which re-registers the replay
+    // tool — a state update the assertions below depend on having settled.
+    await act(async () => {
+      await installed?.modelContext.invoke("create_regression_eval");
+    });
+
+    await waitFor(() =>
+      expect(result.current.states["run_regression_eval"]?.phase).toBe("registered"),
+    );
+    expect(result.current.evalCaseId).toBe("eval_1");
+  });
+
+  it("keeps the replay tool unavailable when the response names no case", async () => {
+    // A response body is untrusted input. A missing id must leave the replay
+    // unavailable rather than pointed at `"undefined"`.
+    respondWith({ created: true });
+    const { result } = renderHook(() => useHarnessToolset(workspace("failed"), noop));
+    await waitFor(() =>
+      expect(result.current.states["create_regression_eval"]?.phase).toBe("registered"),
+    );
+
+    await act(async () => {
+      await installed?.modelContext.invoke("create_regression_eval");
+    });
+
+    expect(result.current.evalCaseId).toBeNull();
+    expect(result.current.states["run_regression_eval"]?.phase).not.toBe("registered");
+  });
+
+  it("prefers a case the caller selected over the one it created", async () => {
+    // The panel and the agent must be looking at one case, and the human
+    // selection is the one a person can see.
+    respondWith({ eval_case_id: "eval_created", created: true });
+    const { result } = renderHook(() =>
+      useHarnessToolset(workspace("failed"), noop, { evalCaseId: "eval_selected" }),
+    );
+    await waitFor(() =>
+      expect(result.current.states["run_regression_eval"]?.phase).toBe("registered"),
+    );
+
+    expect(result.current.evalCaseId).toBe("eval_selected");
   });
 });

@@ -99,16 +99,21 @@ test.describe("capability reporting", () => {
     // component mount state. Asserting the panel's number against the registry
     // is the only way to tell those two apart.
     await agent.expectRegistered("get_workspace_status");
-    await expect
-      .poll(async () => (await agent.toolNames()).length, {
-        message: "waiting for the page's registrations to settle",
-      })
-      .toBeGreaterThan(0);
 
-    const registered = (await agent.toolNames()).length;
-    await expect(workspace.panel("Tool registration")).toContainText(
-      `${String(registered)} tool`,
-    );
+    // Both read inside one poll, deliberately. Registration settles across
+    // several effects, so reading the registry and then the panel would compare
+    // two different moments and fail on the page being *right* a beat later.
+    const panel = workspace.panel("Tool registration");
+    await expect
+      .poll(
+        async () => {
+          const registered = (await agent.toolNames()).length;
+          const reported = (await panel.textContent()) ?? "";
+          return registered > 0 && reported.includes(`${String(registered)} tool`);
+        },
+        { message: "waiting for the panel to report what the browser registry holds" },
+      )
+      .toBe(true);
   });
 
   test("names the demo target and its status", async ({ workspace }) => {

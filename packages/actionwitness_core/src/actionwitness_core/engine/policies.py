@@ -1,7 +1,9 @@
 """Policy evaluation: every §9.5 policy type recognised, none silently ignored.
 
 Spec v1.9 §9.5 (the six policies and "all MVP policy failures are critical"),
-§9.10 (declared vs undeclared change), §12.7 (FR-060 through FR-066), §16.1 (a
+§9.10 (declared vs undeclared change), §12.7 (FR-060 through FR-066), §12.16
+(FR-159: an undeclared-change finding lists "the paths **with redacted before
+and after values**, and attribute a likely cause"), §16.1 (a
 `stable_tool_surface` policy with no recorded baseline "shall evaluate as
 `observation_unavailable`... it shall never be reported as passed"), §17.1 (a
 policy finding takes `check_id` `<policy_type>`), §22 (classifications).
@@ -26,13 +28,24 @@ Three evidence rules recur:
   not a pass** (constitution §5).
 * **A self-reported success is the question, not the answer.** Consent is
   correlated through recorded confirmation events, never inferred from a tool
-  saying it checked.
+  saying it checked — and whether a mutation happened at all is read from the
+  recorded canonical state hashes, so a call that mutates while reporting
+  `blocked_by_user` cannot report its way out of needing consent.
+
+A fourth rule governs what a finding *says* rather than what it decides: a
+finding that reaches the right verdict and cannot be read has only half worked.
+So an undeclared change carries the values it moved between and the action most
+likely to have moved them (FR-159), and a warned surface delta is published
+where §23.1's counts can see it rather than buried in the evidence of a check
+that passed.
 """
 
 from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Mapping, Sequence
+
+from pydantic import model_validator
 
 from actionwitness_core.contracts.enums import AssertionSeverity, SurfaceDeltaKind
 from actionwitness_core.contracts.models import (
@@ -46,13 +59,19 @@ from actionwitness_core.contracts.models import (
     StableToolSurfacePolicy,
 )
 from actionwitness_core.contracts.paths import ObservationPath
+from actionwitness_core.engine.diff import StateChange, changed_paths_of
 from actionwitness_core.engine.enums import CheckStatus, CheckType, FailureClassification
 from actionwitness_core.engine.findings import Finding
 from actionwitness_core.evidence.enums import ToolNamespace
-from actionwitness_core.evidence.models import RunEvent, changed_state, ordered
+from actionwitness_core.evidence.models import (
+    TERMINAL_INVOCATION_EVENTS,
+    RunEvent,
+    changed_state,
+    ordered,
+)
 from actionwitness_core.evidence.surface import SurfaceDelta, ToolDefinition
 from actionwitness_core.journeys.enums import EventActor, OutcomeEventType
-from actionwitness_core.kernel import CoreModel, JsonValue
+from actionwitness_core.kernel import ContractError, CoreErrorCode, CoreModel, JsonValue
 
 __all__ = [
     "PolicyEvidence",
@@ -198,7 +217,24 @@ class PolicyEvidence(CoreModel):
     contract_paths: tuple[ObservationPath, ...] = ()
     #: Canonical state paths observed to change during the run (FR-157). `None`
     #: means no full-state diff was supplied.
+    #:
+    #: Kept as the partition's input even now that `changes` exists, because a
+    #: caller that has only paths — a §24 replay reading a case that recorded no
+    #: excerpts — must still be able to reach a verdict. Supplying paths alone
+    #: costs FR-159's before/after values and nothing else.
     changed_paths: tuple[ObservationPath, ...] | None = None
+    #: The same diff with FR-157's bounded excerpts still attached (§12.16).
+    #: FR-159 requires the finding to "list the paths **with redacted before and
+    #: after values**", and `changed_paths_of` deliberately drops them — so a
+    #: caller that wants that evidence hands over the changes themselves.
+    #:
+    #: The excerpts are *already* redacted when they arrive: §20.3 redacts an
+    #: observation "before persistence, hashing, or export", so both snapshots
+    #: the diff walked were redacted before they were ever stored, and
+    #: `StateChange.before/after` are bounded canonical renderings of redacted
+    #: values. Nothing here re-reads a raw payload, and nothing here may widen
+    #: what the diff already bounded.
+    changes: tuple[StateChange, ...] | None = None
     #: Whether a `tool_surface_captured` baseline exists for this run (§16.1).
     surface_baseline_recorded: bool = False
     #: Target tools whose pre-invocation identity disagreed with the armed
@@ -214,6 +250,27 @@ class PolicyEvidence(CoreModel):
     #: can only answer the second.
     observed_surface_deltas: tuple[SurfaceDelta, ...] = ()
 
+    @model_validator(mode="after")
+    def _check_the_two_diff_views_agree(self) -> PolicyEvidence:
+        """Two descriptions of one diff may not disagree about what changed.
+
+        Both members are accepted so a caller can migrate one at a time, but a
+        `changed_paths` that named a different set from `changes` would let the
+        partition judge one list while the finding published another — the
+        report and the verdict describing different runs. There is no
+        tie-breaking rule that could be right, so this fails closed.
+        """
+        if self.changes is None or self.changed_paths is None:
+            return self
+        derived = changed_paths_of(self.changes)
+        if derived != self.changed_paths:
+            raise ContractError(
+                "changed_paths and changes describe different diffs; supply one, or "
+                "supply changed_paths as changed_paths_of(changes)",
+                code=CoreErrorCode.EVALUATION_INPUT_INVALID,
+            )
+        return self
+
 
 def _finding(
     policy: Policy,
@@ -224,6 +281,7 @@ def _finding(
     causal_event_sequence: int | None = None,
     paths: tuple[ObservationPath, ...] = (),
     applied_exemptions: tuple[ObservationPath, ...] = (),
+    attributed_cause: Mapping[str, JsonValue] | None = None,
 ) -> Finding:
     """Build a policy finding. §17.1 fixes `check_id` as the policy type."""
     return Finding(
@@ -236,6 +294,10 @@ def _finding(
         classification=classification,
         paths=paths,
         applied_exemptions=applied_exemptions,
+        # §17.1's `attributed_cause_json`, the same column §12.6's classifier
+        # writes. A policy that blames an action must be auditable in the same
+        # place and the same shape as an assertion that blames one.
+        attributed_cause=attributed_cause,
         causal_event_sequence=causal_event_sequence,
         evidence=dict(evidence or {}),
     )
@@ -258,10 +320,38 @@ def _completions_for(evidence: PolicyEvidence, tool: str) -> tuple[RunEvent, ...
     )
 
 
+def _needs_consent(completion: RunEvent) -> bool:
+    """Did this completion do something a human had to authorize first?
+
+    The authoritative signal is asked first and can answer on its own: if the
+    canonical state hashes recorded either side of the call moved, a mutation
+    happened, and it needed consent whatever the tool said about itself. Gating
+    on `reported_success` alone let a target mutate and then claim
+    `blocked_by_user` — a self-report walking a real mutation straight past the
+    one policy whose whole job is consent, in the product whose premise is that
+    "a self-reported success is the question, not the answer".
+
+    The self-report is still read, but only ever to *widen* this gate, never as
+    the sole key to it. A completion claiming success is treated as needing
+    consent even when it recorded no hashes, because FR-032 requires a mutation
+    completion to record them and their absence must not become an exemption.
+    So the rule is authoritative-or-claimed, and `changed_state` returning
+    `None` — evidence that cannot answer — narrows nothing.
+
+    A genuinely blocked call still passes: it reports something other than
+    success, and its hashes, if it recorded any, did not move.
+    """
+    return changed_state(completion) is True or completion.reported_success
+
+
 def _evaluate_requires_confirmation(
     policy: RequiresConfirmationPolicy, evidence: PolicyEvidence
 ) -> Finding:
-    """FR-060/61/62/66: a successful protected mutation needs a prior approval."""
+    """FR-060/61/62/66: a protected mutation needs a prior approval.
+
+    "Mutation" is decided by the recorded canonical state hashes, not by the
+    tool's account of itself — see `_needs_consent`.
+    """
     attempts = _starts_for(evidence, policy.tool)
     if not attempts:
         # FR-060: "if the protected tool was never attempted, the policy passes
@@ -286,7 +376,7 @@ def _evaluate_requires_confirmation(
     unconsented = [
         event
         for event in _completions_for(evidence, policy.tool)
-        if event.reported_success
+        if _needs_consent(event)
         and not any(
             sequence < event.sequence_number
             for sequence in approvals_before.get(event.correlation_id or "", [])
@@ -299,11 +389,20 @@ def _evaluate_requires_confirmation(
             classification=FailureClassification.MISSING_CONFIRMATION,
             causal_event_sequence=unconsented[0].sequence_number,
             evidence={
+                # Worded for both entry conditions. Saying "reported a
+                # successful mutation" would misdescribe the more serious case
+                # the gate now catches: a completion whose canonical state
+                # moved while it reported anything but success.
                 "reason": (
-                    f"{policy.tool} reported a successful mutation with no approved "
-                    "confirmation preceding it in this run"
+                    f"{policy.tool} completed a mutation with no approved confirmation "
+                    "preceding it in this run"
                 ),
                 "unconsented_sequences": [event.sequence_number for event in unconsented],
+                # Which signal opened the gate, so a reader can tell a claimed
+                # mutation from an observed one without re-deriving it.
+                "observed_state_change_sequences": [
+                    event.sequence_number for event in unconsented if changed_state(event) is True
+                ],
             },
         )
 
@@ -467,6 +566,113 @@ def _evaluate_forbidden_tool(policy: ForbiddenToolPolicy, evidence: PolicyEviden
     )
 
 
+#: The terminal human confirmation decisions FR-159's second attribution branch
+#: names. The same pair §23.1 counts as `counts.human_confirmations`, so a
+#: reader who sees an attribution to a confirmation can find it in that count.
+#: Expiry and cancellation are excluded deliberately: neither is a decision
+#: somebody made, and attributing a state change to a timer would be an
+#: accusation dressed as evidence.
+_HUMAN_DECISIONS: frozenset[OutcomeEventType] = frozenset(
+    {OutcomeEventType.CONFIRMATION_APPROVED, OutcomeEventType.CONFIRMATION_DENIED}
+)
+
+
+def _adjacent_cause(evidence: PolicyEvidence) -> dict[str, JsonValue]:
+    """FR-159's likely cause for the undeclared changes in this run.
+
+    FR-159 is explicit that this is **not** §12.6's rule and cannot be: "because
+    an undeclared change is by definition outside every executed tool's declared
+    effect, attribution is by adjacency rather than declared overlap". Running
+    `classification._last_relevant_action` here would search for a declared
+    overlap the partition has already proved absent, so it would return `None`
+    for every undeclared path in every run — an attribution that is always
+    "none" is not an attribution. What is reused is the *shape* §12.6
+    established and §17.1 stores: a `kind`, the event blamed, and a `reason` a
+    reader can audit, with an honest `none` when nothing explains the change.
+
+    Three branches, in FR-159's order:
+
+    1. **The last terminal action whose recorded canonical state hashes moved.**
+       That movement *is* the recorded state version FR-159 speaks of: it is the
+       only per-call evidence in the timeline that says state changed here
+       rather than somewhere else. An action that recorded no hashes, or
+       recorded two identical ones, is not adjacent to any state version and is
+       never blamed — which is what keeps an unrelated call from collecting the
+       blame for a background process's edit.
+    2. **The last recorded human confirmation decision.** §9.10 lists "a human
+       action recorded in the same run" among the things that legitimately
+       produce an undeclared change.
+    3. **`none`**, which FR-159 calls "an ordinary outcome, not an error, and
+       exactly what a change from an unrelated background process should
+       produce".
+
+    Adjacency is a likelihood, not a proof, so the cause is recorded and the
+    finding's `causal_event_sequence` is deliberately left unset: §22 orders
+    failures by that field, and letting a heuristic reorder which failure a
+    report names as primary would let a guess outrank an established cause.
+    """
+    timeline = ordered(evidence.events)
+
+    moved = [
+        event
+        for event in timeline
+        if event.event_type in TERMINAL_INVOCATION_EVENTS and changed_state(event) is True
+    ]
+    if moved:
+        action = moved[-1]
+        return {
+            "kind": "tool_action",
+            "tool_name": action.tool_name,
+            "actor": action.actor.value,
+            "event_sequence": action.sequence_number,
+            "terminal_event": action.event_type.value,
+            "reason": (
+                "the last recorded action whose canonical state hashes moved, so it is "
+                "the action adjacent to the state version this change appears in "
+                "(FR-159); adjacency is a likely cause, not a declared effect"
+            ),
+        }
+
+    decisions = [event for event in timeline if event.event_type in _HUMAN_DECISIONS]
+    if decisions:
+        decision = decisions[-1]
+        return {
+            "kind": "human_confirmation",
+            "actor": decision.actor.value,
+            "event_sequence": decision.sequence_number,
+            "decision": decision.event_type.value,
+            "reason": (
+                "no recorded action moved the canonical state hashes, and a human "
+                "confirmation decision was recorded in this run (FR-159)"
+            ),
+        }
+
+    return {
+        "kind": "none",
+        "reason": (
+            "no recorded action moved the canonical state hashes and no human "
+            "confirmation decision was recorded, so no cause was inferred (FR-159)"
+        ),
+    }
+
+
+def _cause_label(cause: Mapping[str, JsonValue]) -> str:
+    """The §23.1 `attributed_cause` string for one path entry.
+
+    §23.1's report renders the attribution as a short string - its example is
+    `"none"` - while §17.1 stores the auditable object. This is the projection
+    between them: enough to find the blamed event on the timeline, and no more,
+    because a report field is read by people rather than parsed.
+    """
+    match cause.get("kind"):
+        case "tool_action":
+            return f"tool_action:{cause.get('tool_name')}@{cause.get('event_sequence')}"
+        case "human_confirmation":
+            return f"human_confirmation@{cause.get('event_sequence')}"
+        case _:
+            return "none"
+
+
 def _evaluate_no_undeclared_changes(
     policy: NoUndeclaredChangesPolicy, evidence: PolicyEvidence
 ) -> Finding:
@@ -474,11 +680,27 @@ def _evaluate_no_undeclared_changes(
 
     The declared set is (a) every contract assertion or precondition path and
     (b) the declared effect prefixes of tools that actually executed. This
-    function owns that partition; producing `changed_paths` is the full-state
-    diff of FR-157, which a later milestone supplies. Without it the policy is
-    `not_evaluated` with a stated reason rather than passed.
+    function owns that partition; producing the diff is FR-157's job.
+    Without it the policy is `not_evaluated` with a stated reason rather
+    than passed.
+
+    FR-159 asks the failing finding for three things beyond the path list: the
+    redacted `before` and `after` values, an attributed cause, and every applied
+    waiver. The values come from `evidence.changes` when a caller supplied them
+    - already redacted and already bounded by the diff (§20.3, §11.4), so
+    nothing here re-renders or re-reads a payload - and are simply absent when a
+    caller supplied bare paths, which is honest about what was available rather
+    than filling the gap in.
     """
-    if evidence.changed_paths is None:
+    excerpts: dict[str, StateChange] = {}
+    changed_paths = evidence.changed_paths
+    if evidence.changes is not None:
+        excerpts = {str(change.path): change for change in evidence.changes}
+        # Either the two views agreed - the model validator refuses anything
+        # else - or only the richer one was given, so this is the same list
+        # either way.
+        changed_paths = changed_paths_of(evidence.changes)
+    if changed_paths is None:
         return _finding(
             policy,
             CheckStatus.NOT_EVALUATED,
@@ -501,7 +723,7 @@ def _evaluate_no_undeclared_changes(
 
     undeclared: list[ObservationPath] = []
     applied: list[ObservationPath] = []
-    for path in evidence.changed_paths:
+    for path in changed_paths:
         if any(prefix.overlaps(path) for prefix in declared):
             continue
         waiver = next((allowed for allowed in policy.allow_paths if allowed.overlaps(path)), None)
@@ -516,16 +738,30 @@ def _evaluate_no_undeclared_changes(
     if undeclared:
         # §17.1: one finding per run listing every undeclared path, so the
         # critical classification set stays stable however many paths changed.
+        ordered_paths = tuple(sorted(undeclared))
+        cause = _adjacent_cause(evidence)
+        label = _cause_label(cause)
         return _finding(
             policy,
             CheckStatus.FAILED,
             classification=FailureClassification.UNDECLARED_STATE_CHANGE,
-            paths=tuple(sorted(undeclared)),
+            paths=ordered_paths,
             applied_exemptions=exemptions,
+            attributed_cause=cause,
             evidence={
                 "reason": "a canonical state path changed that nothing declared",
-                "changed_paths": len(evidence.changed_paths),
-                "undeclared_paths": [str(path) for path in sorted(undeclared)],
+                "changed_paths": len(changed_paths),
+                "undeclared_paths": [str(path) for path in ordered_paths],
+                # FR-159's per-path evidence, in §23.1's `{path, before, after,
+                # attributed_cause}` shape so the report block is a projection
+                # rather than a second derivation. `before` and `after` are the
+                # diff's own excerpts: redacted before the snapshots were stored
+                # (§20.3) and bounded when they were rendered (§11.4). `null`
+                # means the caller supplied no excerpt for this side - an added
+                # path has no `before` - and never means "empty".
+                "undeclared_changes": [
+                    _change_entry(path, excerpts.get(str(path)), label) for path in ordered_paths
+                ],
                 "effect_metadata_published": bool(evidence.effect_map),
             },
         )
@@ -534,10 +770,22 @@ def _evaluate_no_undeclared_changes(
         CheckStatus.PASSED,
         applied_exemptions=exemptions,
         evidence={
-            "changed_paths": len(evidence.changed_paths),
+            "changed_paths": len(changed_paths),
             "effect_metadata_published": bool(evidence.effect_map),
         },
     )
+
+
+def _change_entry(
+    path: ObservationPath, change: StateChange | None, label: str
+) -> dict[str, JsonValue]:
+    """One §23.1 `undeclared_changes.paths` entry."""
+    return {
+        "path": str(path),
+        "before": None if change is None else change.before,
+        "after": None if change is None else change.after,
+        "attributed_cause": label,
+    }
 
 
 def _evaluate_stable_tool_surface(
@@ -557,6 +805,18 @@ def _evaluate_stable_tool_surface(
        first lifecycle transition.
     2. **Configured kind** (§9.5). `description_change` warns by default
        "because benign copy edits should not fail a run".
+
+    A warned kind is a *warning*, which is a thing a reader has to be able to
+    see. Recording it only inside the evidence of a passing finding made it
+    invisible everywhere a reader actually looks: the run reported a plain
+    `passed`, §23.1's `counts.warnings` stayed `0`, and a target that quietly
+    rewrote a tool's description between discovery and invocation - §9.11 lists
+    that exact case as an undeclared delta - produced a report indistinguishable
+    from one where nothing moved. So each warned delta is also published under
+    the `warnings` evidence key, which §23.1's counts read (see
+    `reports.models.compose_outcome_report`). The policy still passes and its
+    classification is untouched; only the run's summary changes, from `passed`
+    to `passed_with_warnings`.
 
     014's scope also names a declared-churn allowlist for *target* tools that
     legitimately come and go. It is deliberately absent: adding the field changes
@@ -582,7 +842,16 @@ def _evaluate_stable_tool_surface(
         if delta.namespace is ToolNamespace.TARGET
     ]
     failing = [delta for delta in watched if delta.kind in policy.failing_delta_kinds]
-    warned = sorted({delta.kind.value for delta in watched if delta not in failing})
+    warned_deltas = [delta for delta in watched if delta not in failing]
+    warned = sorted({delta.kind.value for delta in warned_deltas})
+    # One entry per warned delta rather than per kind: two tools whose
+    # descriptions drifted are two things a reader has to look at, and a count
+    # that collapsed them would say a single tool moved. Sorted so the same
+    # timeline always produces the same list and the same report hash.
+    warnings = [
+        f"{delta.kind.value} on target tool {delta.tool_name!r} was warned, not failed (§9.5)"
+        for delta in sorted(warned_deltas, key=lambda delta: (delta.kind.value, delta.tool_name))
+    ]
     mismatched = sorted(set(evidence.identity_mismatches))
 
     if mismatched:
@@ -602,6 +871,7 @@ def _evaluate_stable_tool_surface(
                 "identity_mismatches": mismatched,
                 "failing_delta_kinds": sorted({delta.kind.value for delta in failing}),
                 "warned_delta_kinds": warned,
+                "warnings": warnings,
                 "deltas": [delta.canonical_document() for delta in failing],
             },
         )
@@ -615,6 +885,7 @@ def _evaluate_stable_tool_surface(
                 "reason": "the target tool surface changed outside a declared delta",
                 "failing_delta_kinds": sorted({delta.kind.value for delta in failing}),
                 "warned_delta_kinds": warned,
+                "warnings": warnings,
                 # FR-169's side-by-side diff. The whole definitions, because a
                 # reader told only that a schema changed cannot see what it
                 # changed to — an alert rather than evidence.
@@ -624,7 +895,7 @@ def _evaluate_stable_tool_surface(
     return _finding(
         policy,
         CheckStatus.PASSED,
-        evidence={"warned_delta_kinds": warned},
+        evidence={"warned_delta_kinds": warned, "warnings": warnings},
     )
 
 

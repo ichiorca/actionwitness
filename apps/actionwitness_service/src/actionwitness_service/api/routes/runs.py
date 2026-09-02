@@ -37,7 +37,7 @@ from actionwitness_core.security.limits import (
     MAX_TOOL_DESCRIPTION_CHARS,
     MAX_TOOL_NAME_CHARS,
 )
-from fastapi import APIRouter, Body, Header, Path, Query
+from fastapi import APIRouter, Body, Depends, Header, Path, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -50,6 +50,7 @@ from actionwitness_service.api.dependencies import (
 )
 from actionwitness_service.api.event_stream import (
     EVENT_STREAM_MEDIA_TYPE,
+    open_event_stream,
     resume_cursor,
     stream_events,
     wants_event_stream,
@@ -65,6 +66,7 @@ from actionwitness_service.application.findings_service import (
 )
 from actionwitness_service.application.guidance_service import current_guidance
 from actionwitness_service.application.invocation_service import InvocationService
+from actionwitness_service.application.limits import EventStreamSlots
 from actionwitness_service.application.report_service import ReportService
 from actionwitness_service.application.run_service import RunService
 from actionwitness_service.application.surface_service import SurfaceService
@@ -325,11 +327,30 @@ async def read_comparison(
     return dict(result.as_document())
 
 
+def _event_streams(request: Request) -> EventStreamSlots:
+    """The application's live count of open SSE connections (FR-008).
+
+    Declared here rather than in `dependencies.py` because exactly one route
+    needs it and it is not part of that module's subject — the workspace
+    resolution rule. Read from app state for the same reason every other
+    long-lived object is: one instance per application, so two tests building
+    two applications in one process do not share a ceiling.
+    """
+    return request.app.state.event_streams
+
+
+#: Module scope, for the reason `dependencies.py` records: under
+#: `from __future__ import annotations` a locally-defined alias resolves to
+#: nothing and FastAPI silently reinterprets the parameter as a query parameter.
+EventStreamsDependency = Annotated[EventStreamSlots, Depends(_event_streams)]
+
+
 @router.get("/{run_id}/events", response_model=None)
 async def read_events(
     run_id: RunId,
     workspace_id: WorkspaceDependency,
     database: DatabaseDependency,
+    streams: EventStreamsDependency,
     after_sequence: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=EVENT_PAGE_MAX)] = EVENT_PAGE_DEFAULT,
     accept: Annotated[str | None, Header()] = None,
@@ -352,13 +373,25 @@ async def read_events(
     `text/event-stream` header are on the wire it is too late to send §15.8's
     envelope, so a run this workspace may not see has to fail here, as a plain
     404, rather than as an empty stream a client has to interpret.
+
+    FR-008's two-connection ceiling is taken in the same window and in that
+    order: authorization first, so a stranger's refused request never spends a
+    slot the workspace could have used. Only this branch is capped — the paged
+    fallback below is an ordinary request that ends when it is answered, and
+    capping it would take the enhancement's failure mode and give it to the
+    contract.
     """
     if wants_event_stream(accept):
         cursor = resume_cursor(last_event_id, after_sequence)
         async with database.reading() as work:
             await TimelineService(work, workspace_id).events(run_id, after_sequence=cursor, limit=1)
-        return StreamingResponse(
+        body = await open_event_stream(
+            streams,
+            workspace_id,
             stream_events(database, workspace_id, run_id, after_sequence=cursor),
+        )
+        return StreamingResponse(
+            body,
             media_type=EVENT_STREAM_MEDIA_TYPE,
             headers={
                 # Buffering a stream defeats it: a proxy that waits for the

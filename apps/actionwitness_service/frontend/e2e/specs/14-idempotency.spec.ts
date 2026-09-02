@@ -15,12 +15,12 @@
 
 import {
   MUG,
-  bodyOf,
   TEMPLATE_RETRY_SAFE,
   UPDATE_CART,
   VERIFY_OUTCOME,
   expect,
   test,
+  textOf,
 } from "../support/harness";
 
 const DUPLICATE_FAULT = "duplicate_on_retry";
@@ -153,21 +153,15 @@ test.describe("the same key with different intent", () => {
       quantity: 3,
       request_id: RETRY_KEY,
     });
-    const body = bodyOf(conflicting);
-
-    // The refusal is recorded as a failed invocation carrying its own code, and
-    // the observed state did not move.
-    expect(body["terminal_event"], JSON.stringify(body)).toBe("tool_invocation_failed");
-    const reported = body["reported"] as Record<string, unknown>;
-    expect(reported["error_code"]).toBe("idempotency_key_reused");
-    expect((body["observed"] as Record<string, unknown>)["state_changed"]).toBe(false);
-
-    // NOTE, and a finding rather than an assertion: this result reaches the
-    // agent with `isError` **unset**. The route answers 200 for a completed
-    // invocation whose terminal event is `tool_invocation_failed`, and the
-    // adapter normalizes a resolved value as a success — so an agent branching
-    // on `isError` reads a refused, key-reused mutation as one that worked.
-    expect(conflicting.isError).toBeFalsy();
+    // The refusal reaches the agent *as* a refusal. The route answers 200 for
+    // an invocation that completed the round trip — the status is about the
+    // harness — and the tool's own outcome lives in the terminal event. Until
+    // the adapter read it, this resolved as an ordinary value and an agent
+    // branching on `isError` was told a refused mutation had worked.
+    expect(conflicting.isError, textOf(conflicting)).toBe(true);
+    // The server's own summary, and the stable token to branch on.
+    expect(textOf(conflicting)).toContain("already used");
+    expect(textOf(conflicting)).toContain("idempotency_key_reused");
 
     // And the first mutation stands: a refused retry must not undo anything.
     const cart = await agent.call("get_cart");

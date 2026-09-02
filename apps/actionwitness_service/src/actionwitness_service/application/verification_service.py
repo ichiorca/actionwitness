@@ -18,6 +18,26 @@ events, terminal status — commits together. A run that recorded findings but
 never reached a terminal state, or reached one without its findings, would be a
 report that disagrees with its own evidence.
 
+**Nothing is held across the capture, so the run can move underneath it.** That
+window is deliberate (ADR-0003 forbids holding a lock across I/O) and it has two
+consequences this module has to answer for rather than assume away.
+
+A workspace reset is legal from every state (§16) and cancels every non-terminal
+run, so a reset landing in the window commits `cancelled` while this task is
+still holding an in-memory verdict. §16 permits only `reset` out of `cancelled`,
+so the seal re-reads the run and routes the move through
+`validate_run_transition` before writing anything — and its terminal `UPDATE`
+carries `AND status = 'verifying'` so the guarantee is the database's, not this
+function's. When the seal loses that race the cancellation stands and the caller
+is refused: an operator who cancelled a run must not find a verdict on it.
+
+And the capture itself can fail. Constitution §5: "observation failure produces
+an explicit non-pass result; it never degrades to success" — which is not
+satisfied by letting the exception escape, because the gate has already
+committed `verifying` and every retry then loses to FR-038's own rejection. So
+the failure is caught and the run is taken to `error` carrying §22's
+`observation_unavailable`, which is a state an operator can read and act on.
+
 **Evaluation reads the stored evidence, not live state.** The events fed to the
 trajectory and policy engines are read back out of the database and rebuilt into
 the core's `RunEvent` models. FR-050 defines policy determinism over "the same
@@ -31,18 +51,20 @@ import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Final
 
-from actionwitness_core.contracts.enums import PolicyType
+import httpx
+from actionwitness_core.contracts.enums import AssertionSeverity, PolicyType
 from actionwitness_core.contracts.models import OutcomeContract, parse_contract
 from actionwitness_core.contracts.paths import ObservationPath
 from actionwitness_core.engine.assertions import evaluate_assertions
 from actionwitness_core.engine.classification import (
     classify_assertion_failures,
+    execution_findings,
     tool_execution_layer,
 )
 from actionwitness_core.engine.diff import StateChange, changed_paths_of, diff_states
-from actionwitness_core.engine.enums import CheckStatus
+from actionwitness_core.engine.enums import CheckStatus, CheckType, FailureClassification
 from actionwitness_core.engine.findings import Finding, aggregate, primary_failure
 from actionwitness_core.engine.policies import (
     PolicyEvidence,
@@ -61,6 +83,8 @@ from actionwitness_core.journeys.enums import (
     SnapshotPhase,
 )
 from actionwitness_core.journeys.guidance import GuidanceState, derive_guidance, phase_for
+from actionwitness_core.journeys.transitions import validate_run_transition
+from actionwitness_core.kernel import TransitionError
 from actionwitness_core.ports.models import Observation
 from actionwitness_core.reports.enums import LayerResult, RunMode
 from actionwitness_core.reports.models import (
@@ -71,13 +95,15 @@ from actionwitness_core.reports.models import (
     TargetReference,
     UndeclaredChangesBlock,
     compose_outcome_report,
+    recorded_warnings,
     undeclared_changes_from,
 )
 from actionwitness_core.security.redaction import RedactionPolicy
 
 from actionwitness_service.api.errors import ApiError, ApiErrorCode
-from actionwitness_service.application.adapter_registry import AdapterRegistry
+from actionwitness_service.application.adapter_registry import AdapterRegistry, TargetUnavailable
 from actionwitness_service.application.artifacts import OUTCOME_REPORT, ArtifactStore
+from actionwitness_service.application.authorization import WorkspaceScope
 from actionwitness_service.application.comparison_service import (
     ComparisonService,
     comparable_run,
@@ -100,6 +126,72 @@ _TERMINAL_STATE: Mapping[LayerResult, RunState] = {
     LayerResult.PASSED_WITH_WARNINGS: RunState.PASSED_WITH_WARNINGS,
     LayerResult.FAILED: RunState.FAILED,
 }
+
+
+def _with_recorded_warnings(result: LayerResult, findings: Sequence[Finding]) -> LayerResult:
+    """Let a check that *held* but recorded a warning move the run's state.
+
+    `aggregate` decides from failures alone, which is right for every layer
+    result it feeds. But §9.5's `description_change` is deliberately a warning on
+    a **passing** check, so a run whose only news was a warning aggregated to
+    `passed` while §23.1's report — which counts recorded warnings — resolved to
+    `passed_with_warnings`. The row and the artifact then disagreed about the
+    same run, which is the one disagreement this module is arranged to prevent.
+
+    Reuses `recorded_warnings`, the same reader the report's own counts use, so
+    the two cannot drift apart by being computed from different rules. A warning
+    can only ever move `passed` — it must not soften a failure, and §16's
+    terminal set has nowhere else for it to go.
+    """
+    if result is not LayerResult.PASSED:
+        return result
+    if any(recorded_warnings(finding) for finding in findings):
+        return LayerResult.PASSED_WITH_WARNINGS
+    return result
+
+
+#: How an `ObservationProvider` actually fails (`actionwitness_core.ports`).
+#:
+#: The protocol declares `capture` and no exception type, so this is the set its
+#: implementations can raise, named rather than swept up by `except Exception`:
+#:
+#: * `TargetUnavailable` — the registry no longer serves this run's adapter, so
+#:   there is no provider left to ask.
+#: * `httpx.HTTPError` — every transport, timeout, and non-2xx failure of a
+#:   provider that reads its target over HTTP, which both shipped providers do.
+#: * `ValueError` — a provider that received a partial or malformed state
+#:   document and refused to manufacture an observation from it. Covers
+#:   `json.JSONDecodeError` and Pydantic's `ValidationError`, which are both
+#:   `ValueError` subclasses, so a payload that will not construct an
+#:   `Observation` lands here too.
+#: * `OSError` — a socket- or file-level failure beneath a transport that does
+#:   not wrap it.
+#:
+#: `asyncio.CancelledError` is deliberately absent, and absent for free: it is a
+#: `BaseException` in 3.12, so a cancelled verification propagates rather than
+#: being recorded as an unobservable target (constitution §5 — cancellation
+#: propagates through I/O).
+_OBSERVATION_FAILURES: Final[tuple[type[BaseException], ...]] = (
+    TargetUnavailable,
+    httpx.HTTPError,
+    ValueError,
+    OSError,
+)
+
+#: The check id the final-observation failure is recorded under. Not a contract
+#: term, so it cannot collide with an assertion id or a policy type — which is
+#: what keeps §22's `check_id` tie-break total across the whole finding set.
+_FINAL_OBSERVATION_CHECK_ID: Final = "final_observation"
+
+#: What the operator is told when the final observation could not be taken. A
+#: fixed sentence rather than the exception's text: §15.8 keeps internal detail
+#: out of anything a browser tool reads, and this string is persisted as finding
+#: evidence, which is exactly where an adapter's message would leak a host, a
+#: path, or a credential in a URL (constitution §4).
+_UNOBSERVABLE_REASON: Final = (
+    "the authoritative observation provider could not supply the final state, so no "
+    "verdict rests on it"
+)
 
 
 @dataclass(frozen=True)
@@ -142,13 +234,29 @@ class VerificationService:
             initial = await self._initial_context(work, run_id)
 
         # 2 — FR-041's capture. I/O, so nothing is held (ADR-0003).
-        adapter = self._registry.adapter(str(run["target_adapter_id"]))
-        final = await self._capture(adapter, workspace_id, policy)
+        #
+        # Wrapped because the gate has already committed `verifying`. An escaping
+        # exception would leave the run there permanently: every retry loses to
+        # FR-038's `RUN_ALREADY_VERIFYING` and only a reset would free it, which
+        # discards the run's evidence to recover from the harness's own failure.
+        # Constitution §5 asks for the opposite — an observation failure is "an
+        # explicit non-pass result", and a state nobody can leave is not explicit.
+        try:
+            adapter = self._registry.adapter(str(run["target_adapter_id"]))
+            final = await self._capture(adapter, workspace_id, policy)
+        except _OBSERVATION_FAILURES as failure:
+            await self._abandon_unobservable(workspace_id, run_id)
+            raise ApiError(
+                ApiErrorCode.TARGET_UNAVAILABLE,
+                "The target could not be observed, so this run has no verdict. It is "
+                "recorded as `error` with an `observation_unavailable` finding; reset "
+                "the workspace and arm again once the target answers.",
+            ) from failure
 
         # 3 — the core decides. Pure, and given only recorded evidence.
         evaluation = _evaluate(contract, adapter, events, initial=initial, final=final.as_context())
         findings = evaluation.all()
-        result = aggregate(findings)
+        result = _with_recorded_warnings(aggregate(findings), findings)
         terminal = _TERMINAL_STATE[result]
         guidance = derive_guidance(
             phase_for(has_contract=True, run_state=terminal), correlation_id=run_id
@@ -244,6 +352,97 @@ class VerificationService:
         observation = await adapter.observation_provider().capture(workspace_id)
         return redacted_observation(observation, policy)
 
+    # -- writing an explicit non-pass ----------------------------------------
+
+    async def _abandon_unobservable(self, workspace_id: str, run_id: str) -> None:
+        """Take a run whose final observation failed to `error` (§22, §16).
+
+        **`observation_unavailable`, not `harness_error`.** §22 distinguishes
+        them by whose failure it was: `observation_unavailable` is "required
+        state provider could not supply a value", and `harness_error` is "the
+        harness itself failed to complete verification". Everything caught here
+        came out of the provider or the transport underneath it — the harness
+        asked correctly and got nothing back — so blaming the harness would
+        misdirect whoever reads the finding, and would make the one
+        classification that means "we could not see the target" unreachable for
+        the case it was written for. `harness_error` stays for a failure in this
+        service's own work, which is what the generic 500 path already reports.
+        `error` is the run state because §16 offers `verifying` no other
+        non-verdict exit, and a verdict is precisely what is not available.
+
+        Writes in the same shape the seal does — one transaction, under the
+        workspace lock — so the finding, the events, and the terminal status
+        arrive together or not at all. The run is re-checked first: a reset may
+        have cancelled it while the capture was failing, and a cancellation
+        outranks this.
+        """
+        finding = _unobservable_finding()
+        guidance = derive_guidance(
+            phase_for(has_contract=True, run_state=RunState.ERROR), correlation_id=run_id
+        )
+
+        async with self._locks.hold(workspace_id), self._database.transaction() as work:
+            await _require_transition_still_legal(work, workspace_id, run_id, RunState.ERROR)
+
+            events = EventRepository(work)
+            await events.append(
+                run_id,
+                {
+                    "event_type": str(OutcomeEventType.VERIFICATION_STARTED.value),
+                    "actor": str(EventActor.HARNESS.value),
+                },
+            )
+            # No `snapshot_captured`: there is no snapshot. §16.1's per-check
+            # event still fires, because a finding nobody can find on the
+            # timeline is a finding a reader has to already know to look for.
+            await events.append(
+                run_id,
+                {
+                    "event_type": str(_check_event(finding).value),
+                    "actor": str(EventActor.HARNESS.value),
+                    "status": str(finding.status.value),
+                    "redacted_payload": {
+                        "check_id": finding.check_id,
+                        "check_type": str(finding.check_type.value),
+                        "severity": str(finding.severity.value),
+                        "classification": str(FailureClassification.OBSERVATION_UNAVAILABLE.value),
+                    },
+                },
+            )
+            await FindingRepository(work).add_all(run_id, [_finding_row(finding)])
+
+            # `overall_result` stays NULL, as it does on FR-008's ceiling trip:
+            # the column carries a business verdict and this run reached none.
+            # Writing one here — even "failed" — would say the contract was
+            # judged and lost, when it was never judged at all.
+            updated = await work.execute(
+                "UPDATE runs SET status = ?, completed_at = ? "
+                "WHERE id = ? AND workspace_id = ? AND status = ?",
+                (
+                    str(RunState.ERROR.value),
+                    work.now(),
+                    run_id,
+                    workspace_id,
+                    str(RunState.VERIFYING.value),
+                ),
+            )
+            if updated.rowcount == 0:
+                raise _verification_overtaken(None)
+
+            await events.append(
+                run_id,
+                {
+                    "event_type": str(OutcomeEventType.VERIFICATION_COMPLETED.value),
+                    "actor": str(EventActor.HARNESS.value),
+                    "status": str(RunState.ERROR.value),
+                    "redacted_payload": {
+                        "classification": str(FailureClassification.OBSERVATION_UNAVAILABLE.value),
+                        "reason": _UNOBSERVABLE_REASON,
+                    },
+                },
+            )
+            await GuidanceRecorder(work, workspace_id).transition(guidance, run_id=run_id)
+
     # -- writing the verdict -------------------------------------------------
 
     async def _seal(
@@ -256,7 +455,20 @@ class VerificationService:
         findings: Sequence[Finding],
         result: LayerResult,
     ) -> None:
-        """Snapshot, findings, events, and the terminal transition, together."""
+        """Snapshot, findings, events, and the terminal transition, together.
+
+        The run is re-read and the move re-validated before anything is written.
+        The seal began from a `verifying` run, but it began *before* the capture
+        and the report write, and nothing was held across those (ADR-0003). A
+        workspace reset is legal from every state (§16) and cancels every
+        non-terminal run, so a reset that landed in that window has already
+        committed `cancelled` — out of which §16 permits only `reset`. Sealing
+        over the top of it would resurrect a run the operator ended and produce a
+        timeline reading `run_cancelled`, then `verification_started`.
+        """
+        terminal = _TERMINAL_STATE[result]
+        await _require_transition_still_legal(work, workspace_id, run_id, terminal)
+
         events = EventRepository(work)
         await events.append(
             run_id,
@@ -306,7 +518,6 @@ class VerificationService:
 
         await FindingRepository(work).add_all(run_id, [_finding_row(f) for f in findings])
 
-        terminal = _TERMINAL_STATE[result]
         # §17.1: `comparison_key_hash` is "nullable until the run is terminal".
         # Computed here from the controlled inputs the run copied in at arming,
         # so two runs configured identically carry the same key and a reader can
@@ -315,9 +526,14 @@ class VerificationService:
             {**dict(run), "status": str(terminal.value)},
             trajectory=await ComparisonService(work, workspace_id).trajectory(run_id),
         ).comparison_key()
-        await work.execute(
+        # `AND status = 'verifying'` makes the guard above the database's rather
+        # than this function's. The re-read cannot be stale inside this
+        # transaction, but a conditional write is what survives a future caller
+        # that reaches the seal by another route — an unconditional UPDATE is
+        # how the verdict overwrote a cancellation in the first place.
+        updated = await work.execute(
             "UPDATE runs SET status = ?, overall_result = ?, completed_at = ?, "
-            "comparison_key_hash = ? WHERE id = ? AND workspace_id = ?",
+            "comparison_key_hash = ? WHERE id = ? AND workspace_id = ? AND status = ?",
             (
                 str(terminal.value),
                 str(result.value),
@@ -325,8 +541,11 @@ class VerificationService:
                 comparison_key,
                 run_id,
                 workspace_id,
+                str(RunState.VERIFYING.value),
             ),
         )
+        if updated.rowcount == 0:
+            raise _verification_overtaken(None)
         # `active_run_id` is deliberately *not* cleared. §11.5's diagram keeps a
         # workspace in `Passed`/`PassedWarnings`/`Failed` — showing that run's
         # findings — and leaves those states only by reset, which is where
@@ -359,6 +578,69 @@ class VerificationService:
         )
 
 
+async def _require_transition_still_legal(
+    work: UnitOfWork, workspace_id: str, run_id: str, target: RunState
+) -> None:
+    """Refuse to write a terminal state §16 no longer permits for this run.
+
+    The run is read through `WorkspaceScope`, so it is this workspace's run or it
+    is nothing (FR-006), and the move is judged by `validate_run_transition` —
+    the one authority on §16's table, and the check every other transition writer
+    already goes through. Deciding here instead would be a second opinion, and
+    the two would drift.
+    """
+    row = await WorkspaceScope(work, workspace_id).run(run_id)
+    current = RunState(str(row["status"]))
+    try:
+        validate_run_transition(current, target)
+    except TransitionError as invalid:
+        raise _verification_overtaken(current) from invalid
+
+
+def _verification_overtaken(current: RunState | None) -> ApiError:
+    """The refusal when the run moved out of `verifying` under a verification.
+
+    `RUN_IN_PROGRESS` because `api/errors.py` already maps the core's
+    `INVALID_STATE_TRANSITION` onto it, quoting §16's "invalid non-reset state
+    transitions shall return HTTP 409" — so this is the code a client already
+    branches on for an illegal run transition, and allocating a second one would
+    fork that vocabulary. It is 409 and not retryable, which is the honest
+    answer: repeating the request cannot succeed, because the run this verdict
+    belonged to no longer exists in a state that can receive one.
+
+    The cancellation stands. Nothing in this transaction is written, so the run
+    keeps the terminal state the reset gave it and the verdict is discarded
+    rather than applied — an operator who cancelled a run must not come back to
+    find it passed.
+    """
+    state = "no longer verifying" if current is None else f"now {current.value}"
+    return ApiError(
+        ApiErrorCode.RUN_IN_PROGRESS,
+        f"This run is {state}, so the verification that was in flight has no run to "
+        "seal. Its result was discarded and the run keeps the state it was moved to; "
+        "arm a new run to verify again.",
+        details=[{"path": "run.status", "message": "the run left `verifying` mid-verification"}],
+    )
+
+
+def _unobservable_finding() -> Finding:
+    """§22's `observation_unavailable`, as a finding an operator can read.
+
+    Critical and `observation_unavailable` rather than `failed`: §16.1 and the
+    `CheckStatus` vocabulary both keep "the check did not hold" apart from "the
+    evidence never arrived", and `aggregate` counts the second as failing
+    anyway, so the run can never read as passed on it.
+    """
+    return Finding(
+        check_id=_FINAL_OBSERVATION_CHECK_ID,
+        check_type=CheckType.POLICY,
+        status=CheckStatus.OBSERVATION_UNAVAILABLE,
+        severity=AssertionSeverity.CRITICAL,
+        classification=FailureClassification.OBSERVATION_UNAVAILABLE,
+        evidence={"reason": _UNOBSERVABLE_REASON},
+    )
+
+
 @dataclass(frozen=True)
 class Evaluation:
     """The findings, kept in the groups §23.1's layers are drawn from.
@@ -373,6 +655,13 @@ class Evaluation:
     assertions: tuple[Finding, ...]
     trajectory: Finding
     policies: tuple[Finding, ...]
+    #: §22's `tool_execution_error`, one per unexpected invocation failure.
+    #: Named separately because it answers §23.1's `tool_execution` question —
+    #: did the calls themselves work — rather than whether a contract term held,
+    #: and because no contract declares it: it is derived from the timeline. See
+    #: `_compose` for why the report is nonetheless handed these alongside the
+    #: policy findings.
+    execution: tuple[Finding, ...] = ()
     #: FR-157's full-state diff, or `None` when a snapshot was missing and no
     #: diff could be computed. Carried rather than recomputed at report time,
     #: because a report derived from a second diff could disagree with the
@@ -380,8 +669,23 @@ class Evaluation:
     changes: tuple[StateChange, ...] | None = None
 
     def all(self) -> tuple[Finding, ...]:
-        """Every finding, for the run-level aggregate and for persistence."""
-        return (*self.assertions, self.trajectory, *self.policies)
+        """Every finding, for the run-level aggregate and for persistence.
+
+        Execution findings belong here and not only in the `tool_execution`
+        layer. §22 lists `tool_execution_error` among the classifications a run
+        can carry, and a classification that never reaches a stored finding
+        cannot be chosen as `primary_failure`, cannot be read through
+        `get_run_findings`, and cannot enter a generated eval case's expected
+        set — which is to say it exists in the vocabulary and nowhere else.
+
+        No sort here on purpose. §22's total order — severity, then causal event
+        sequence, then `check_id` — is `Finding.sort_key`, applied by
+        `order_failures` and `primary_failure` wherever the order matters. Each
+        execution finding carries the sequence number of the invocation that
+        failed, which is what places it against the assertions that failure
+        caused.
+        """
+        return (*self.assertions, self.trajectory, *self.policies, *self.execution)
 
 
 def _evaluate(
@@ -431,6 +735,19 @@ def _evaluate(
                 effect_map=effect_map,
                 contract_paths=declared_contract_paths(contract),
                 changed_paths=None if changes is None else changed_paths_of(changes),
+                # FR-159's "with redacted before and after values". The diff
+                # already computed bounded excerpts either side of every changed
+                # path; passing only the path names threw them away here, which
+                # is why the finding could name a path but never say what it
+                # changed from. Both snapshots were redacted before persistence
+                # (�20.3), so these carry no value redaction would have removed.
+                changes=changes,
+                # FR-159's "with redacted before and after values". The diff
+                # already computed bounded excerpts either side of every changed
+                # path; passing only the path names threw them away here, which
+                # is why the finding could name a path but never say what it
+                # changed from. Both snapshots were redacted before persistence
+                # (§20.3), so these carry no value redaction would have removed.
                 # 014-T4. Read from the recorded timeline by the same core
                 # function §24 replay uses, so a replayed run and its source
                 # judge the same events the same way. Absent captures leave
@@ -441,6 +758,12 @@ def _evaluate(
                 identity_mismatches=mismatched_tools,
             ),
         ),
+        # §22's `tool_execution_error`, from the same recorded timeline the
+        # `tool_execution` layer is derived from. The layer says an invocation
+        # failed; this is the finding that says *which* one, and it is the only
+        # form of that fact a report, a comparison, or an eval expectation can
+        # read (FR-033's safe blocks produce none, which the core decides).
+        execution=execution_findings(events),
         changes=changes,
     )
 
@@ -479,8 +802,6 @@ def _undeclared_changes_block(evaluation: Evaluation) -> UndeclaredChangesBlock 
 
 def _check_event(finding: Finding) -> OutcomeEventType:
     """§16.1's per-check event, chosen by what the finding is about."""
-    from actionwitness_core.engine.enums import CheckType
-
     if finding.check_type is CheckType.POLICY:
         return OutcomeEventType.POLICY_EVALUATED
     return OutcomeEventType.ASSERTION_EVALUATED
@@ -575,7 +896,17 @@ def _compose(
             content_hash=str(run["contract_content_hash"]),
         ),
         assertion_findings=evaluation.assertions,
-        policy_findings=evaluation.policies,
+        # Execution findings ride with the policies because the report has to
+        # see every finding the run was sealed on. `compose_outcome_report`
+        # derives `status`, `counts.critical_failures`, and `primary_failure`
+        # from what it is handed, and `_seal` aggregates `evaluation.all()` — so
+        # withholding these would produce a report reading `passed` over a run
+        # row reading `failed`, which is the disagreement this whole module is
+        # arranged to prevent. The core already types them `check_type: policy`,
+        # and they are what a `safety_policy` reader has to account for: the
+        # `tool_execution` layer names the same failure separately, so nothing
+        # is hidden by the pairing.
+        policy_findings=(*evaluation.policies, *evaluation.execution),
         trajectory_finding=evaluation.trajectory,
         # §23.1's partition block. Present only when the policy was actually
         # evaluated: a block reading "0 changed, 0 undeclared" on a run with no

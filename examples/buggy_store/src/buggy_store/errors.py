@@ -31,6 +31,7 @@ __all__ = [
     "ProductNotFound",
     "StoreError",
     "StoreErrorCode",
+    "UnexpectedStoreFailure",
     "ValidationFailed",
 ]
 
@@ -47,6 +48,7 @@ class StoreErrorCode(StrEnum):
     CONFIRMATION_NOT_APPROVED = "CONFIRMATION_NOT_APPROVED"
     FAULT_PROFILE_UNAVAILABLE = "FAULT_PROFILE_UNAVAILABLE"
     WORKSPACE_NOT_FOUND = "WORKSPACE_NOT_FOUND"
+    STORE_ERROR = "STORE_ERROR"
 
 
 class StoreError(Exception):
@@ -140,3 +142,33 @@ class ConfirmationRequired(StoreError):
 
     code = StoreErrorCode.CONFIRMATION_REQUIRED
     http_status = 409
+
+
+class UnexpectedStoreFailure(StoreError):
+    """The terminal mapping for a failure the store did not anticipate.
+
+    Every other code in this module names a condition the store decided to
+    refuse. This one names the absence of such a decision: something raised that
+    no handler expected, and the alternative to giving it an envelope is
+    FastAPI's default 500 body — a second wire shape, carrying whatever text the
+    exception happened to hold. §15.8 forbids an internal detail reaching a
+    browser tool, and an unanticipated exception is precisely the case where the
+    message is most likely to name a table, a path, or a submitted value.
+
+    So the message is fixed and `details` stays empty. Nothing about the cause
+    is forwarded; the cause belongs in the server log, which is not the
+    response. `retryable` is false because the store does not know whether the
+    failure landed — an ambiguous outcome is never marked retryable
+    (constitution §5).
+
+    Project-allocated, mirroring the harness's `HARNESS_ERROR` in role. §15.8
+    fixes no store-side spelling for this condition, and the two services keep
+    separate vocabularies precisely so a reader can tell which one failed.
+    """
+
+    code = StoreErrorCode.STORE_ERROR
+    http_status = 500
+    retryable = False
+
+    def __init__(self) -> None:
+        super().__init__("The store could not complete the request.")

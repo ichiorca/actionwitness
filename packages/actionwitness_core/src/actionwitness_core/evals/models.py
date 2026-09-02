@@ -25,11 +25,11 @@ compares outcomes, which is all a target-neutral core can honestly do.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Annotated, Literal
+from typing import Annotated, Literal, assert_never
 
 from pydantic import Field, StringConstraints, model_validator
 
-from actionwitness_core.contracts.enums import AssertionSeverity
+from actionwitness_core.contracts.enums import AssertionSeverity, PolicyType
 from actionwitness_core.contracts.models import OutcomeContract
 from actionwitness_core.engine.enums import CheckStatus, FailureClassification
 from actionwitness_core.evals.enums import (
@@ -44,6 +44,7 @@ from actionwitness_core.security.canonical import canonical_text, document_conte
 
 __all__ = [
     "CASE_SCHEMA_VERSION",
+    "POLICY_CRITICAL_CLASSIFICATIONS",
     "EmbeddedContract",
     "EnvironmentExpectation",
     "EvalExpectations",
@@ -53,12 +54,15 @@ __all__ = [
     "EvalTarget",
     "RecordedDecision",
     "RegressionEvalCase",
+    "ReplayComparison",
     "ReplayConfiguration",
     "SourceFinding",
     "SurfaceDelta",
     "SurfaceEvidence",
     "TrajectoryStep",
+    "compare_replay_to_expectation",
     "expectation_matches",
+    "policy_critical_classifications",
 ]
 
 type Identifier = Annotated[str, StringConstraints(min_length=1, max_length=128)]
@@ -399,12 +403,137 @@ class RegressionEvalCase(CoreModel):
         return canonical_text(self.as_stored_document()).encode("utf-8")
 
 
+def policy_critical_classifications(
+    policy_type: PolicyType,
+) -> frozenset[FailureClassification]:
+    """Which §22 classifications a §9.5 policy can contribute to a critical set.
+
+    §24.3a excludes a policy that cannot be evaluated "from both the actual and
+    the expected critical-classification sets" — and the two sides of that
+    sentence speak different vocabularies. A case names *policies*
+    (`stable_tool_surface`); a classification set names *classifications*
+    (`tool_surface_mutation`). The two enums are closed and provably disjoint,
+    so the exclusion is a translation, not a filter: comparing a policy name
+    against a classification value excludes nothing at all, and an eval that
+    excluded nothing would fail a case for the very policy it had already
+    declared unevaluable.
+
+    This is the one place that relates the two. `engine.policies` chooses these
+    classifications when a policy fails; this function says which ones a policy
+    can produce, so a §24.3a exclusion removes exactly what that policy would
+    have put in the set and nothing else.
+
+    Exhaustive by `assert_never`, the same rule `evaluate_policy` applies at the
+    other end. The table below is built by walking the enum at import time, so a
+    seventh policy type with no case here raises the moment the module loads
+    rather than quietly returning an empty set — a policy nobody mapped would
+    otherwise be a policy nobody excludes, which is the no-op this replaces.
+
+    Only what a policy produces as its *own verdict about the target* is listed.
+    `observation_unavailable` is deliberately absent although three policies can
+    raise it: it is the shared "the evidence could not answer" row, reachable
+    from the assertion path too, and dropping it on one policy's account would
+    quietly remove another check's unresolved evidence — degrading precisely the
+    explicit non-pass constitution §5 keeps visible.
+    """
+    match policy_type:
+        case PolicyType.REQUIRES_CONFIRMATION:
+            return frozenset({FailureClassification.MISSING_CONFIRMATION})
+        case PolicyType.IDEMPOTENT_BY_REQUEST_ID:
+            return frozenset({FailureClassification.IDEMPOTENCY_VIOLATION})
+        case PolicyType.MAXIMUM_MUTATIONS:
+            # §22 publishes no row of its own for the limit policy, so the engine
+            # reports the closest published one rather than inventing a
+            # thirteenth. The exclusion has to follow it there: mapping this
+            # policy to nothing would leave its expectation stranded.
+            return frozenset({FailureClassification.IDEMPOTENCY_VIOLATION})
+        case PolicyType.FORBIDDEN_TOOL:
+            return frozenset({FailureClassification.UNEXPECTED_TOOL})
+        case PolicyType.NO_UNDECLARED_CHANGES:
+            return frozenset({FailureClassification.UNDECLARED_STATE_CHANGE})
+        case PolicyType.STABLE_TOOL_SURFACE:
+            return frozenset({FailureClassification.TOOL_SURFACE_MUTATION})
+    assert_never(policy_type)
+
+
+#: The same relation as a table, built from the function above rather than
+#: written out beside it. Totality is then a property of the enum instead of
+#: something a future author has to remember, and the two can never disagree.
+POLICY_CRITICAL_CLASSIFICATIONS: Mapping[PolicyType, frozenset[FailureClassification]] = {
+    policy_type: policy_critical_classifications(policy_type) for policy_type in PolicyType
+}
+
+
+class ReplayComparison(CoreModel):
+    """§24.3a's exclusion applied and §24.1's comparison made, together.
+
+    Returned as one value because a report has to show the same sets the verdict
+    was reached on. Handing back only `matched` would send the caller off to
+    re-derive the excluded sets for its report, and two derivations of one rule
+    drift — the report would then name classifications the verdict never saw.
+    """
+
+    matched: bool
+    #: Both sides after the exclusion, in the order they arrived.
+    actual_classifications: tuple[FailureClassification, ...] = ()
+    expected_classifications: tuple[FailureClassification, ...] = ()
+    #: The policies §24.3a requires the report to name, deduplicated and sorted.
+    excluded_policies: tuple[str, ...] = ()
+    #: What those policies removed from both sides. Reported so a reader can see
+    #: that an exclusion did something, which the defect this replaces did not.
+    excluded_classifications: tuple[FailureClassification, ...] = ()
+
+
+def compare_replay_to_expectation(
+    expectation: EnvironmentExpectation,
+    *,
+    actual_result: LayerResult,
+    actual_classifications: Sequence[FailureClassification],
+    non_replayable_policies: Sequence[str] = (),
+) -> ReplayComparison:
+    """§24.3a's exclusion, then §24.1's comparison — in that order, in one place.
+
+    The only place either side of the comparison is narrowed. `expectation_matches`
+    below compares exactly what it is handed, so there is one implementation of
+    "excluded from both sets" and nothing downstream can apply it a second time,
+    partially, or not at all.
+
+    A name outside the closed §9.5 vocabulary excludes nothing. A case is
+    untrusted input (constitution §5) and an unrecognised policy name cannot be
+    translated into the classification it would have produced; guessing is not
+    available, so the safe direction is to keep checking. That can only make an
+    eval fail visibly, never make one pass by dropping a classification nobody
+    chose. The name is still reported, because §24.3a's other half is that an
+    unevaluated policy is never silent.
+    """
+    excluded: set[FailureClassification] = set()
+    for name in non_replayable_policies:
+        try:
+            policy_type = PolicyType(name)
+        except ValueError:
+            continue
+        excluded |= POLICY_CRITICAL_CLASSIFICATIONS[policy_type]
+
+    actual = tuple(item for item in actual_classifications if item not in excluded)
+    expected = tuple(item for item in expectation.required_classifications if item not in excluded)
+    return ReplayComparison(
+        matched=expectation_matches(
+            expectation.model_copy(update={"required_classifications": expected}),
+            actual_result=actual_result,
+            actual_classifications=actual,
+        ),
+        actual_classifications=actual,
+        expected_classifications=expected,
+        excluded_policies=tuple(sorted(set(non_replayable_policies))),
+        excluded_classifications=tuple(sorted(excluded)),
+    )
+
+
 def expectation_matches(
     expectation: EnvironmentExpectation,
     *,
     actual_result: LayerResult,
     actual_classifications: Sequence[FailureClassification],
-    non_replayable: Sequence[str] = (),
 ) -> bool:
     """Whether a replay met its expectation (§24.1, §24.3).
 
@@ -412,11 +541,11 @@ def expectation_matches(
     different failure than the one the case was cut from, and a suite that
     accepted supersets would pass while a new regression rode along inside it.
 
-    `non_replayable` is accepted so a caller cannot forget that §24.3a excludes
-    unevaluable policies from *both* sides; it is unused in the comparison
-    itself because those classifications were already removed from both sets
-    before they arrived here, and taking the argument keeps that visible at
-    every call site.
+    Both arguments are compared exactly as given. §24.3a's exclusion of
+    unevaluable policies is *not* applied here: `compare_replay_to_expectation`
+    owns it and calls this with both sides already narrowed. An earlier signature
+    took the excluded policies as a documented no-op, which read as though the
+    rule were enforced somewhere in this call — it was not enforced anywhere.
     """
     if actual_result is not expectation.overall_result:
         return False

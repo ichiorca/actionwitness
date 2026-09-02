@@ -21,10 +21,18 @@ at concurrent creations, and one that checked after would have already written.
 further target actions, and preserve existing evidence." All three writes happen
 in the caller's single transaction, so a crash between them is not a state where
 the run is stopped but nobody recorded the stop.
+
+One of FR-008's ceilings is not a row count at all: "two concurrent event-stream
+connections" counts *connections held right now*, which no table records.
+`EventStreamSlots` at the bottom of this file is that one, and it is deliberately
+here rather than beside the SSE transport — FR-008's numbers stay in one file, and
+the sentence that declares this cap is the same sentence that declares the others.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Final
 
 from actionwitness_core.journeys.enums import EventActor, OutcomeEventType, RunState
@@ -46,6 +54,7 @@ __all__ = [
     "SHOPIFY_PAIRINGS_PER_WORKSPACE",
     "SUITES_PER_WORKSPACE",
     "TRIALS_PER_SUITE",
+    "EventStreamSlots",
     "WorkspaceCeilings",
 ]
 
@@ -214,3 +223,94 @@ class WorkspaceCeilings:
     @staticmethod
     def _exceeded(reason: str) -> ApiError:
         return ApiError(ApiErrorCode.WORKSPACE_LIMIT_EXCEEDED, f"{reason} {_REMEDY}")
+
+
+class EventStreamSlots:
+    """FR-008's "two concurrent event-stream connections", counted per workspace.
+
+    Every other ceiling in this file counts rows, so the database answers "how
+    many are there" and a transaction makes the answer trustworthy. This one
+    counts *connections currently held open*, which nothing persists: an SSE
+    response is a live object in one process, and it stops existing when that
+    process does.
+
+    **So this is per-process, in-memory state, and that is the whole of its
+    reach.** It does not survive a restart — after which every workspace starts
+    from zero, which is correct, because the connections it was counting died
+    with the process. It does not span workers either; §29.1 deploys a single
+    worker over one SQLite file, and a second worker would give each its own
+    counter and therefore each its own allowance. That is a deployment-shape
+    dependency worth stating out loud rather than a limitation to hide: moving
+    to multiple workers means moving this count somewhere both can see.
+
+    **The map is bounded by what is open, not by what has been seen.** A
+    workspace's entry appears when it opens its first stream and is deleted as
+    its last one closes, the same reference-counting `WorkspaceLocks` uses and
+    for the same reason: FR-009's workspaces are anonymous and cheap to create,
+    so a dictionary that kept one entry per workspace *ever* observed would be a
+    slow leak fed entirely by anonymous traffic — the leak class `release_idle`
+    exists to prevent for the rate limiter's buckets. Counting down to zero is
+    stronger than a periodic sweep, because it never leaves an entry alive
+    between sweeps; `release_idle` is kept for parity and for a test that wants
+    to say the map really is empty rather than believe it.
+    """
+
+    def __init__(self, *, ceiling: int = CONCURRENT_EVENT_STREAMS) -> None:
+        self._open: dict[str, int] = {}
+        self._ceiling = ceiling
+
+    def __len__(self) -> int:
+        """Workspaces holding at least one stream. Zero when nothing is open."""
+        return len(self._open)
+
+    def open_streams(self, workspace_id: str) -> int:
+        """How many streams this workspace holds right now."""
+        return self._open.get(workspace_id, 0)
+
+    @contextmanager
+    def reserve(self, workspace_id: str) -> Iterator[None]:
+        """Hold one of this workspace's stream slots, or refuse the connection.
+
+        Synchronous on purpose. There is no `await` between reading the count and
+        incrementing it, so two connections arriving in the same tick cannot both
+        see room and both take the last slot — the atomicity is a property of the
+        code's shape rather than of a lock somebody has to remember to hold.
+
+        A context manager rather than a pair of methods for the same reason: the
+        release is the caller's `finally` whether it exits normally, by
+        cancellation, or by exception. A leaked slot would lower this workspace's
+        ceiling for the life of the process, which is worse than no ceiling at
+        all — a cap that only ever shrinks eventually refuses everything.
+        """
+        held = self._open.get(workspace_id, 0)
+        if held >= self._ceiling:
+            raise ApiError(
+                ApiErrorCode.WORKSPACE_LIMIT_EXCEEDED,
+                f"This workspace may hold {self._ceiling} concurrent event-stream "
+                f"connections; {held} are open. Close one, or read the same timeline "
+                "from the paged events endpoint.",
+            )
+        self._open[workspace_id] = held + 1
+        try:
+            yield
+        finally:
+            self._release(workspace_id)
+
+    def release_idle(self) -> int:
+        """Drop every workspace holding no streams. Returns how many went.
+
+        Normally finds nothing: `reserve` already deletes an entry as its last
+        stream closes. It exists so a periodic pass can call it without knowing
+        that, and so a test can show the map is bounded rather than assume it.
+        """
+        idle = [key for key, held in self._open.items() if held <= 0]
+        for key in idle:
+            del self._open[key]
+        return len(idle)
+
+    def _release(self, workspace_id: str) -> None:
+        remaining = self._open.get(workspace_id, 0) - 1
+        if remaining > 0:
+            self._open[workspace_id] = remaining
+            return
+        self._open.pop(workspace_id, None)

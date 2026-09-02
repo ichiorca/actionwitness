@@ -86,6 +86,55 @@ class ImportedSuite:
         return tuple(trial.external_trial_id for trial in self.trials if not trial.addressable)
 
 
+@dataclass(frozen=True, slots=True)
+class PreparedImport:
+    """What an import needs from the suite, read before anything is written.
+
+    ADR-0003 puts the source artifact's file write *between* the read and the
+    recording transaction, so the refusals that used to happen after the write
+    have to happen before it. Reading the mode here is what lets normalization
+    and the write run outside a transaction; `record_import` re-checks the same
+    draft rule when it commits.
+    """
+
+    correlation_mode: CorrelationMode
+    source_kind: str
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedFinalization:
+    """Everything finalization decided, before anything is written.
+
+    §16.4's atomicity is unchanged by the split: every refusal — the transition,
+    the trials, `BenchmarkReport`'s own validators — still happens here, before
+    a byte reaches disk, so a refusal leaves no file and no row.
+    """
+
+    benchmark_id: str
+    report: BenchmarkReport
+    correlation_mode: CorrelationMode
+    source_kind: str
+    target_status: BenchmarkStatus
+    source_artifact_id: str | None
+
+
+def write_benchmark_report(store: Any, workspace_id: str, prepared: PreparedFinalization) -> Any:
+    """FR-094's derived artifact, written outside every transaction (ADR-0003).
+
+    Deliberately a free function rather than a `BenchmarkService` method: the
+    service is bound to a `UnitOfWork`, and this must run when no unit of work is
+    open. A file write inside `BEGIN IMMEDIATE` holds SQLite's single writer
+    against every other workspace for as long as the write takes.
+    """
+    return store.write(
+        workspace_id,
+        prepared.benchmark_id,
+        prepared.report.as_stored_document(),
+        artifact_type="benchmark_report",
+        schema_version=BENCHMARK_SCHEMA_VERSION,
+    )
+
+
 class BenchmarkService:
     """One workspace's benchmark suites."""
 
@@ -141,6 +190,21 @@ class BenchmarkService:
             ),
         )
         return benchmark_id
+
+    async def prepare_import(self, benchmark_id: str) -> PreparedImport:
+        """What normalization needs, refused here if the suite is past `draft`.
+
+        ADR-0003 moves the source artifact's file write out of the recording
+        transaction, which means the draft check has to run before it: a suite
+        that refuses the import must not leave an evaluator report on disk that
+        no trial references. `record_import` re-applies the same rule when it
+        commits, so this is an early refusal rather than the only one.
+        """
+        suite = await self._draft(benchmark_id)
+        return PreparedImport(
+            correlation_mode=CorrelationMode(str(suite["correlation_mode"])),
+            source_kind=str(suite["source_kind"]),
+        )
 
     async def record_import(
         self,
@@ -448,15 +512,16 @@ class BenchmarkService:
         await self._set_status(benchmark_id, target)
         return target
 
-    async def finalize(self, benchmark_id: str, store: Any) -> str:
-        """FR-094: one immutable derived artifact, committed with the suite.
+    async def prepare_finalize(self, benchmark_id: str) -> PreparedFinalization:
+        """Decide the whole finalization, and write nothing (FR-094, §16.4).
 
         **Atomic in the sense §16.4 means it.** Everything that could refuse —
-        the transition, the trials, the report's own validators — happens before
-        anything is written, so a refusal leaves no partial result to clean up.
-        The artifact row and the suite's `result_artifact_id` then go into the
-        same transaction as this call, so a reader never sees a completed suite
-        pointing at nothing, or an artifact no suite claims.
+        the transition, the trials, the report's own validators — happens here,
+        before anything is written, so a refusal leaves no partial result to
+        clean up. `write_benchmark_report` then writes the file with no
+        transaction open, and `seal_finalize` commits the artifact row and the
+        suite's `result_artifact_id` together, so a reader never sees a completed
+        suite pointing at nothing, or an artifact no suite claims.
 
         The report *references* its sources by hash and never contains them.
         §7's non-goal is explicit that an immutable source outcome report is
@@ -476,9 +541,6 @@ class BenchmarkService:
         sources = self._source_artifacts(rows)
         manifest = self._manifest_of(suite, summary, await self._hashes_of(sources))
 
-        # Constructed before anything is written: `BenchmarkReport`'s own
-        # validators refuse a mixed-mode population, and a refusal must not
-        # leave a file or a row behind.
         report = BenchmarkReport(
             benchmark_id=benchmark_id,
             manifest=manifest,
@@ -488,25 +550,46 @@ class BenchmarkService:
             by_failure_profile=summary.by_failure_profile,
             trials=summary.trials,
         )
+        return PreparedFinalization(
+            benchmark_id=benchmark_id,
+            report=report,
+            correlation_mode=mode,
+            source_kind=str(suite["source_kind"]),
+            target_status=target,
+            # FR-094's derived→source link. One report may draw on one imported
+            # artifact today; the first is recorded here and every hash is in
+            # the manifest, so nothing is lost if that ever becomes several.
+            source_artifact_id=sources[0] if sources else None,
+        )
 
-        written = store.write(
-            self._workspace_id,
-            benchmark_id,
-            report.as_stored_document(),
-            artifact_type="benchmark_report",
-            schema_version=BENCHMARK_SCHEMA_VERSION,
+    async def seal_finalize(
+        self, benchmark_id: str, prepared: PreparedFinalization, written: Any, store: Any
+    ) -> str:
+        """Commit the derived artifact and the suite together (FR-094, §16.4).
+
+        The transition is re-checked here rather than trusted from `prepared`.
+        The caller holds the workspace lock across both transactions, so the
+        status cannot move in between today — but this method is what actually
+        writes `completed`, and a state check that lives only in the phase before
+        the file write would be a check the committing transaction never made.
+        """
+        suite = await self.get(benchmark_id)
+        target = require_transition(
+            BenchmarkStatus(str(suite["status"])),
+            BenchmarkStatus.COMPLETED,
+            correlation_mode=CorrelationMode(str(suite["correlation_mode"])),
         )
         artifact_id = await store.record(
             self._work,
             self._workspace_id,
             None,
             written,
-            metadata={"correlation_mode": mode.value, "source_kind": str(suite["source_kind"])},
+            metadata={
+                "correlation_mode": prepared.correlation_mode.value,
+                "source_kind": prepared.source_kind,
+            },
             benchmark_suite_id=benchmark_id,
-            # FR-094's derived→source link. One report may draw on one imported
-            # artifact today; the first is recorded here and every hash is in
-            # the manifest, so nothing is lost if that ever becomes several.
-            source_artifact_id=sources[0] if sources else None,
+            source_artifact_id=prepared.source_artifact_id,
         )
         await self._work.execute(
             "UPDATE benchmark_suites SET status = ?, result_artifact_id = ?, "

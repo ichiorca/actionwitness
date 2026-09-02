@@ -158,7 +158,15 @@ def test_nothing_binds_a_trial_without_being_told_to() -> None:
         # artifact, and §16.4's error path. None of them binds anything: by the
         # time a suite reaches `ready` its bindings are already frozen.
         "start",
-        "finalize",
+        # ADR-0003 split finalization in three so the report's file write
+        # happens with no transaction open. Neither half binds anything:
+        # `prepare_finalize` reads and composes, `seal_finalize` records the
+        # artifact the other one described. The same applies to
+        # `prepare_import`, which only reads what normalization needs and
+        # refuses a suite past `draft` before a byte is written.
+        "prepare_import",
+        "prepare_finalize",
+        "seal_finalize",
         "mark_error",
         # 010-T6. Seals FR-100's approved variants into the manifest while the
         # suite is still `draft`. It binds no trial: no trial exists yet.

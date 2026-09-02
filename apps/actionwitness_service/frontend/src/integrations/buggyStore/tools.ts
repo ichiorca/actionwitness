@@ -75,6 +75,8 @@ async function invoke(
       return value as Record<string, unknown>;
     },
   });
+  failedInvocation(body);
+
   const confirmation = body["confirmation"];
   return {
     status: typeof body["status"] === "string" ? body["status"] : "completed",
@@ -86,6 +88,48 @@ async function invoke(
         : null,
     body,
   };
+}
+
+/** The terminal event of an invocation that ran and did not succeed. */
+const FAILED_TERMINAL_EVENT = "tool_invocation_failed";
+
+/**
+ * Throw when the harness recorded this invocation as failed (§11.4, §14.8).
+ *
+ * The route answers `200` for an invocation that *completed the round trip*,
+ * whether or not the target did what was asked: the harness itself worked, so
+ * the HTTP status is about the harness. The tool's own outcome lives in
+ * `terminal_event`, and until this existed nothing read it — so a mutation
+ * refused for a reused idempotency key resolved as an ordinary value, the
+ * adapter normalized it as a success, and an agent branching on `isError` was
+ * told a refused mutation had worked. That is the exact reading §14.8 forbids
+ * for a denied confirmation, and a refusal is a refusal whichever rail produced
+ * it.
+ *
+ * Thrown rather than returned as a flag, because `useHarnessTool` and
+ * `useNativeTool` already turn a throw into `normalizeError`'s bounded
+ * `isError` result. A second path to the same shape would eventually disagree
+ * with the first.
+ *
+ * The message is the server's own summary, which §20 already keeps free of
+ * internals; the error code is appended because it is the stable token an agent
+ * can branch on when the prose changes.
+ */
+function failedInvocation(body: Record<string, unknown>): void {
+  if (body["terminal_event"] !== FAILED_TERMINAL_EVENT) {
+    return;
+  }
+  const reported = body["reported"];
+  const detail = typeof reported === "object" && reported !== null
+    ? (reported as Record<string, unknown>)
+    : {};
+  const summary = typeof detail["summary"] === "string" ? detail["summary"] : "";
+  const code = typeof detail["error_code"] === "string" ? detail["error_code"] : "";
+  throw new Error(
+    summary === ""
+      ? `The target refused the call${code === "" ? "." : ` (${code}).`}`
+      : `${summary}${code === "" ? "" : ` (${code})`}`,
+  );
 }
 
 export interface StoreToolset {
@@ -151,10 +195,16 @@ export function useBuggyStoreTools(
     },
     annotations: { readOnlyHint: false },
     enabled: active,
+    // Refreshed in a `finally`: a refused mutation still appended events, so
+    // the phase the server reports may have moved even though nothing changed.
+    // Leaving the page on its pre-call reading would be a UI that disagrees
+    // with the timeline it is displaying.
     execute: async (args: Record<string, unknown>) => {
-      const outcome = await invoke(runId ?? "", UPDATE_CART, args);
-      await refresh();
-      return outcome.body;
+      try {
+        return (await invoke(runId ?? "", UPDATE_CART, args)).body;
+      } finally {
+        await refresh();
+      }
     },
   });
 
@@ -170,9 +220,11 @@ export function useBuggyStoreTools(
     annotations: { readOnlyHint: false },
     enabled: active,
     execute: async (args: Record<string, unknown>) => {
-      const outcome = await invoke(runId ?? "", APPLY_DISCOUNT, args);
-      await refresh();
-      return outcome.body;
+      try {
+        return (await invoke(runId ?? "", APPLY_DISCOUNT, args)).body;
+      } finally {
+        await refresh();
+      }
     },
   });
 
@@ -196,8 +248,12 @@ export function useBuggyStoreTools(
     enabled: active,
     execute: async (args, { signal }) => {
       const current = runId ?? "";
-      const first = await invoke(current, PROCEED_TO_CHECKOUT, args, signal);
-      await refresh();
+      let first: InvokeOutcome;
+      try {
+        first = await invoke(current, PROCEED_TO_CHECKOUT, args, signal);
+      } finally {
+        await refresh();
+      }
 
       if (first.status !== "awaiting_confirmation" || first.confirmationId === null) {
         // Either the contract did not protect this tool, or the run already

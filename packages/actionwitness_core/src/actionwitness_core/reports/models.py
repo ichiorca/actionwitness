@@ -35,7 +35,8 @@ from typing import Annotated
 from pydantic import Field, StringConstraints, model_validator
 
 from actionwitness_core.contracts.enums import AssertionSeverity
-from actionwitness_core.contracts.paths import ObservationPathField
+from actionwitness_core.contracts.paths import ObservationPath, ObservationPathField
+from actionwitness_core.engine.diff import MAX_CHANGE_EXCERPT_CHARS
 from actionwitness_core.engine.enums import CheckStatus, FailureClassification
 from actionwitness_core.engine.findings import Finding, aggregate, primary_failure
 from actionwitness_core.evidence.models import RunEvent, ordered
@@ -55,6 +56,7 @@ from actionwitness_core.reports.enums import (
 from actionwitness_core.security.canonical import content_hash
 
 __all__ = [
+    "NO_ATTRIBUTED_CAUSE",
     "REPORT_SCHEMA_VERSION",
     "ContractReference",
     "CountsBlock",
@@ -63,13 +65,20 @@ __all__ = [
     "OutcomeReport",
     "ScenarioReference",
     "TargetReference",
+    "UndeclaredChange",
     "UndeclaredChangesBlock",
     "compose_outcome_report",
+    "recorded_warnings",
 ]
 
 #: Bumped when the report *shape* changes, not when a value does. §17.1 stores
 #: this beside the document so a reader knows which shape a stored hash covers.
-REPORT_SCHEMA_VERSION = "1.0"
+#:
+#: 1.1 — `undeclared_changes.paths` carries §23.1's `{path, before, after,
+#: attributed_cause}` objects instead of bare path strings, which FR-159
+#: requires and which a reader cannot recover from a 1.0 document. A stored 1.0
+#: report is still readable as the document it is; it simply records less.
+REPORT_SCHEMA_VERSION = "1.1"
 
 type Identifier = Annotated[str, StringConstraints(min_length=1, max_length=128)]
 type ContentHash = Annotated[str, StringConstraints(pattern=r"^sha256:[0-9a-f]{64}$")]
@@ -163,6 +172,14 @@ class CountsBlock(CoreModel):
     `tool_calls` counts actor-`agent` invocation starts only. §23.1 keeps
     actor-`eval` starts in the eval report as "replayed tool calls", so a replay
     can never inflate the number of calls an agent is credited with.
+
+    `warnings` has two sources, because §9.5 defines two kinds of warning and
+    only one of them is a failure. A warning-severity *failed* assertion is one.
+    The other is a check that **held** while recording something a reader must
+    still see - §9.5's `description_change`, which "should not fail a run" and
+    which, counted nowhere, made a drifting tool surface report as an unqualified
+    `passed`. Both are counted here so `passed_with_warnings` means what §8.5's
+    label says it means, and neither turns a passing check into a failing one.
     """
 
     critical_failures: Annotated[int, Field(ge=0)] = 0
@@ -192,19 +209,66 @@ class GuidanceReference(CoreModel):
         return {"actor": self.actor.value, "action": self.action, "reason": self.reason}
 
 
+#: The `attributed_cause` a path entry carries when nothing explains it. FR-159:
+#: "`none` is an ordinary outcome, not an error, and is exactly what a change
+#: from an unrelated background process should produce."
+NO_ATTRIBUTED_CAUSE = "none"
+
+
+class UndeclaredChange(CoreModel):
+    """One undeclared path, with what it was, what it became, and who to ask.
+
+    §23.1 shows these as objects rather than strings, and FR-159 says why: the
+    finding must "list the paths **with redacted before and after values**, and
+    attribute a likely cause". A bare path tells a reader that something moved
+    and refuses to say what — which is an alert, not evidence, and leaves them
+    reopening the run to learn anything.
+
+    `before` and `after` are the diff's own bounded excerpts, carried through
+    unchanged. They were redacted before either snapshot was persisted (§20.3
+    redacts "before persistence, hashing, or export") and bounded when they were
+    rendered, and the length cap is re-declared here so the report boundary
+    enforces its own budget rather than trusting the producer. `None` is a side
+    that does not exist — an added path has no `before` — and is distinct from
+    the string `"null"`, which is a present JSON null.
+    """
+
+    path: ObservationPathField
+    before: Annotated[str, Field(max_length=MAX_CHANGE_EXCERPT_CHARS)] | None = None
+    after: Annotated[str, Field(max_length=MAX_CHANGE_EXCERPT_CHARS)] | None = None
+    #: FR-159's adjacency attribution, as the short string §23.1 renders:
+    #: `none`, `tool_action:<tool>@<sequence>`, or
+    #: `human_confirmation@<sequence>`. The auditable object behind it is the
+    #: finding's `attributed_cause` (§17.1).
+    attributed_cause: str = NO_ATTRIBUTED_CAUSE
+
+    def canonical_document(self) -> dict[str, JsonValue]:
+        return {
+            "path": str(self.path),
+            "before": self.before,
+            "after": self.after,
+            "attributed_cause": self.attributed_cause,
+        }
+
+
 class UndeclaredChangesBlock(CoreModel):
     """The §9.10 partition, as §23.1 presents it.
 
     `applied_exemptions` and `effect_metadata_published` are both present so a
     waiver is never invisible and a reader can tell "nothing was undeclared" from
     "the adapter published no effect metadata, so everything was".
+
+    `paths` carries `UndeclaredChange` entries rather than path strings, which is
+    what §23.1's own sample shows and what FR-159 requires. The counts beside it
+    are still counts of *paths*, so `undeclared == len(paths)` and a reader who
+    only wants the totals never has to walk the list.
     """
 
     changed_paths: Annotated[int, Field(ge=0)] = 0
     declared: Annotated[int, Field(ge=0)] = 0
     undeclared: Annotated[int, Field(ge=0)] = 0
     effect_metadata_published: bool = False
-    paths: tuple[ObservationPathField, ...] = ()
+    paths: tuple[UndeclaredChange, ...] = ()
     applied_exemptions: tuple[ObservationPathField, ...] = ()
 
     def canonical_document(self) -> dict[str, JsonValue]:
@@ -213,7 +277,7 @@ class UndeclaredChangesBlock(CoreModel):
             "declared": self.declared,
             "undeclared": self.undeclared,
             "effect_metadata_published": self.effect_metadata_published,
-            "paths": [str(path) for path in self.paths],
+            "paths": [change.canonical_document() for change in self.paths],
             "applied_exemptions": [str(path) for path in self.applied_exemptions],
         }
 
@@ -310,6 +374,33 @@ class OutcomeReport(CoreModel):
         return {**self.canonical_document(), "content_hash": self.content_hash()}
 
 
+def recorded_warnings(finding: Finding) -> tuple[str, ...]:
+    """Non-failing warnings a check recorded about itself (§9.5).
+
+    A check that held may still have seen something a reader has to be told
+    about. §9.5's `description_change` is the specified case: it "should not fail
+    a run", so the check passes and its classification is untouched, but a target
+    that rewrote a tool's description between an agent's discovery of it and its
+    invocation of it is exactly §9.11's undeclared delta, and a report that
+    counted it nowhere was reporting a quiet run.
+
+    Read out of `Finding.evidence` rather than from a dedicated field, because
+    the evidence mapping is where a check already publishes what it saw and this
+    is the same kind of fact. Read defensively for the same reason every other
+    persisted mapping is: a finding rebuilt from a stored row is untrusted input
+    (constitution §5), and a malformed value counts as no warning rather than
+    raising in the middle of composing a report.
+
+    Deliberately **not** part of `Finding.failed` or `aggregate`. §23.1's closed
+    value set for the `safety_policy` layer has no `passed_with_warnings`, so a
+    warning may move the run's summary and must never move a layer's verdict.
+    """
+    raw = finding.evidence.get("warnings")
+    if not isinstance(raw, Sequence) or isinstance(raw, str | bytes):
+        return ()
+    return tuple(str(item) for item in raw)
+
+
 def _layer_from(finding: Finding) -> LayerResult:
     match finding.status:
         case CheckStatus.PASSED:
@@ -376,7 +467,8 @@ def compose_outcome_report(
             1
             for finding in everything
             if finding.failed and finding.severity is AssertionSeverity.WARNING
-        ),
+        )
+        + sum(len(recorded_warnings(finding)) for finding in everything),
         tool_calls=sum(
             1 for event in timeline if event.is_invocation_start and event.actor is EventActor.AGENT
         ),
@@ -420,7 +512,12 @@ def compose_outcome_report(
 
 
 def undeclared_changes_from(finding: Finding, changed_paths: int) -> UndeclaredChangesBlock:
-    """Project a `no_undeclared_changes` finding into its §23.1 block."""
+    """Project a `no_undeclared_changes` finding into its §23.1 block.
+
+    A projection, never a second derivation: the excerpts and the attribution are
+    read from the finding the policy engine produced, so the block and the
+    finding can never tell a reader two different stories about one run.
+    """
     evidence: Mapping[str, JsonValue] = finding.evidence
     published = bool(evidence.get("effect_metadata_published", False))
     return UndeclaredChangesBlock(
@@ -428,6 +525,64 @@ def undeclared_changes_from(finding: Finding, changed_paths: int) -> UndeclaredC
         declared=changed_paths - len(finding.paths),
         undeclared=len(finding.paths),
         effect_metadata_published=published,
-        paths=finding.paths,
+        paths=_undeclared_entries(finding),
         applied_exemptions=finding.applied_exemptions,
     )
+
+
+def _undeclared_entries(finding: Finding) -> tuple[UndeclaredChange, ...]:
+    """FR-159's per-path entries, from the finding's evidence when it has them.
+
+    `Finding.paths` stays the authority on *which* paths were undeclared - §17.1
+    defines that column and §23.1's `undeclared` count is derived from it - so
+    the richer evidence list is used only when it describes exactly those paths,
+    in that order. Anything else is a finding whose two halves disagree, and the
+    honest response is to publish the paths and say nothing about their values
+    rather than to publish a pairing nobody produced.
+
+    That fallback is also the compatibility path: a finding restored from a row
+    written before FR-159 carried excerpts has no evidence list, and reports its
+    paths with no values and `none` as the cause it never attributed.
+    """
+    entries = _parse_entries(finding.evidence.get("undeclared_changes"))
+    if entries is not None and tuple(entry.path for entry in entries) == tuple(finding.paths):
+        return entries
+    return tuple(UndeclaredChange(path=path) for path in finding.paths)
+
+
+def _parse_entries(raw: JsonValue) -> tuple[UndeclaredChange, ...] | None:
+    """Validate an evidence list into models, or `None` if it is not one.
+
+    Explicitly validated rather than trusted: a finding can arrive rebuilt from a
+    stored row, and constitution §5 treats a persisted record as untrusted input.
+    A single unusable entry discards the whole list, because a partial list would
+    silently drop a path the finding says changed.
+
+    `ValueError` covers every refusal that can reach here: `PathError` for a
+    segment that is not a path, and Pydantic's own `ValidationError` for an
+    excerpt longer than §11.4's budget - both subclass it, and the second is what
+    stops a stored row from widening what a report carries.
+    """
+    if not isinstance(raw, Sequence) or isinstance(raw, str | bytes):
+        return None
+    parsed: list[UndeclaredChange] = []
+    for item in raw:
+        if not isinstance(item, Mapping):
+            return None
+        try:
+            parsed.append(
+                UndeclaredChange(
+                    path=ObservationPath.parse(str(item.get("path", ""))),
+                    before=_excerpt_of(item.get("before")),
+                    after=_excerpt_of(item.get("after")),
+                    attributed_cause=str(item.get("attributed_cause", NO_ATTRIBUTED_CAUSE)),
+                )
+            )
+        except ValueError:
+            return None
+    return tuple(parsed)
+
+
+def _excerpt_of(value: JsonValue) -> str | None:
+    """One recorded side of a change. `None` stays `None`; nothing else is coerced."""
+    return None if value is None else str(value)

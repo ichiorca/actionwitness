@@ -78,18 +78,37 @@ will be invisible until it matters.
       origin**, scheme and host and no trailing slash. `GET /healthz` echoes the
       value the service resolved — check it there rather than in the dashboard,
       because an unparseable value is dropped and reported as `null`.
-- [ ] The instance is a paid / verified no-sleep tier, and stays that way from
-      final video recording through September 21 (spec §29.1). A free-tier cold
-      start during judging is a failed demo.
+- [ ] The instance does not cold-start during judging, and stays that way from
+      final video recording through September 21 (spec §29.1). A cold start
+      during judging is a failed demo. `render.yaml` commits to the **free**
+      tier by operator decision, so on that tier this means confirming the
+      external `/healthz` pinger is running at a five-minute interval — Render
+      spins down after fifteen idle minutes. Tick this by naming which of the
+      two holds:
+      - [ ] Paid / verified no-sleep tier, **or**
+      - [ ] Free tier with the pinger confirmed live: ______________________
 - [ ] The previous deploy is retained and visible in the Render dashboard.
 
 **Rollback rehearsed** — not "available", rehearsed:
 
 - [ ] Rolled back to the previous deploy from the dashboard.
-- [ ] `GET /healthz` returned `ok` on the rolled-back deploy.
-- [ ] A journey still completes on the rolled-back deploy (the database is
-      forward-compatible, so the older image must still read today's schema).
+- [ ] `GET /healthz` returned `ok` on the rolled-back deploy — including
+      `"database": "ok"`, which is read live rather than remembered from
+      startup, so it is the field that actually shows the volume came back.
+- [ ] A journey still completes on the rolled-back deploy. Start a **fresh**
+      journey rather than resuming one from before the rollback: `render.yaml`
+      declares no disk, so on the free tier `/data` is ephemeral and every
+      workspace, run, finding, and evidence chain is destroyed by the redeploy.
+      The forward-compatibility this step checks is the *schema's* — that the
+      older image can still read today's tables — not the survival of any row.
 - [ ] Rolled forward again.
+
+> **Evidence is ephemeral on this deployment.** No Render disk is attached, so
+> the SQLite database and every artifact under `/data` are lost on each deploy,
+> restart, and spin-down. Nothing here is a backup, and none of it is intended
+> as a record anyone can return to later: export anything a demo or a judge
+> needs to keep — the outcome report, the benchmark JSON, the eval case — before
+> the next deploy. Attaching a disk is the change that would make this untrue.
 
 ```
 Image digest: sha256:____________________________________________

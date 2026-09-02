@@ -445,6 +445,51 @@ class EvalCaseService:
         document = json.loads(row["case_json"])
         return RegressionEvalCase.model_validate(_without_hash(document)), dict(row)
 
+    async def stored_document(self, case_id: str) -> str | None:
+        """One case's stored bytes, verbatim, or `None` if it is not this
+        workspace's.
+
+        Returned unparsed on purpose: a case is identified by its content hash,
+        and re-serialising it here would hand a reader a document that is equal
+        to the stored one but not identical, so the hash they recompute would
+        not be checkable against the hash they were given.
+        """
+        row = await self._work.fetch_one(
+            "SELECT case_json FROM evaluation_cases WHERE id = ? AND workspace_id = ?",
+            (case_id, self._workspace_id),
+        )
+        return None if row is None else str(row["case_json"])
+
+    async def latest_run(self, case_id: str) -> Mapping[str, Any] | None:
+        """The most recent replay of one case, or `None` if it has never run.
+
+        Ordered by `started_at` with the id as the tie-break, because timestamps
+        here have coarse granularity: two runs inside one tick would otherwise
+        return in whichever order SQLite happened to scan them, and "latest"
+        would mean different things on different machines.
+        """
+        row = await self._work.fetch_one(
+            "SELECT id, status, overall_result, environment_profile, started_at, completed_at "
+            "FROM evaluation_runs WHERE evaluation_case_id = ? AND owner_workspace_id = ? "
+            "ORDER BY started_at DESC, id DESC LIMIT 1",
+            (case_id, self._workspace_id),
+        )
+        return None if row is None else dict(row)
+
+    async def run(self, case_id: str, eval_run_id: str) -> Mapping[str, Any] | None:
+        """One replay of one case, scoped to both, or `None`.
+
+        Both terms are in the `WHERE` rather than just the run id: a run id
+        belongs to a case, and a lookup that trusted it alone would serve one
+        case's result under another case's URL to anyone who guessed it.
+        """
+        row = await self._work.fetch_one(
+            "SELECT * FROM evaluation_runs WHERE id = ? AND evaluation_case_id = ? "
+            "AND owner_workspace_id = ?",
+            (eval_run_id, case_id, self._workspace_id),
+        )
+        return None if row is None else dict(row)
+
     async def list_cases(self) -> Sequence[Mapping[str, Any]]:
         rows = await self._work.fetch_all(
             "SELECT id, source_run_id, name, content_hash, schema_version, created_at "

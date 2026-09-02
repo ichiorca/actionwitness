@@ -158,6 +158,38 @@ async def test_two_submissions_of_the_same_form_are_two_contracts(
     assert first["content_hash"] == second["content_hash"]
 
 
+async def test_the_stored_contract_carries_the_identity_the_core_gives_it(
+    visitor: httpx.AsyncClient,
+) -> None:
+    """§17.2 hashes "its validated contract document", and there is one of those.
+
+    The route once hashed the raw expansion while the core hashed
+    `canonical_document()`, so a contract's identity depended on which path had
+    stored it. Nothing noticed for the shipped templates, which happen to be
+    written canonically — and §24.2 step 6, which re-derives the hash from the
+    parsed contract, would have refused to generate a regression case for any
+    expansion that was not.
+
+    Derived here from the *expansion*, not from a literal, so the assertion is
+    about the rule rather than about one document's bytes.
+    """
+    # Arrange
+    from actionwitness_core.contracts.models import parse_contract
+    from integrations.buggy_store.templates import expand
+
+    parameters = {"quantity": 2, "discount_code": "SAVE20"}
+    expected = parse_contract(expand(CANONICAL, parameters)).content_hash()
+
+    # Act
+    created = await visitor.post(CONTRACTS, json={"template_id": CANONICAL, **parameters})
+
+    # Assert — and the stored document is the one that hash names, which is what
+    # lets `GET /contracts/{id}` serve it rather than fail its integrity check.
+    assert created.json()["content_hash"] == expected
+    stored = (await visitor.get(f"{CONTRACTS}/{created.json()['contract_id']}")).json()
+    assert stored["content_hash"] == expected
+
+
 # --- FR-021's refusals --------------------------------------------------------
 
 

@@ -659,6 +659,31 @@ MIGRATIONS: Final[tuple[Migration, ...]] = (
             """,
         ),
     ),
+    Migration(
+        version=6,
+        name="a confirmation records the arguments it was asked about",
+        statements=(
+            # Constitution §5 binds a confirmation to "the workspace, run,
+            # action, arguments, and expiry". Migration 1 recorded four of those
+            # five. `state_binding_hash` is not the fifth and was never meant to
+            # be: `binding_hash` hashes the independently observed state and
+            # deliberately nothing else, so an approval shown for one set of
+            # arguments authorized every other set that left the observed world
+            # unchanged — one person's consent replayed onto an action they were
+            # never shown.
+            #
+            # Additive, and nullable for exactly one reason. A database written
+            # before this migration holds approvals whose arguments were never
+            # recorded, and backfilling a value would invent the very binding the
+            # column exists to prove. Those rows keep `NULL`, and the resume path
+            # refuses them: an unbound approval fails closed rather than being
+            # trusted, because §5 makes an ambiguity an explicit non-pass and
+            # never a degradation to success.
+            """
+            ALTER TABLE confirmation_requests ADD COLUMN arguments_hash TEXT
+            """,
+        ),
+    ),
 )
 
 #: §17.1's Tier 2 eval tables, added by migration 2. Migration 4 rebuilt

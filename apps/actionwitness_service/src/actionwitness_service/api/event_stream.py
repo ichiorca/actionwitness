@@ -46,6 +46,26 @@ An idle stream also ends on its own after `MAX_IDLE_SECONDS`, which costs
 nothing precisely because resume works: the client reconnects with
 `Last-Event-ID` and continues. A stream that lived forever would be an unbounded
 resource held by whoever opened the most tabs (§21).
+
+## How many tabs there are
+
+The paragraph above used to end at "nothing bounding how many tabs there are",
+and that was an accurate description of a hole rather than of a design: FR-008
+caps a workspace at "two concurrent event-stream connections", and nothing
+counted them. `open_event_stream` is that count, and it holds one of
+`EventStreamSlots`' per-workspace slots for exactly as long as the connection
+lives — see that class for why the counter is per-process memory.
+
+The awkward part is *when* the slot is taken, and it is worth reading the code
+with this in mind. The refusal has to happen while the route can still send
+§15.8's envelope; once `200` and `text/event-stream` are on the wire, a client
+receives a broken stream instead of an error it can read. But the release has to
+be the generator's own `finally`, because the generator outlives the route by the
+whole life of the connection and is the only thing that learns about a client
+disconnect. `open_event_stream` reconciles the two by *starting* the generator
+before returning it: the reservation is taken inside the route's call, so a
+refusal is an ordinary `ApiError`, and by the time the response exists the
+`with` block that releases the slot is already armed.
 """
 
 from __future__ import annotations
@@ -53,8 +73,10 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator, Mapping
+from contextlib import aclosing
 from typing import Any, Final
 
+from actionwitness_service.application.limits import EventStreamSlots
 from actionwitness_service.application.timeline_service import (
     EVENT_PAGE_MAX,
     EventPage,
@@ -67,6 +89,7 @@ __all__ = [
     "MAX_IDLE_SECONDS",
     "POLL_INTERVAL_SECONDS",
     "RECONNECT_DELAY_MS",
+    "open_event_stream",
     "resume_cursor",
     "stream_events",
     "wants_event_stream",
@@ -220,3 +243,54 @@ async def stream_events(
         yield ": keepalive\n\n"
         await sleep(POLL_INTERVAL_SECONDS)
         idle += POLL_INTERVAL_SECONDS
+
+
+async def _held_stream(
+    slots: EventStreamSlots, workspace_id: str, source: AsyncIterator[str]
+) -> AsyncIterator[str]:
+    """`source`, wrapped in one of this workspace's FR-008 stream slots.
+
+    The first value is a priming yield, not a frame. `open_event_stream` consumes
+    it and never puts it on the wire; it exists so that the `with` below has
+    already run by the time anybody holds this generator. An async generator that
+    has not been started yet runs none of its body when it is closed, so a slot
+    reserved outside the generator and released inside it would leak on the one
+    path where the response is built and then dropped before its first chunk.
+
+    Everything after the priming yield is inside the `with`, which is what makes
+    "released on every exit path" a property of the language rather than of the
+    reader's diligence: normal completion, the idle end, an exception from the
+    database, `GeneratorExit` when the response is closed, and the
+    `CancelledError` a client disconnect produces all unwind through it.
+
+    `aclosing` propagates that ending inward (constitution §5). Without it a
+    cancelled outer generator would leave `stream_events` suspended mid-poll,
+    holding its own `finally` blocks unrun until the garbage collector noticed.
+    """
+    with slots.reserve(workspace_id):
+        async with aclosing(source) as events:
+            yield ""
+            async for chunk in events:
+                yield chunk
+
+
+async def open_event_stream(
+    slots: EventStreamSlots, workspace_id: str, source: AsyncIterator[str]
+) -> AsyncIterator[str]:
+    """Take one of FR-008's two stream slots, or raise before the response starts.
+
+    Raises `ApiError(WORKSPACE_LIMIT_EXCEEDED)` when the workspace already holds
+    its allowance, and the timing is the point: this is awaited inside the route,
+    so the refusal travels as §15.8's ordinary JSON envelope. A check made after
+    `StreamingResponse` began would reach the client as a stream that closes for
+    no stated reason.
+
+    The returned iterator has already begun, so the slot it holds is released
+    when it ends, however it ends.
+    """
+    stream = _held_stream(slots, workspace_id, source)
+    # Runs the reservation — and surfaces its refusal — while the caller is still
+    # a plain request/response. Discards the priming value; the first thing a
+    # client sees is `stream_events`' own `retry:` frame.
+    await anext(stream)
+    return stream

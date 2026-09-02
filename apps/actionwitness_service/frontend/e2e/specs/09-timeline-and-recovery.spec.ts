@@ -96,19 +96,21 @@ test.describe("the run timeline", () => {
     // A real dropped connection, which no fake timer can produce.
     await page.context().setOffline(true);
 
+    // Said out loud. `useRunTimeline` always computed this and nothing rendered
+    // it, so a lost connection looked exactly like a quiet run: the events
+    // froze, the banner still said the page was watching, and there was no way
+    // to tell the difference.
+    await expect(workspace.timeline.getByRole("alert")).toContainText("could not be read");
+    await expect(workspace.timeline.getByRole("alert")).toContainText("keeps retrying");
+
     // The events already on screen stay: a failed poll must not rewind the
     // record in front of the user, and must not clear it either.
-    //
-    // NOTE: `useRunTimeline` sets an `error` for exactly this case and `App`
-    // never passes it to `RunTimeline`, so a lost connection is currently
-    // invisible to the reader. That is a finding rather than something to
-    // assert here; this test holds the property that *is* implemented.
     await expect(workspace.timeline.locator("ol.timeline li")).toHaveCount(before);
-    await expect(workspace.timeline).toContainText("watching for new activity");
 
     await page.context().setOffline(false);
-    // The chained timeout keeps trying, so recovery needs no reload: the run is
-    // still drivable to a verdict on the same page.
+    // The chained timeout keeps trying, so recovery needs no reload — and the
+    // notice goes when it succeeds, or it would outlive the problem.
+    await expect(workspace.timeline.getByRole("alert")).toHaveCount(0);
     await agent.call(VERIFY_OUTCOME);
     await workspace.expectTerminalPhase();
   });

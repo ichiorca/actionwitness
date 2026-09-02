@@ -15,8 +15,18 @@ be replayed against a different one. Every request therefore records:
 - the invocation's correlation id, which is what the core's
   `requires_confirmation` policy matches an approval to a mutation by (FR-060);
 - a `state_binding_hash` — the content hash of the **independently observed**
-  canonical state, not of anything the tool reported; and
+  canonical state, not of anything the tool reported;
+- an `arguments_hash` — the content hash of the exact validated arguments the
+  request was raised for, which is what makes the approval consent for *this*
+  action rather than for any action that happens to leave the observed world
+  looking the same; and
 - an expiry, from the contract's own `requires_confirmation` policy.
+
+The two hashes answer two different questions and neither substitutes for the
+other. `state_binding_hash` asks "is the world still the one this person was
+shown?"; `arguments_hash` asks "is this the thing they were shown?". A cart that
+has not moved says nothing about whether the checkout being resumed is the one a
+human read in the dialog.
 
 **The consequence summary is derived from the adapter's declared effects, not
 from knowledge of the target.** §14.1 wants a human to see "cart version and
@@ -53,8 +63,11 @@ __all__ = [
     "CONFIRMATION_EVENT_RESERVATION",
     "ConfirmationRequirement",
     "ConfirmationService",
+    "arguments_hash",
+    "binding_hash",
     "confirmation_requirement",
     "consequence_summary",
+    "expiry_from",
 ]
 
 #: Events a protected invocation adds beyond an ordinary one: the request, the
@@ -139,6 +152,7 @@ class ConfirmationService:
         correlation_id: str,
         tool_name: str,
         state_binding_hash: str,
+        arguments_hash: str,
         consequence: Mapping[str, JsonValue],
         expires_at: datetime,
     ) -> str:
@@ -148,15 +162,20 @@ class ConfirmationService:
         the request and the start event it belongs to commit together. A
         confirmation without its start event would be consent for an action the
         timeline never records being attempted.
+
+        `arguments_hash` is required rather than optional. An approval that
+        recorded no arguments cannot be checked against any, and a default would
+        let a future caller create one without noticing that it had opted out of
+        constitution §5's argument binding.
         """
         confirmation_id = new_id("cnf")
         await self._work.execute(
             """
             INSERT INTO confirmation_requests (
                 id, workspace_id, run_id, correlation_id, tool_name,
-                state_binding_hash, consequence_summary_json, status,
-                expires_at, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                state_binding_hash, arguments_hash, consequence_summary_json,
+                status, expires_at, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 confirmation_id,
@@ -165,6 +184,7 @@ class ConfirmationService:
                 correlation_id,
                 tool_name,
                 state_binding_hash,
+                arguments_hash,
                 json.dumps(dict(consequence), sort_keys=True),
                 str(ConfirmationStatus.PENDING.value),
                 expires_at.isoformat(),
@@ -221,12 +241,22 @@ class ConfirmationService:
         )
         return cursor.rowcount == 1
 
-    async def consume_approved(self, confirmation_id: str) -> bool:
-        """Spend an approval, exactly once (FR-066).
+    async def claim_approved(self, confirmation_id: str) -> bool:
+        """Spend an approval, exactly once, *before* its mutation (FR-066).
 
         Separate from `mark` because it moves from `approved` rather than from
-        `pending`: an approval is spent by the mutation it authorized, and only
-        after that mutation is known to have happened.
+        `pending`. Named `claim` rather than `consume` because of when it runs:
+        FR-066 requires the approval to be validated and consumed atomically
+        with the mutation it authorizes, and the only way to make that atomic
+        against concurrent resumes is to let them race on this one conditional
+        update before any of them dispatches. The `status = 'approved'`
+        predicate is the mechanism, exactly as it is in `mark`: every caller
+        reaches this statement, and only one can match a row.
+
+        Returns whether this caller is the one that won. **The result is never
+        discarded.** A resume that ignored a lost claim would carry on and
+        dispatch a mutation whose consent another resume had already spent,
+        which is the double-spend this method exists to make impossible.
         """
         cursor = await self._work.execute(
             "UPDATE confirmation_requests SET status = ?, consumed_at = ? "
@@ -251,6 +281,27 @@ def binding_hash(observed: Observation) -> str:
     self-report is evidence, never proof").
     """
     return content_hash(dict(observed.payload))
+
+
+def arguments_hash(arguments: Mapping[str, Any]) -> str:
+    """The hash an approval is bound to on the *argument* side.
+
+    Constitution §5 binds a confirmation to "the workspace, run, action,
+    arguments, and expiry", and this is the arguments. Hashed through the
+    project's canonical serialization rather than `json.dumps`, for the reason
+    ADR-0004 records: `sort_keys=True` looks like canonical JSON while sorting
+    by code point, formatting numbers by Python's rules, and accepting values a
+    canonical form must refuse — so two argument sets that differ could hash
+    alike, or one set could hash two ways, and either failure lets a swap
+    through the check this hash exists to be.
+
+    The **validated** arguments are hashed, never the redacted ones. Redaction
+    is lossy on purpose (§20.3), and two distinct argument sets can share one
+    redacted form; binding to that would authorize the substitution it is meant
+    to catch. A hash of secret-bearing inputs is not itself a disclosure, which
+    is why binding to the unredacted values is safe to store.
+    """
+    return content_hash(dict(arguments))
 
 
 def expiry_from(now: datetime, requirement: ConfirmationRequirement) -> datetime:

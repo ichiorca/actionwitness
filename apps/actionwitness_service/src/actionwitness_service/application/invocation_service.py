@@ -33,6 +33,24 @@ happened; zero would make a hung invocation indistinguishable from one that
 never started. Dispatch and observation are both allowed to fail, and every one
 of those paths converges on a single terminal append.
 
+**A human approval is claimed before dispatch, never after it.** FR-066 asks for
+the approval to be validated and consumed "in the same transaction as its
+mutation", and the mutation is remote I/O that ADR-0003 forbids holding a
+transaction across. So the claim is its own bounded transaction — one
+conditional `UPDATE ... WHERE status = 'approved'`, committed and its lock
+released before the adapter is touched — and it sits immediately before step 4.
+Two resumes of one approval then race on the database rather than on the target:
+one claim matches a row, every other matches none and is refused without
+dispatching. Reading the approval and consuming it afterwards, with the whole of
+observation and dispatch in between, is what let two resumes both spend one
+person's consent.
+
+The tradeoff is deliberate, and it points the safe way. If the dispatch then
+fails, the consent is already burned and a human has to approve again. That is
+worse for the person and better for the store: an approval left live after a
+failure is an approval two mutations can share, and asking somebody to press the
+button twice is a smaller harm than placing two orders they authorized once.
+
 `generic` is meant literally: nothing here branches on a tool name. The adapter
 publishes specs and executes; §9.1's protocols are the only thing this knows
 about the target, and a branch on `update_cart` here would put commerce
@@ -74,6 +92,7 @@ from actionwitness_service.application.confirmation_service import (
     CONFIRMATION_EVENT_RESERVATION,
     ConfirmationRequirement,
     ConfirmationService,
+    arguments_hash,
     binding_hash,
     confirmation_requirement,
     consequence_summary,
@@ -197,12 +216,27 @@ class InvocationService:
             async with self._database.reading() as work:
                 approved = await self._live_approval(work, workspace_id, run_id, tool_name)
 
+        invocation_id = self._id_source()
         if approved is not None:
-            invocation_id = self._id_source()
+            # Constitution §5 binds a confirmation to "the workspace, run,
+            # action, arguments, and expiry". The row already scopes the first
+            # three; this is the fourth, checked here — before anything is
+            # observed and long before anything is dispatched.
+            _require_approved_arguments(approved, checked)
             correlation_id = str(approved["correlation_id"])
-            request_id = str(approved["correlation_id"]).replace("inv", "req", 1)
+            # **No second start event, and no second identity.** This is the
+            # *same* invocation, paused for consent and now resumed — §10.3
+            # builds the observed trajectory from start events, so writing
+            # another would make one logical action appear twice and fail a
+            # contract that expected the journey it actually performed.
+            #
+            # The request id is read back off that start event rather than
+            # derived from anything here, for the reason `_resumed_start`
+            # records: it is the key the target deduplicates on, so a resumed
+            # half that minted its own would present a first attempt for a
+            # request the timeline had already named.
+            started_sequence, request_id = await self._resumed_start(run_id, correlation_id)
         else:
-            invocation_id = self._id_source()
             correlation_id = invocation_id
             request_id = _target_request_id(spec, arguments, invocation_id)
 
@@ -216,16 +250,11 @@ class InvocationService:
         if approved is not None and binding_hash(before) != str(approved["state_binding_hash"]):
             return await self._stale_approval(workspace_id, run_id, approved, before=before)
 
-        # 3 — reserve, transition, and record the start (FR-031, FR-008).
-        if approved is not None:
-            # **No second start event.** This is the *same* invocation, paused
-            # for consent and now resumed — §10.3 builds the observed
-            # trajectory from start events, so writing another would make one
-            # logical action appear twice and fail a contract that expected the
-            # journey it actually performed.
-            started_sequence = await self._resumed_start(run_id, correlation_id)
-            pending = None
-        else:
+        # 3 — reserve, transition, and record the start (FR-031, FR-008). A
+        # resumed invocation already did this before it paused, so it only has
+        # to be told that nothing is pending for it.
+        pending: Mapping[str, Any] | None = None
+        if approved is None:
             started_sequence, pending = await self._start_or_trip(
                 workspace_id,
                 run_id,
@@ -254,6 +283,13 @@ class InvocationService:
                 before=before,
                 pending=pending,
             )
+
+        # FR-066's atomic claim, and the last thing that happens before the
+        # adapter is touched. A resume that loses this race is refused here
+        # rather than dispatched, so one approval can never stand behind two
+        # mutations.
+        if approved is not None:
+            await self._claim_approval(workspace_id, approved)
 
         # 4 and 5 — dispatch, then observe immediately. Both may fail; every
         # path below converges on exactly one terminal event.
@@ -298,7 +334,6 @@ class InvocationService:
             duration_ms=duration_ms,
             policy=policy,
             arguments=checked,
-            consumed_confirmation=None if approved is None else str(approved["id"]),
         )
 
     # -- steps ---------------------------------------------------------------
@@ -603,6 +638,15 @@ class InvocationService:
                 # Bound to what was independently observed, never to what a
                 # tool said: an approval is consent about the world as it is.
                 state_binding_hash=binding_hash(before),
+                # And bound to the exact arguments the request was raised for.
+                # The observed state alone cannot tell one checkout from
+                # another that would leave the same cart behind, so without
+                # this an approval shown for one set of inputs would authorize
+                # any other set (constitution §5). Hashed from the *validated*
+                # arguments, which are the ones that will be dispatched — the
+                # redacted copy above is what a person reads, and redaction is
+                # lossy on purpose.
+                arguments_hash=arguments_hash(arguments),
                 consequence=consequence,
                 expires_at=expires_at,
             )
@@ -657,27 +701,43 @@ class InvocationService:
                 None,
             )
 
-    async def _resumed_start(self, run_id: str, correlation_id: str) -> int:
-        """The sequence of the start event this invocation already wrote.
+    async def _resumed_start(self, run_id: str, correlation_id: str) -> tuple[int, str]:
+        """The sequence and request id of the start event this invocation wrote.
 
         A paused invocation recorded its start before asking for consent, so
         the resumed half is a continuation rather than a new call. Reusing that
         sequence keeps the timeline's one-start-one-terminal shape intact.
+
+        Reusing that `request_id` keeps the *idempotency key* intact across the
+        pause, which matters more. It is the key the target deduplicates on
+        (`_target_request_id`), so a resumed half that derived its own would
+        dispatch under an identifier the target had never seen and record a
+        terminal event naming a request its own start event never made — three
+        different answers to "which request was this?" for one logical action.
+
+        A missing start event is raised rather than papered over. It and the
+        confirmation row are written in one transaction, so an approval without
+        one means the database disagrees with itself; returning a sequence of
+        zero and a fabricated identifier would point both a reader and the
+        target at a request that never happened, which is worse than stopping.
         """
         async with self._database.reading() as work:
             row = await work.fetch_one(
-                "SELECT sequence_number FROM events WHERE run_id = ? AND correlation_id = ? "
-                "AND event_type = ? ORDER BY sequence_number LIMIT 1",
+                "SELECT sequence_number, request_id FROM events WHERE run_id = ? "
+                "AND correlation_id = ? AND event_type = ? ORDER BY sequence_number LIMIT 1",
                 (
                     run_id,
                     correlation_id,
                     str(OutcomeEventType.TOOL_INVOCATION_STARTED.value),
                 ),
             )
-        # Zero rather than a guess if it is somehow missing: the terminal event
-        # records it as "started at", and inventing a sequence would point a
-        # reader at an event that never happened.
-        return int(row["sequence_number"]) if row else 0
+        if row is None or not row["request_id"]:
+            # §15.8 keeps internal detail out of a client's hands, so the code
+            # is the whole of what the caller learns.
+            raise ApiError(
+                ApiErrorCode.HARNESS_ERROR, "The harness could not complete the request."
+            )
+        return int(row["sequence_number"]), str(row["request_id"])
 
     async def _live_approval(
         self, work: UnitOfWork, workspace_id: str, run_id: str, tool_name: str
@@ -687,6 +747,11 @@ class InvocationService:
         `approved` and not `consumed`: an approval is spent by the mutation it
         authorized and can never authorize a second one, which is what makes
         "approve once" true rather than aspirational.
+
+        This read finds a *candidate*, not a claim. Two resumes can both see the
+        same row here and both be right about what they saw; the row is won by
+        `_claim_approval` immediately before dispatch, and everything between
+        the two is a check that may still refuse.
         """
         row = await work.fetch_one(
             """
@@ -697,6 +762,34 @@ class InvocationService:
             (workspace_id, run_id, tool_name, str(ConfirmationStatus.APPROVED.value)),
         )
         return None if row is None else dict(row)
+
+    async def _claim_approval(self, workspace_id: str, approved: Mapping[str, Any]) -> None:
+        """Win the approval, or refuse the invocation (FR-066).
+
+        FR-066 wants the approval "atomically validate[d] and consume[d] in the
+        same transaction as its mutation". The mutation is remote I/O and
+        ADR-0003 forbids a transaction spanning it, so the atomic part is
+        pulled forward into one bounded transaction of its own: a single
+        conditional update whose `status = 'approved'` predicate is the
+        mechanism rather than a guard. Every concurrent resume reaches it, and
+        exactly one can match a row.
+
+        ADR-0003's rule about locks is respected rather than bent. This holds
+        the workspace lock only for the length of that one statement, and
+        releases it before the adapter is called — nothing is held across the
+        dispatch.
+
+        Losing is not a fault in the caller and not a transport failure: the
+        approval was spent by the resume that won, and this one is refused with
+        a rejected-intent code so no client reads it as safe to repeat. A retry
+        cannot succeed, because there is no consent left for it to spend; the
+        way forward is to ask for the action again and let a human decide again.
+        """
+        confirmation_id = str(approved["id"])
+        async with self._locks.hold(workspace_id), self._database.transaction() as work:
+            claimed = await ConfirmationService(work, workspace_id).claim_approved(confirmation_id)
+        if not claimed:
+            raise _approval_already_spent()
 
     async def _stale_approval(
         self,
@@ -715,10 +808,20 @@ class InvocationService:
         against state nobody agreed to.
 
         Nothing is dispatched, so no mutation occurs.
+
+        **The cancellation is recorded only if it actually happened.** The
+        `status = 'approved'` predicate can match nothing, and there is one
+        ordinary way for it to: a concurrent resume claimed the approval and its
+        mutation is what moved the state this one just observed. That approval
+        was spent, not cancelled, and appending "cancelled because the state
+        changed after approval" to an append-only evidence chain would put a
+        false account of a human's consent into the record permanently. So the
+        losing resume is refused exactly as a lost claim is refused, and the
+        timeline keeps one true story about where the consent went.
         """
         confirmation_id = str(approved["id"])
         async with self._locks.hold(workspace_id), self._database.transaction() as work:
-            await work.execute(
+            cursor = await work.execute(
                 "UPDATE confirmation_requests SET status = ?, decided_at = ? "
                 "WHERE id = ? AND workspace_id = ? AND status = ?",
                 (
@@ -729,6 +832,11 @@ class InvocationService:
                     str(ConfirmationStatus.APPROVED.value),
                 ),
             )
+            if cursor.rowcount != 1:
+                # Raised inside the transaction on purpose: it rolls back, and
+                # there is nothing here worth committing — no cancellation
+                # occurred and no event describes one.
+                raise _approval_already_spent()
             await EventRepository(work).append(
                 run_id,
                 {
@@ -816,7 +924,6 @@ class InvocationService:
         duration_ms: int,
         policy: RedactionPolicy,
         arguments: Mapping[str, Any],
-        consumed_confirmation: str | None = None,
     ) -> InvocationOutcome:
         terminal = (
             OutcomeEventType.TOOL_INVOCATION_FAILED if result is None else result.terminal_event
@@ -888,14 +995,13 @@ class InvocationService:
                     "redacted_payload": payload,
                 },
             )
-            if consumed_confirmation is not None:
-                # FR-066: spent here, in the same transaction as the terminal
-                # event, and only now that the mutation is known to have
-                # happened. Consuming before dispatch would spend an approval on
-                # a call that might never land.
-                await ConfirmationService(work, workspace_id).consume_approved(
-                    consumed_confirmation
-                )
+            # **No approval is spent here.** It was claimed before dispatch, by
+            # `_claim_approval`, because that is the only ordering under which
+            # two concurrent resumes cannot both reach the adapter. Spending it
+            # in this transaction read well — the approval and the mutation it
+            # authorized committing together — but the read that found the
+            # approval was minutes and one network round trip earlier, and
+            # nothing stopped a second resume finding the same row in between.
 
             # FR-121's compact `next_action`, derived from the workspace as it
             # now stands rather than from the phase this handler assumed. An
@@ -952,6 +1058,68 @@ def _reported(
         # that was observed. A disagreement between them is evidence.
         "state_version_after": result.state_version_after,
     }
+
+
+def _approval_already_spent() -> ApiError:
+    """The one refusal for "somebody else got there first".
+
+    Both places that can lose an approval — the claim before dispatch and the
+    stale-state cancellation — raise this same code, because from the caller's
+    side they are one fact: the consent this resume was going to use is gone.
+    Splitting them would ask a client to tell apart two race outcomes it cannot
+    act on differently.
+
+    Not retryable, and the registry is what says so. Repeating the request
+    cannot succeed: there is no consent left to spend, and the only way forward
+    is to ask for the action again so a human decides again.
+    """
+    return ApiError(
+        ApiErrorCode.PRECONDITION_FAILED,
+        "This approval has already been spent, so nothing was done. Ask for the action "
+        "again if it is still wanted, and a human will be asked afresh.",
+        details=[{"path": "confirmation_id", "message": "the approval is already spent"}],
+    )
+
+
+def _require_approved_arguments(approved: Mapping[str, Any], arguments: Mapping[str, Any]) -> None:
+    """Refuse a resume whose arguments are not the ones a human approved.
+
+    Constitution §5 binds a confirmation to "the workspace, run, action,
+    arguments, and expiry". The row's workspace, run, and tool columns scope the
+    first three; `state_binding_hash` covers the world the action was described
+    against and, by design, nothing else — `binding_hash` hashes the observation
+    payload alone. So the arguments were the one part of the binding nothing
+    checked, and an approval shown for one set of inputs authorized every other
+    set that left the observed state looking the same: one person's consent
+    replayed onto an action they were never shown.
+
+    **A stored `NULL` is refused, not accepted.** It means the row predates the
+    column that records what was approved, so nobody can say what the human saw.
+    Treating an unknown binding as a matching one would make the rail weakest
+    exactly where its evidence is missing, and §5 makes an ambiguity an explicit
+    non-pass rather than a degradation to success.
+
+    The approval is left live rather than cancelled, which is the opposite of
+    what `_stale_approval` does and deliberately so. There, the world moved and
+    the consent no longer describes anything; here, the consent still describes
+    perfectly well the arguments a person actually read. Burning it would punish
+    the human for the agent's substitution.
+    """
+    recorded = approved.get("arguments_hash")
+    if not isinstance(recorded, str) or not recorded:
+        raise ApiError(
+            ApiErrorCode.PRECONDITION_FAILED,
+            "This approval does not record which arguments were approved, so it cannot "
+            "authorize any. Ask for the action again so a human is shown what would happen.",
+            details=[{"path": "arguments", "message": "the approval records no arguments"}],
+        )
+    if arguments_hash(arguments) != recorded:
+        raise ApiError(
+            ApiErrorCode.PRECONDITION_FAILED,
+            "These are not the arguments a human approved, so nothing was done. Ask for "
+            "the action again with the arguments that should be shown.",
+            details=[{"path": "arguments", "message": "does not match the approved arguments"}],
+        )
 
 
 def _redaction_policy_of(document: Mapping[str, Any] | None) -> RedactionPolicy:

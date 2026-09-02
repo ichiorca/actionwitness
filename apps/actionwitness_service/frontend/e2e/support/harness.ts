@@ -203,11 +203,12 @@ export class Workspace {
   /**
    * Load the workspace, honouring the rate limiter on the document itself.
    *
-   * FR-009 exempts health and static assets from the request bucket, and `/` is
-   * neither: the index document is served by a route, so a burst of navigations
-   * can be answered with the error envelope instead of the bundle. That is the
-   * product behaving as specified, so the lane waits the interval the server
-   * named rather than pretending the limit is not there.
+   * `/` is now exempt from FR-009's per-minute bucket — it is a static
+   * `index.html`, which the requirement excludes — so this retry should never
+   * fire. It is kept as the safety net for the case it was written for: the
+   * index was metered once, and the symptom was the JSON envelope rendered as
+   * the page body, which fails every assertion below in a way that points at
+   * the wrong thing.
    */
   async open(): Promise<void> {
     for (let attempt = 0; attempt < 3; attempt += 1) {

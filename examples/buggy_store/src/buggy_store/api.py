@@ -25,6 +25,7 @@ statement about the harness's cookie, which sits in front of this.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -35,7 +36,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from buggy_store.catalog import MAX_SEARCH_RESULTS
-from buggy_store.errors import StoreError
+from buggy_store.errors import StoreError, UnexpectedStoreFailure
 from buggy_store.failure_injection import IMPLEMENTED_PROFILES, FaultProfile, ScenarioMode
 from buggy_store.money import format_amount
 from buggy_store.repository import StoreRepository
@@ -55,6 +56,11 @@ API_PREFIX: Final = "/demo/api/v1"
 
 #: Project-allocated; see the module docstring.
 WORKSPACE_HEADER: Final = "X-Workspace-Id"
+
+#: Its own logger because this one carries a traceback. Keeping it separate from
+#: ordinary request logging means the channel that may hold internal detail is
+#: named, and an operator can route or silence it deliberately.
+_unexpected_logger = logging.getLogger("buggy_store.unhandled")
 
 type WorkspaceId = Annotated[str, StringConstraints(min_length=1, max_length=128)]
 type RequestId = Annotated[
@@ -170,6 +176,30 @@ def create_app(*, database_path: Path | str, service: StoreService | None = None
         branches on this shape.
         """
         return JSONResponse(status_code=error.http_status, content=error.as_envelope())
+
+    @app.exception_handler(Exception)
+    async def _unexpected_failure(request: Request, error: Exception) -> JSONResponse:
+        """The last line, so "nothing else escapes a handler" is structural.
+
+        The module docstring above has always claimed this, and until an
+        unanticipated exception had somewhere to go it was a claim the code did
+        not keep: anything the store did not think to raise deliberately left as
+        FastAPI's own 500 body. That is a second wire shape beside §15.8's
+        envelope, and a client would need two parsers to learn why a call
+        failed — the one it wrote first silently mishandling the other.
+
+        A *deliberate* refusal never reaches here. Starlette's exception
+        middleware matches the most specific registered handler first, so every
+        `StoreError` is still answered by the handler above with its own code and
+        status; this one sees only what nobody classified.
+
+        Nothing about the cause is forwarded — no message, no class name, no
+        traceback. `exc_info` puts the detail on the server's log, which is
+        where §15.8 wants it and is not this response.
+        """
+        _unexpected_logger.exception("unhandled store request failure", exc_info=error)
+        refusal = UnexpectedStoreFailure()
+        return JSONResponse(status_code=refusal.http_status, content=refusal.as_envelope())
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:

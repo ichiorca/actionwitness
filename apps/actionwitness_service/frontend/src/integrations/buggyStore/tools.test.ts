@@ -325,3 +325,93 @@ describe("the coordinator settles exactly once", () => {
     expect(coordinator.pendingIds).toEqual([]);
   });
 });
+
+describe("a recorded failure reaches the agent as a failure", () => {
+  it("returns isError when the harness recorded the invocation as failed", async () => {
+    // The route answers 200 for an invocation that completed the round trip,
+    // whether or not the target did what was asked — the status is about the
+    // harness. Until the terminal event was read, a mutation refused for a
+    // reused idempotency key resolved as an ordinary value, the adapter
+    // normalized it as a success, and an agent branching on `isError` was told
+    // a refused mutation had worked. §14.8 forbids exactly that reading for a
+    // denied confirmation, and a refusal is a refusal whichever rail made it.
+    respond(() =>
+      json({
+        status: "completed",
+        terminal_event: "tool_invocation_failed",
+        reported: {
+          status: null,
+          summary: "request_id 'k' was already used for 'update_cart' with a different payload",
+          error_code: "idempotency_key_reused",
+        },
+        observed: { state_changed: false },
+      }),
+    );
+    await mounted("running");
+
+    // Invoked the way the pinned build does — arguments only, no context.
+    const result = (await installed?.modelContext.invokeAsPinnedBuild(UPDATE_CART, {
+      product_id: "mug-ceramic-001",
+      quantity: 1,
+      request_id: "k",
+    })) as { content: { text: string }[]; isError?: boolean };
+
+    expect(result.isError).toBe(true);
+    // The server's own summary, plus the stable token an agent branches on when
+    // the prose changes. Nothing internal: §20 keeps the summary user-facing.
+    expect(result.content[0]?.text).toContain("already used");
+    expect(result.content[0]?.text).toContain("idempotency_key_reused");
+  });
+
+  it("still refreshes the workspace after a refused mutation", async () => {
+    // A refused mutation still appended events, so the phase the server reports
+    // may have moved. Leaving the page on its pre-call reading would be a UI
+    // that disagrees with the timeline beside it.
+    respond(() =>
+      json({
+        status: "completed",
+        terminal_event: "tool_invocation_failed",
+        reported: { status: null, summary: "refused", error_code: "idempotency_key_reused" },
+      }),
+    );
+    let refreshes = 0;
+    const refresh = async (): Promise<void> => {
+      refreshes += 1;
+    };
+    const rendered = renderHook(() =>
+      useBuggyStoreTools("run_1", "running", refresh, new ConfirmationCoordinator()),
+    );
+    await waitFor(() =>
+      expect(rendered.result.current.states[UPDATE_CART]?.phase).toBe("registered"),
+    );
+
+    await installed?.modelContext.invokeAsPinnedBuild(UPDATE_CART, {
+      product_id: "mug-ceramic-001",
+      quantity: 1,
+      request_id: "k",
+    });
+
+    expect(refreshes).toBeGreaterThan(0);
+  });
+
+  it("leaves a successful invocation alone", async () => {
+    // The guard on both tests above: a terminal event that is not a failure
+    // must still resolve, or every call would read as an error.
+    respond(() =>
+      json({
+        status: "completed",
+        terminal_event: "tool_invocation_completed",
+        reported: { status: "success" },
+      }),
+    );
+    await mounted("running");
+
+    const result = (await installed?.modelContext.invokeAsPinnedBuild(UPDATE_CART, {
+      product_id: "mug-ceramic-001",
+      quantity: 1,
+      request_id: "k",
+    })) as { isError?: boolean };
+
+    expect(result.isError).toBeFalsy();
+  });
+});

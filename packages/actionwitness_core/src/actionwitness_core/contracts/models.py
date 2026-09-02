@@ -512,6 +512,20 @@ class ContractRecord(CoreModel):
     without re-deriving it from a model version that may have moved on. Identity
     and creation instant are injected rather than generated here, because a core
     that allocated its own identifiers could not be replayed.
+
+    `of` is the only way a *new* record should be built. It fixes both halves at
+    once from the same `canonical_document()`, which is what makes a contract's
+    identity independent of the path that stored it: a record assembled by hand
+    from a submitted document and a hash of that submission would give the same
+    contract a different identity depending on whether whoever wrote it happened
+    to be holding the canonical form. §24.2 step 6 re-derives a source
+    contract's hash from `canonical_document()` and refuses on a mismatch, so
+    that divergence is not caught where it is made — it is caught much later,
+    when a failed run cannot produce its regression case.
+
+    The public constructor stays open because reading a row is not authoring
+    one: a stored document that no longer matches its hash has to be
+    *constructible* in order for `verify` to be able to say so.
     """
 
     contract_id: Annotated[str, StringConstraints(min_length=1)]

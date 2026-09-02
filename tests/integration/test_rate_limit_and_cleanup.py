@@ -12,6 +12,7 @@ Two properties carry the weight:
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -26,6 +27,7 @@ from actionwitness_service.application.cleanup import (
     WorkspaceCleaner,
     purge_eval_workspace_state,
 )
+from actionwitness_service.application.workspaces import WORKSPACE_COOKIE_NAME
 from actionwitness_service.persistence.database import Database
 from fastapi import APIRouter, FastAPI
 
@@ -174,6 +176,109 @@ async def test_a_returning_visitor_does_not_spend_the_creation_bucket(
 
     # Assert
     assert set(statuses) == {200}
+
+
+async def test_a_returning_visitor_is_served_well_past_the_creation_ceiling(
+    app: FastAPI,
+) -> None:
+    """The counterpart to the forged-cookie test below: metering issuance must
+    not start metering page loads.
+
+    Twice the hourly creation ceiling of requests, all on one server-issued
+    cookie, and one workspace throughout — so the charge is demonstrably tied to
+    creating a workspace rather than to holding one.
+    """
+    # Arrange
+    database: Database = app.state.database
+    async with client(app) as visitor:
+        opening = await visitor.get("/api/v1/_probe/read")
+        assert opening.status_code == 200
+        workspace_id = opening.json()["workspace_id"]
+
+        # Act — the cookie jar replays the issued cookie on every one of these.
+        statuses = [
+            (await visitor.get("/api/v1/_probe/read")).status_code
+            for _ in range(fr009.WORKSPACE_CREATIONS_PER_HOUR * 2)
+        ]
+
+    # Assert
+    assert set(statuses) == {200}
+    async with database.reading() as work:
+        rows = await work.fetch_all("SELECT id FROM workspaces")
+    assert [row["id"] for row in rows] == [workspace_id]
+
+
+async def test_an_unknown_cookie_spends_the_creation_bucket_like_no_cookie(
+    app: FastAPI,
+) -> None:
+    """The FR-009 hole: a workspace cookie is neither signed nor checked here.
+
+    `WorkspaceStore.resolve` never adopts a presented identifier, so every
+    request carrying a *different* invented cookie mints a brand-new workspace.
+    A limit charged on the cookie's absence therefore meters nothing at all —
+    one peer walks past the hourly ceiling by inventing a value per request, and
+    is bounded only by the 120/minute general bucket.
+
+    So: one peer, one forged cookie per request, and the ceiling must still hold.
+    """
+    # Arrange — twice the ceiling of attempts, each with a distinct unknown value.
+    database: Database = app.state.database
+    attempts = fr009.WORKSPACE_CREATIONS_PER_HOUR * 2
+    statuses: list[int] = []
+
+    # Act — a fresh client per request, so nothing but the forged header carries
+    # over: this is one peer presenting identifiers it chose, not a session.
+    for attempt in range(attempts):
+        async with client(app) as forger:
+            response = await forger.get(
+                "/api/v1/_probe/read",
+                headers={"cookie": f"{WORKSPACE_COOKIE_NAME}=ws_forged_{attempt}"},
+            )
+        statuses.append(response.status_code)
+
+    # Assert — the first ten creations pass, the eleventh onward are refused.
+    assert (
+        statuses[: fr009.WORKSPACE_CREATIONS_PER_HOUR] == [200] * fr009.WORKSPACE_CREATIONS_PER_HOUR
+    )
+    assert set(statuses[fr009.WORKSPACE_CREATIONS_PER_HOUR :]) == {429}
+
+    # ...and the row count stops at the ceiling, which is the fact that matters:
+    # a limit that returned 429 while still writing would be theatre.
+    async with database.reading() as work:
+        rows = await work.fetch_all("SELECT id FROM workspaces")
+    assert len(rows) == fr009.WORKSPACE_CREATIONS_PER_HOUR
+
+
+async def test_a_refused_creation_leaves_no_workspace_row_behind(app: FastAPI) -> None:
+    """The charge is spent between the existence check and the `INSERT`.
+
+    Asserted by identity, not by counting: the workspace the refused request
+    would have been given must not be findable, and the refusal must arrive in
+    §15.8's envelope with a usable `Retry-After` rather than as a bare failure.
+    """
+    # Arrange — spend the whole hourly allowance on distinct unknown cookies.
+    database: Database = app.state.database
+    for attempt in range(fr009.WORKSPACE_CREATIONS_PER_HOUR):
+        async with client(app) as visitor:
+            await visitor.get(
+                "/api/v1/_probe/read",
+                headers={"cookie": f"{WORKSPACE_COOKIE_NAME}=ws_spent_{attempt}"},
+            )
+    async with database.reading() as work:
+        before = await work.fetch_all("SELECT id FROM workspaces")
+
+    # Act — the creation over the ceiling.
+    async with client(app) as latecomer:
+        refused = await latecomer.get("/api/v1/_probe/read")
+
+    # Assert
+    assert refused.status_code == 429
+    assert refused.json()["error"]["code"] == "RATE_LIMIT_EXCEEDED"
+    assert int(refused.headers["retry-after"]) >= 1
+    assert refused.headers.get_list("set-cookie") == []
+    async with database.reading() as work:
+        after = await work.fetch_all("SELECT id FROM workspaces")
+    assert [row["id"] for row in after] == [row["id"] for row in before]
 
 
 # --- garbage collection -----------------------------------------------------
@@ -421,3 +526,195 @@ async def test_an_empty_sweep_is_a_no_op(database: Database, tmp_path: Path) -> 
     assert result.workspaces_removed == 0
     assert result.files_removed == 0
     assert result.files_failed == 0
+
+
+# --- the sweeper's other maintenance -----------------------------------------
+
+
+async def test_the_sweeper_runs_the_maintenance_hook_on_its_own_wakeup(
+    database: Database, tmp_path: Path
+) -> None:
+    """The rate limiter's buckets expire on this task's timer.
+
+    `release_idle` existed from the start and nothing called it, so the limiter
+    kept one entry per address it had ever seen for the life of the process.
+    The hook is stopped from inside itself so the loop runs exactly once with no
+    sleeping and no wall-clock dependence.
+    """
+    # Arrange
+    stop = asyncio.Event()
+    calls: list[int] = []
+
+    def hook() -> None:
+        calls.append(1)
+        stop.set()
+
+    swept = WorkspaceCleaner(
+        database, artifact_root=tmp_path / "artifacts", clock=lambda: NOW, on_sweep=hook
+    )
+
+    # Act
+    await swept.run_until(stop)
+
+    # Assert
+    assert calls == [1]
+
+
+async def test_a_failing_maintenance_hook_does_not_stop_the_sweeper(
+    database: Database, tmp_path: Path
+) -> None:
+    """The hook is somebody else's in-memory state; the sweep is FR-009's.
+
+    A hook that raises must not be able to take workspace expiry down with it,
+    which is the same isolation the sweep itself gets from the loop.
+    """
+    # Arrange
+    stop = asyncio.Event()
+    calls: list[int] = []
+
+    def hook() -> None:
+        calls.append(1)
+        stop.set()
+        raise RuntimeError("the limiter blew up")
+
+    swept = WorkspaceCleaner(
+        database, artifact_root=tmp_path / "artifacts", clock=lambda: NOW, on_sweep=hook
+    )
+
+    # Act — returns rather than propagating.
+    await swept.run_until(stop)
+
+    # Assert
+    assert calls == [1]
+
+
+async def test_the_application_wires_the_limiter_into_the_sweep(app: FastAPI) -> None:
+    """The wiring itself, because the leak was a call that was never made.
+
+    Asserting the hook *is* the limiter's own bound method is what fails if a
+    future edit drops the argument — a behavioural test would need an hour of
+    wall-clock to observe the same thing.
+    """
+    # Arrange / Act / Assert
+    assert app.state.cleaner.on_sweep == app.state.limiter.release_idle
+
+
+# --- the index document (§29.1 step 4, FR-009's "static assets") --------------
+
+
+@pytest.fixture
+async def composed(tmp_path: Path) -> AsyncIterator[FastAPI]:
+    """The same application, with a harness bundle actually mounted at `/`.
+
+    The default `app` fixture composes no static root, so `/` is a 404 there and
+    nothing about it can be asserted. This one writes the two files
+    `mount_static_applications` looks for, so the index really is served.
+    """
+    static_root = tmp_path / "static"
+    (static_root / "harness").mkdir(parents=True)
+    (static_root / "harness" / "index.html").write_text(
+        "<!doctype html><title>ActionWitness</title>", encoding="utf-8"
+    )
+    application = create_app(
+        environ={
+            **ENV,
+            "HARNESS_ARTIFACT_ROOT": str(tmp_path / "artifacts"),
+            "HARNESS_STATIC_ROOT": str(static_root),
+        },
+        database_path=tmp_path / "harness.sqlite3",
+        clock=lambda: NOW,
+    )
+    async with application.router.lifespan_context(application):
+        yield application
+
+
+async def test_the_index_document_is_excluded_from_the_request_limit(
+    composed: FastAPI,
+) -> None:
+    """It is a static file, and FR-009 excludes static assets.
+
+    Before this it was metered, only because `startswith("/")` matches every
+    path so no prefix could name it. The visible consequence was that a burst of
+    ordinary navigations answered with the JSON error envelope rendered as the
+    page body — a refusal nobody can read, on the one request whose whole job is
+    to hand a person the application.
+    """
+    # Arrange — one visitor, holding the cookie the first load issues.
+    async with client(composed) as visitor:
+        opening = await visitor.get("/")
+        assert opening.status_code == 200
+
+        # Act — well past the per-minute burst, on a frozen clock that refills
+        # nothing, so a metered path would certainly be refused.
+        statuses = [(await visitor.get("/")).status_code for _ in range(fr009.REQUEST_BURST * 3)]
+        body = (await visitor.get("/")).text
+
+    # Assert
+    assert set(statuses) == {200}
+    assert "<title>ActionWitness</title>" in body
+
+
+async def test_the_index_document_still_spends_the_creation_allowance(
+    composed: FastAPI,
+) -> None:
+    """The exemption must not become a way to mint workspaces for free.
+
+    `/` is where the workspace cookie is issued, so it resolves a workspace even
+    though it is not metered per minute. Until the two buckets were decided
+    independently, exempting a path from the request limit also withheld the
+    creation charge from the layer that spends it — which would have turned this
+    exemption into an unmetered `INSERT`.
+    """
+    # Arrange — a fresh client per load, so each arrives with no cookie and
+    # every one of them is a *creation* rather than a return visit.
+    database: Database = composed.state.database
+    attempts = fr009.WORKSPACE_CREATIONS_PER_HOUR * 2
+    statuses: list[int] = []
+
+    # Act
+    for _ in range(attempts):
+        async with client(composed) as newcomer:
+            statuses.append((await newcomer.get("/")).status_code)
+
+    # Assert — the ceiling holds, and the table stops at it.
+    assert (
+        statuses[: fr009.WORKSPACE_CREATIONS_PER_HOUR] == [200] * fr009.WORKSPACE_CREATIONS_PER_HOUR
+    )
+    assert set(statuses[fr009.WORKSPACE_CREATIONS_PER_HOUR :]) == {429}
+    async with database.reading() as work:
+        rows = await work.fetch_all("SELECT id FROM workspaces")
+    assert len(rows) == fr009.WORKSPACE_CREATIONS_PER_HOUR
+
+
+async def test_the_index_document_still_issues_a_workspace_cookie(
+    composed: FastAPI,
+) -> None:
+    """Exempt from metering, not from resolution.
+
+    A `/` that took no workspace would leave the application to mint one on its
+    first API call — which works, and which would also mean the page and its
+    first request could disagree about which workspace they are in.
+    """
+    # Arrange / Act
+    async with client(composed) as visitor:
+        response = await visitor.get("/")
+
+    # Assert
+    assert response.status_code == 200
+    assert WORKSPACE_COOKIE_NAME in response.cookies
+
+
+async def test_an_api_route_is_still_metered(composed: FastAPI) -> None:
+    """The guard on the test above: exempting the document exempted only it."""
+    # Arrange
+    async with client(composed) as visitor:
+        assert (await visitor.get("/")).status_code == 200
+
+        # Act
+        statuses = [
+            (await visitor.get("/api/v1/workspace")).status_code
+            for _ in range(fr009.REQUEST_BURST + 5)
+        ]
+
+    # Assert
+    assert 429 in statuses

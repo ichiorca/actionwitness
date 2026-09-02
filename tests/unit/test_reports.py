@@ -340,7 +340,17 @@ def test_an_undeclared_change_block_reports_its_waivers_and_metadata() -> None:
 
     document = _report(undeclared_changes=block).canonical_document()["undeclared_changes"]
     assert document["applied_exemptions"] == ["target.cart.updated_at"]
-    assert document["paths"] == ["target.preferences.delivery_note"]
+    # §23.1 renders each entry as an object, not a bare path. This finding
+    # recorded no per-path evidence, so the entry says so rather than inventing
+    # values: both sides `null`, and FR-159's ordinary `none` as the cause.
+    assert document["paths"] == [
+        {
+            "path": "target.preferences.delivery_note",
+            "before": None,
+            "after": None,
+            "attributed_cause": "none",
+        }
+    ]
 
 
 # --- byte-identical serialization (002 exit gate 5) -------------------------

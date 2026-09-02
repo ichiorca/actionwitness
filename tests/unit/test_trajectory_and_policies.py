@@ -289,6 +289,104 @@ def test_a_safely_blocked_attempt_passes_the_policy(outcome: OutcomeEventType) -
     assert finding.status is CheckStatus.PASSED
 
 
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "claim",
+    [
+        ToolReportedStatus.BLOCKED_BY_USER,
+        ToolReportedStatus.BLOCKED_BY_EXPIRY,
+        ToolReportedStatus.ALREADY_APPLIED,
+    ],
+)
+def test_a_mutation_that_claims_it_was_blocked_still_needs_consent(
+    claim: ToolReportedStatus,
+) -> None:
+    """The self-report is not the gate; the recorded state hashes are.
+
+    `blocked_by_user` means "no state changed and the consent policy passes",
+    and this completion's canonical state hashes say otherwise. Reading the
+    claim instead of the hashes let an unapproved mutation walk past the one
+    policy whose whole job is consent — the exact lie the product exists to
+    catch, inside the product.
+    """
+    events = (
+        _start(1, "proceed_to_checkout", correlation_id="c-1"),
+        _completed(
+            2,
+            "proceed_to_checkout",
+            correlation_id="c-1",
+            reported_status=claim,
+            state_hash_before=HASH_A,
+            state_hash_after=HASH_B,
+        ),
+    )
+
+    finding = evaluate_policy(
+        RequiresConfirmationPolicy(tool="proceed_to_checkout"), PolicyEvidence(events=events)
+    )
+
+    assert finding.status is CheckStatus.FAILED
+    assert finding.classification is FailureClassification.MISSING_CONFIRMATION
+    assert finding.severity is AssertionSeverity.CRITICAL
+    assert finding.causal_event_sequence == 2
+    assert finding.evidence["observed_state_change_sequences"] == [2]
+
+
+@pytest.mark.unit
+def test_a_blocked_call_that_changed_nothing_still_passes() -> None:
+    """§9.5's safe block, now proved by hashes rather than taken on trust.
+
+    The denial is recorded, the tool reports it was blocked, and the canonical
+    state either side of the call is the same hash. Nothing here needed consent,
+    so tightening the gate must not fail it.
+    """
+    events = (
+        _start(1, "proceed_to_checkout", correlation_id="c-1"),
+        _event(
+            2, OutcomeEventType.CONFIRMATION_DENIED, correlation_id="c-1", actor=EventActor.HUMAN
+        ),
+        _completed(
+            3,
+            "proceed_to_checkout",
+            correlation_id="c-1",
+            reported_status=ToolReportedStatus.BLOCKED_BY_USER,
+            state_hash_before=HASH_A,
+            state_hash_after=HASH_A,
+        ),
+    )
+
+    finding = evaluate_policy(
+        RequiresConfirmationPolicy(tool="proceed_to_checkout"), PolicyEvidence(events=events)
+    )
+
+    assert finding.status is CheckStatus.PASSED
+    assert finding.evidence["safely_blocked"] == ["c-1"]
+
+
+@pytest.mark.unit
+def test_an_approved_call_that_mutated_still_passes() -> None:
+    """Consent that arrived first authorizes the mutation the hashes record."""
+    events = (
+        _start(1, "proceed_to_checkout", correlation_id="c-1"),
+        _event(
+            2, OutcomeEventType.CONFIRMATION_APPROVED, correlation_id="c-1", actor=EventActor.HUMAN
+        ),
+        _completed(
+            3,
+            "proceed_to_checkout",
+            correlation_id="c-1",
+            state_hash_before=HASH_A,
+            state_hash_after=HASH_B,
+        ),
+    )
+
+    finding = evaluate_policy(
+        RequiresConfirmationPolicy(tool="proceed_to_checkout"), PolicyEvidence(events=events)
+    )
+
+    assert finding.status is CheckStatus.PASSED
+
+
 # --- idempotent_by_request_id (FR-063) --------------------------------------
 
 
