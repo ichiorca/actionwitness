@@ -60,6 +60,7 @@ from actionwitness_core.journeys.enums import (
     RunState,
 )
 from actionwitness_core.journeys.transitions import validate_run_transition
+from actionwitness_core.ports.enums import RetrySemantics
 from actionwitness_core.ports.models import Observation, TargetToolSpec, ToolExecutionResult
 from actionwitness_core.ports.schemas import validate_arguments
 from actionwitness_core.security.limits import MAX_TOOL_RESULT_CHARS
@@ -201,7 +202,7 @@ class InvocationService:
         else:
             invocation_id = self._id_source()
             correlation_id = invocation_id
-            request_id = f"req_{invocation_id}"
+            request_id = _target_request_id(spec, arguments, invocation_id)
 
         # 2 — canonical state before the call. I/O, outside every lock.
         before = await self._observe(adapter, workspace_id, policy)
@@ -907,3 +908,31 @@ def _context(
         actor=EventActor.AGENT,
         human_consent_granted=human_consent_granted,
     )
+
+
+def _target_request_id(
+    spec: TargetToolSpec, arguments: Mapping[str, Any], invocation_id: str
+) -> str:
+    """The idempotency key this call actually presents to the target.
+
+    A tool whose retry semantics are `idempotent_by_request_id` carries the key
+    in its own arguments, and that is the key the *target* deduplicates on. The
+    event has to record the same one, because FR-063 judges "repeating one
+    request ID" against canonical state — and a harness that recorded a fresh
+    identifier per call would make every repeat look like a first attempt, so
+    `idempotent_by_request_id` could never fail however the target behaved.
+
+    It also keeps a live run and its replay consistent: 007's replayer already
+    prefers the recorded argument, so without this a case cut from a live run
+    would classify differently from the run it was cut from — which AC-15
+    forbids.
+
+    Every other tool keeps the generated identifier. Those declare no caller
+    key, and inventing a shared one would make unrelated calls look like
+    retries of each other.
+    """
+    if spec.retry is RetrySemantics.IDEMPOTENT_BY_REQUEST_ID:
+        supplied = arguments.get("request_id")
+        if isinstance(supplied, str) and supplied:
+            return supplied
+    return f"req_{invocation_id}"

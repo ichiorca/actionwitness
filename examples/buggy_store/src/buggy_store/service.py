@@ -209,28 +209,38 @@ class StoreService:
                 )
                 current = await self._repository.read_state(connection, workspace_id)
                 assert current is not None  # ensured above, inside this transaction
-                if replayed is not None:
+                scenario = (
+                    await self._repository.read_scenario(connection, workspace_id)
+                ) or ScenarioConfiguration()
+                duplicating = scenario.injects(FaultProfile.DUPLICATE_ON_RETRY)
+                if replayed is not None and not duplicating:
                     # App. D.2: return the first persisted result and do not
                     # mutate again.
                     return MutationOutcome(replayed.response, current, replayed=True)
 
-                scenario = (
-                    await self._repository.read_scenario(connection, workspace_id)
-                ) or ScenarioConfiguration()
-                next_state = self._apply_quantity(current, product, quantity, scenario)
+                next_state = self._apply_quantity(
+                    current, product, quantity, scenario, duplicating=replayed is not None
+                )
                 if next_state is not current:
                     await self._repository.write_state(connection, workspace_id, next_state)
 
                 response = _cart_response(next_state)
-                await self._repository.record_result(
-                    connection,
-                    workspace_id,
-                    UPDATE_CART,
-                    request_id,
-                    payload,
-                    response,
-                    next_state.state_version,
-                )
+                if replayed is None:
+                    await self._repository.record_result(
+                        connection,
+                        workspace_id,
+                        UPDATE_CART,
+                        request_id,
+                        payload,
+                        response,
+                        next_state.state_version,
+                    )
+                # A duplicated retry writes no second record: the key already
+                # holds one, and inserting again would raise rather than
+                # mutate. §13.3 wants a response that "stays syntactically
+                # valid", so the fault has to leave the bookkeeping intact and
+                # corrupt only the state — which is exactly what makes it hard
+                # to catch from the response alone.
         return MutationOutcome(response, next_state, replayed=False)
 
     def _apply_quantity(
@@ -239,8 +249,18 @@ class StoreService:
         product: Product,
         quantity: int,
         scenario: ScenarioConfiguration,
+        *,
+        duplicating: bool = False,
     ) -> StoreState:
         """Absolute assignment, returning `current` unchanged when nothing moved.
+
+        `duplicating` is §13.3's `duplicate_on_retry`, and it has to *add* rather
+        than re-assign. Appendix D.2 makes `quantity` absolute, so a retry that
+        merely re-applied the same absolute value would leave the cart identical
+        and change no state at all — the fault would be undetectable, and
+        `idempotent_by_request_id` would pass while the store misbehaved. The
+        realistic bug is a retry treated as a fresh delta, which is what AC-05
+        means by "the evidence shows the duplicate state change".
 
         The scenario is taken here rather than applied by the caller afterwards so
         that one tool call produces exactly one state version. Injecting the side
@@ -253,8 +273,12 @@ class StoreService:
         if quantity == 0:
             items.pop(product.line_key, None)
         else:
+            existing = items.get(product.line_key)
+            applied = quantity
+            if duplicating and existing is not None:
+                applied = existing.quantity + quantity
             items[product.line_key] = CartLine(
-                product_id=product.product_id, quantity=quantity, unit_price=product.price
+                product_id=product.product_id, quantity=applied, unit_price=product.price
             )
 
         existing_discount = current.target_state.cart.discount

@@ -224,11 +224,12 @@ def test_gate_5_the_undeclared_side_effect_template_ships() -> None:
     )
 
 
-def test_gate_5_the_template_honesty_gate_now_covers_three_profiles() -> None:
-    """ "The test that forbade claiming an uninjectable profile now covers three."
+def test_gate_5_the_template_honesty_gate_now_covers_four_profiles() -> None:
+    """The test that forbade claiming an uninjectable profile now covers four.
 
     Extended, never weakened: the gate still refuses a template that claims a
-    profile with no injector, and there are now three profiles it can vouch for.
+    profile with no injector, and there are now four profiles it can vouch for
+    — 012-T1 added `duplicate_on_retry`.
     """
     assert (
         frozenset(
@@ -236,6 +237,7 @@ def test_gate_5_the_template_honesty_gate_now_covers_three_profiles() -> None:
                 FaultProfile.NONE,
                 FaultProfile.DISCOUNT_REPORTED_BUT_NOT_APPLIED,
                 FaultProfile.UNDECLARED_SIDE_EFFECT,
+                FaultProfile.DUPLICATE_ON_RETRY,
             }
         )
         == IMPLEMENTED_PROFILES

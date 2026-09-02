@@ -104,15 +104,23 @@ def test_every_profile_is_described_so_a_report_can_label_it() -> None:
 
 
 @pytest.mark.integration
-def test_this_build_implements_the_honest_path_and_two_faults() -> None:
+def test_this_build_implements_the_honest_path_and_three_faults() -> None:
     """Extended, never widened: each injector arrives with its own tests.
 
-    003 shipped the honest path and the discount fault; 013-T5 adds
-    `undeclared_side_effect`. Pinned as set equality rather than a count, so a
-    profile that gained an entry here without gaining an injector fails.
+    003 shipped the honest path and the discount fault; 013-T5 added
+    `undeclared_side_effect`; 012-T1 adds `duplicate_on_retry`. Pinned as set
+    equality rather than a count, so a profile that gained an entry here
+    without gaining an injector fails.
     """
     assert (
-        frozenset({FaultProfile.NONE, DISCOUNT_FAULT, FaultProfile.UNDECLARED_SIDE_EFFECT})
+        frozenset(
+            {
+                FaultProfile.NONE,
+                DISCOUNT_FAULT,
+                FaultProfile.UNDECLARED_SIDE_EFFECT,
+                FaultProfile.DUPLICATE_ON_RETRY,
+            }
+        )
         == IMPLEMENTED_PROFILES
     )
 
@@ -188,7 +196,6 @@ async def test_a_selection_is_scoped_to_its_workspace(service: StoreService) -> 
 @pytest.mark.parametrize(
     "profile",
     [
-        FaultProfile.DUPLICATE_ON_RETRY,
         FaultProfile.CHECKOUT_WITHOUT_CONFIRMATION,
         FaultProfile.TOOL_SURFACE_POISONED,
     ],
@@ -386,6 +393,7 @@ async def test_the_scenario_endpoint_publishes_what_the_panel_needs(
     assert body["recognized_fault_profiles"] == [profile.value for profile in FaultProfile]
     assert body["implemented_fault_profiles"] == [
         "discount_reported_but_not_applied",
+        "duplicate_on_retry",
         "none",
         "undeclared_side_effect",
     ]

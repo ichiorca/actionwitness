@@ -13,7 +13,7 @@ acceptance criterion. An item that is cut has its control and tool registration
 removed or visibly disabled — a greyed-out button that still registers a WebMCP
 tool is the failure this milestone exists to prevent.
 
-- [ ] T1 — `duplicate_on_retry` injector plus idempotency evidence; AC-05
+- [x] T1 — `duplicate_on_retry` injector plus idempotency evidence; AC-05
       green through the real boundary. First in the order because it turns
       idempotency from a property the code asserts about itself into one
       observed under a fault.

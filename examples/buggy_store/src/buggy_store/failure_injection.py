@@ -12,12 +12,14 @@ counterpart of, or FR-019's matched comparison has nothing to match on: the pair
 differs only in scenario mode, and every other controlled input — including the
 comparison fault identity — must be equal.
 
-**All six are recognised; one is implemented.** BUILD_ORDER §7/M2 ships
-`discount_reported_but_not_applied` and says to "keep the other injected profiles
-disabled until their Tier 3 work is complete". Selecting one of those is refused
-with a stated reason rather than silently treated as `none` — a store that
-quietly ran the honest path while a report said a fault was active would be
-lying about the thing this application exists to demonstrate.
+**All six are recognised; the shipped set grows one milestone at a time.**
+BUILD_ORDER §7/M2 shipped `discount_reported_but_not_applied` and said to "keep
+the other injected profiles disabled until their Tier 3 work is complete"; 013
+added `undeclared_side_effect` and 012-T1 adds `duplicate_on_retry`. Selecting
+an unimplemented one is refused with a stated reason rather than silently
+treated as `none` — a store that quietly ran the honest path while a report said
+a fault was active would be lying about the thing this application exists to
+demonstrate.
 
 Nothing here is a security control. These are deliberate defects in a demo
 storefront; the harness is what makes them visible.
@@ -100,6 +102,14 @@ IMPLEMENTED_PROFILES: Final[frozenset[FaultProfile]] = frozenset(
         # `no_undeclared_changes` fails, which is the demonstration §13.3 asks
         # this profile to make.
         FaultProfile.UNDECLARED_SIDE_EFFECT,
+        # 012-T1. A repeated `update_cart` with the same request ID and an
+        # identical payload applies the mutation a second time instead of
+        # replaying the first result, while the response stays syntactically
+        # valid. The retry is treated as a fresh delta rather than the absolute
+        # assignment Appendix D.2 defines — re-applying the same absolute
+        # quantity would change nothing, and a fault that leaves state
+        # untouched is one `idempotent_by_request_id` cannot see.
+        FaultProfile.DUPLICATE_ON_RETRY,
     }
 )
 
