@@ -170,6 +170,45 @@ cannot expand and hide the five it can. The appendix is read as a shape — one
 `template_id` chosen from a closed published set, plus three optional scalars —
 and that shape is implemented exactly. No behaviour differs; the names do.
 
+### D8 — the cut profile was recorded, not refused (T8)
+
+**§13.3 / BUILD_ORDER M11 / FR-011.** T8 asked for cut hygiene *verified rather
+than asserted*, and the verification found the cut was not hygienic.
+
+`checkout_without_confirmation` is recognised, described, and unbuilt — the
+store refuses it correctly. The harness did not. `PUT /workspace/failure-profile`
+answered **200** and recorded it, because the only thing that asked the target
+was scenario *preparation*, preparation is skipped when there is no target or
+mode selected yet, and `RunService.arm` copies the workspace's profile into the
+run without re-asking. A run could therefore be armed carrying a fault nothing
+injects, and its report would name an active defect while the store behaved
+honestly — the harness manufacturing exactly the false claim it exists to catch.
+
+**Taken: the adapter advertises what it can inject, and two gates use it.**
+
+- `TargetDescriptor` gains `supported_fault_profiles` (default `()`, never
+  interpreted by the core — the same contract `supported_scenario_modes`
+  already has). Additive, so no existing adapter changes meaning.
+- `PUT /workspace/failure-profile` refuses an unadvertised profile *as soon as
+  a target exists to answer*.
+- `RunService.arm` refuses one regardless of the order the operator worked in.
+  FR-011 explicitly allows choosing a profile before a contract, so the early
+  gate cannot always answer; arming can, and it is the last moment before the
+  profile becomes evidence.
+
+**Three existing tests failed and were not weakened.** They assert a profile may
+be selected before a contract, which FR-011 permits and which my first attempt
+had forbidden by refusing whenever no target was resolvable. The rule was wrong,
+not the tests: the fix moved the unanswerable case to arming instead. All three
+pass unchanged.
+
+**The duplication is guarded.** `integrations.buggy_store` may not import
+`buggy_store` (§26.7), so the advertised list is restated, and
+`tests/contracts/test_buggy_store_templates.py` holds it equal to the store's
+`IMPLEMENTED_PROFILES`. A drift would resurrect precisely the defect the list
+was added to close — the same pattern already used to hold the harness tool
+names between server and frontend.
+
 ### D6 — SSE ships server-side; the workspace stays on polling (T7)
 
 **§15.3 / §7.3.** The entry condition was checked rather than assumed: all eight

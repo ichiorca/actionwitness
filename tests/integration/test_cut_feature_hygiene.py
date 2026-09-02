@@ -27,7 +27,7 @@ from pathlib import Path
 
 import httpx
 import pytest
-from actionwitness_service.api.app import create_app
+from actionwitness_service.api.app import API_PREFIX, create_app
 from actionwitness_service.config import MODULE_NAMES, ModuleStatus, ServiceSettings
 from fastapi import FastAPI
 
@@ -280,3 +280,249 @@ def test_the_readme_marks_every_tier_three_module_as_optional() -> None:
         assert any(
             marker in section for marker in ("optional", "disabled", "not shipped", "tier 3", "off")
         ), f"the README names {name} without saying it is optional or off"
+
+
+# --- cut fault profiles (012-T8) ---------------------------------------------
+#
+# 009-T12's tests above are about optional *modules* — a Shopify integration
+# that is off, an audit surface that is not mounted. M11 cuts a different kind
+# of thing: a fault profile that is recognised, described, and not built.
+#
+# `checkout_without_confirmation` is 012's only cut (plan.md D1: the harness's
+# confirmation gate and the `requires_confirmation` policy read the same
+# contract policy, so no store-side fault can reach AC-07's classification).
+# The hygiene question is the one this file already asks of a module — is it
+# actually unavailable everywhere, or only unavailable where somebody
+# remembered?
+#
+# The dangerous shape is specific. A cut profile silently downgraded to `none`
+# would leave a run whose report named an active fault and whose store behaved
+# honestly — the harness stating a defect was injected while nothing was. That
+# is the demo lying about the one thing it exists to show, and it is worse than
+# a refusal by exactly the margin that makes this product necessary.
+
+
+def _unimplemented_profiles() -> list[str]:
+    from buggy_store.failure_injection import IMPLEMENTED_PROFILES, FaultProfile
+
+    return sorted(item.value for item in FaultProfile if item not in IMPLEMENTED_PROFILES)
+
+
+@pytest.fixture
+async def demo(tmp_path: Path) -> AsyncIterator[httpx.AsyncClient]:
+    """The harness composed with the demo store, as an operator would run it."""
+    from buggy_store.api import create_app as create_store
+
+    store = create_store(database_path=tmp_path / "store.sqlite3")
+    async with (
+        store.router.lifespan_context(store),
+        httpx.ASGITransport(app=store) as asgi,
+        httpx.AsyncClient(transport=asgi, base_url="http://buggy-store.test") as target_client,
+    ):
+        harness = create_app(
+            environ={
+                "HARNESS_ENV": "local",
+                "BUGGY_STORE_ENABLED": "true",
+                "HARNESS_ARTIFACT_ROOT": str(tmp_path / "artifacts"),
+            },
+            database_path=tmp_path / "harness.sqlite3",
+            target_client=target_client,
+        )
+        async with (
+            harness.router.lifespan_context(harness),
+            httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=harness, raise_app_exceptions=False),
+                base_url="https://harness.test",
+            ) as client,
+        ):
+            yield client
+
+
+def test_some_fault_profile_is_still_cut() -> None:
+    """The guard on the checks below: if everything shipped, they prove nothing.
+
+    This is expected to go vacuous eventually, and it fails loudly at that point
+    rather than leaving several tests quietly asserting nothing about an empty
+    set.
+    """
+    assert _unimplemented_profiles(), (
+        "every fault profile is implemented, so the cut-profile tests below are "
+        "vacuous — delete them or fix this guard"
+    )
+
+
+def test_every_cut_profile_is_still_named_and_described() -> None:
+    """Removed *or visibly disabled*, and this project chose visible.
+
+    §13.3 names six profiles. Deleting a cut one from the enum would make the
+    demo look as though it never intended the behaviour, and would silently
+    narrow the vocabulary reports are written in. It stays recognised and
+    described, which is what lets the refusal below say something useful.
+    """
+    from buggy_store.failure_injection import PROFILE_DESCRIPTIONS, FaultProfile
+
+    for value in _unimplemented_profiles():
+        assert PROFILE_DESCRIPTIONS[FaultProfile(value)].strip(), (
+            f"{value} is cut and describes nothing"
+        )
+
+
+async def _select_demo_contract(demo: httpx.AsyncClient) -> None:
+    templates = (await demo.get(f"{API_PREFIX}/contracts/templates")).json()["templates"]
+    chosen = next(
+        item for item in templates if item["source_template_id"] == "one_mug_save20_no_checkout"
+    )
+    await demo.post(f"{API_PREFIX}/contracts/{chosen['contract_id']}/select")
+
+
+@pytest.mark.parametrize("profile", _unimplemented_profiles())
+async def test_selecting_a_cut_profile_is_refused_by_name(
+    demo: httpx.AsyncClient, profile: str
+) -> None:
+    """Refused as soon as the answer is knowable, with a reason, and not as a 500.
+
+    A 500 carries the same information — "it did not work" — as a fault in the
+    harness rather than a deliberate limit of the build, and an operator would
+    reasonably file a bug against the wrong thing.
+
+    A contract is selected first because that is what selects the target, and
+    only a target can say which faults it injects. The other order — profile
+    before contract, which FR-011 allows — cannot be answered here and is
+    refused at arming instead; `test_a_cut_profile_can_never_reach_a_run`
+    covers it.
+    """
+    # Arrange
+    await _select_demo_contract(demo)
+
+    # Act
+    refused = await demo.put(
+        f"{API_PREFIX}/workspace/failure-profile", json={"failure_profile": profile}
+    )
+
+    # Assert
+    assert 400 <= refused.status_code < 500, refused.text
+    assert profile in refused.text
+
+
+@pytest.mark.parametrize("profile", _unimplemented_profiles())
+async def test_a_cut_profile_never_becomes_the_recorded_selection(
+    demo: httpx.AsyncClient, profile: str
+) -> None:
+    """Refused, and not recorded either — the failure mode that matters.
+
+    If the refusal came back but the workspace kept the selection, a later run
+    would be armed against a fault nothing injects, and its report would name an
+    active defect while the store behaved honestly. The harness would be making
+    exactly the false claim it exists to catch.
+    """
+    # Arrange
+    await _select_demo_contract(demo)
+    before = (await demo.get(f"{API_PREFIX}/workspace")).json()["failure_profile"]
+
+    # Act
+    await demo.put(f"{API_PREFIX}/workspace/failure-profile", json={"failure_profile": profile})
+
+    # Assert
+    after = (await demo.get(f"{API_PREFIX}/workspace")).json()["failure_profile"]
+    assert after == before
+    assert after != profile
+
+
+@pytest.mark.parametrize("profile", _unimplemented_profiles())
+async def test_a_cut_profile_can_never_reach_a_run(demo: httpx.AsyncClient, profile: str) -> None:
+    """The last gate, and the one that closes the order-dependent hole.
+
+    FR-011 lets a profile be chosen before a contract, so the target that would
+    have to inject it may not exist yet — and preparation, which is what asks
+    the target, is skipped when there is nothing to prepare. That left a
+    workspace holding a profile nothing could produce, and arming copied it
+    straight into the run.
+
+    A run is where a profile becomes evidence. Refused here, the report can
+    never name an active defect the store did not inject.
+    """
+    # Arrange — select the profile first, then a contract, exactly as the
+    # order-dependent path did.
+    await demo.put(f"{API_PREFIX}/workspace/failure-profile", json={"failure_profile": profile})
+    await _select_demo_contract(demo)
+
+    # Act
+    armed = await demo.post(f"{API_PREFIX}/runs")
+
+    # Assert
+    assert 400 <= armed.status_code < 500, armed.text
+    assert profile in armed.text
+    assert (await demo.get(f"{API_PREFIX}/workspace")).json()[
+        "activeRun" if False else "active_run"
+    ] is None
+
+
+@pytest.mark.parametrize("profile", _unimplemented_profiles())
+async def test_the_store_refuses_a_cut_profile_rather_than_running_the_honest_path(
+    demo: httpx.AsyncClient, profile: str
+) -> None:
+    """The store's own promise, asked directly.
+
+    The harness could otherwise be hiding a store that accepted the selection
+    and quietly behaved correctly under it. A `200` here would mean the demo
+    took a fault it does not inject.
+    """
+    # Arrange
+    workspace_id = (await demo.get(f"{API_PREFIX}/workspace")).json()["workspace_id"]
+
+    # Act
+    answered = await demo.post(
+        "/demo/api/v1/store/scenario",
+        json={"scenario_mode": "pre_fix", "fault_profile": profile},
+        headers={"X-Workspace-Id": workspace_id},
+    )
+
+    # Assert
+    assert answered.status_code != 200, answered.text
+
+
+def test_no_shipped_control_offers_a_cut_profile() -> None:
+    """A control that lets somebody pick an unbuilt fault is the M11 failure.
+
+    A comment explaining why the profile is absent is documentation; a string
+    literal in a control is an offer, so only code is scanned.
+    """
+    shipped = [
+        path
+        for path in FRONTEND_SRC.rglob("*.ts*")
+        if ".test." not in path.name
+        and "generated" not in path.parts
+        and "test" not in path.relative_to(FRONTEND_SRC).parts
+    ]
+    assert shipped, "the source scan found no files, so it proves nothing"
+
+    offenders: list[str] = []
+    for profile in _unimplemented_profiles():
+        for path in shipped:
+            code = "\n".join(
+                line
+                for line in path.read_text(encoding="utf-8").splitlines()
+                if not line.strip().startswith(("*", "//", "/*"))
+            )
+            if profile in code:
+                offenders.append(f"{path.relative_to(REPO_ROOT).as_posix()} -> {profile}")
+
+    assert offenders == [], f"shipped UI code offers cut fault profiles: {offenders}"
+
+
+def test_no_document_claims_a_cut_profile_is_demonstrable() -> None:
+    """Constitution §8: product copy claims nothing unshipped.
+
+    The README may *name* a cut profile — §13.3's vocabulary is public and
+    hiding it would be its own dishonesty — but it must not read as though the
+    demonstration exists. Any mention sits near a word saying it does not.
+    """
+    copy = README.read_text(encoding="utf-8")
+    for profile in _unimplemented_profiles():
+        for line in copy.splitlines():
+            if profile not in line:
+                continue
+            assert any(
+                marker in line.lower()
+                for marker in ("not implemented", "not shipped", "cut", "unavailable", "tier 3")
+            ), f"the README mentions {profile} without saying it is not shipped: {line.strip()!r}"

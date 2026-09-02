@@ -173,6 +173,30 @@ def test_every_template_is_written_in_its_own_canonical_form(template) -> None:
 
 
 @pytest.mark.contracts
+def test_the_adapter_advertises_exactly_the_profiles_the_store_implements() -> None:
+    """The duplication that closes 012-T8's hole must not become the hole.
+
+    `integrations.buggy_store` cannot import `buggy_store` (§26.7: it translates
+    to the demo application's public HTTP API and never its service objects), so
+    the adapter restates which fault profiles exist. That restatement is what
+    the harness now validates a selection against, and a drift between the two
+    lists resurrects exactly the defect it was added to close — the harness
+    recording a profile the store refuses, and a run whose report names an
+    active fault while the store behaves honestly.
+
+    Held in agreement here, the same way the harness tool names are held between
+    the server and the frontend.
+    """
+    from buggy_store.failure_injection import IMPLEMENTED_PROFILES
+    from integrations.buggy_store.adapter import SUPPORTED_FAULT_PROFILES
+
+    assert set(SUPPORTED_FAULT_PROFILES) == {item.value for item in IMPLEMENTED_PROFILES}, (
+        "the adapter's advertised fault profiles disagree with the store's "
+        "implemented set; the harness would accept a profile the store refuses"
+    )
+
+
+@pytest.mark.contracts
 def test_every_declared_parameter_is_one_the_form_can_carry() -> None:
     """FR-021 keeps the flat form to allowlisted scalars (012-T5).
 

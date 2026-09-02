@@ -32,7 +32,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, ClassVar
 
 import httpx
 
@@ -187,6 +187,36 @@ class AdapterRegistry:
         if slot is None or slot.factory is None:
             return ()
         return tuple(slot.factory().descriptor.supported_scenario_modes)
+
+    #: The one profile that needs no injector, and therefore no target.
+    NO_FAULT: ClassVar[str] = "none"
+
+    def injects_fault_profile(self, identifier: str | None, fault_profile: str) -> bool:
+        """Whether the named target advertises this profile (012-T8, §13.3).
+
+        Two rules, and the second is the one that closes a real hole.
+
+        **A target that advertises a list is held to it.** A profile outside it
+        is recognised-but-unbuilt, and recording one would arm a run whose report
+        names an active fault while the target behaves honestly.
+
+        **Without a resolvable target, the question cannot be answered yet.** A
+        fault profile is a property of the target that injects it, and FR-011
+        lets an operator choose one before selecting a contract — so an
+        unresolvable target answers `True` here and the decision moves to
+        arming, which is the moment the profile would enter a run's evidence.
+        Refusing early would forbid a legitimate order of work; refusing at
+        arming forbids the outcome that actually matters.
+
+        An adapter that publishes *no* list is trusted for any profile — an
+        external target injects nothing and has no list to publish.
+        """
+        if fault_profile == self.NO_FAULT:
+            return True
+        slot = self.resolve(identifier)
+        if slot is None or slot.factory is None:
+            return True
+        return slot.factory().descriptor.injects(fault_profile)
 
     # -- registration --------------------------------------------------------
 

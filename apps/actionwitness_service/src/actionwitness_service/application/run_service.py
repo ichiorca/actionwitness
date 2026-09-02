@@ -153,6 +153,14 @@ class RunService:
         async with self._database.reading() as work:
             selected = await self._configuration(work, workspace_id)
 
+        # FR-011 lets a profile be chosen before a contract, so the target that
+        # would have to inject it may not have existed at selection time. This
+        # is where that becomes answerable, and it is the last moment it can be
+        # asked: everything after this writes the profile into a run's evidence,
+        # and a report naming an active fault the target never injects is the
+        # false claim this harness exists to catch (012-T8, §13.3).
+        self._require_injectable_profile(selected)
+
         # Phase 2 — the one authoritative read. Outside every lock.
         observation = await self._capture(selected, workspace_id)
 
@@ -174,6 +182,30 @@ class RunService:
             return await self._write(
                 work, workspace_id, confirmed, observation, comparison_source_run_id
             )
+
+    def _require_injectable_profile(self, selected: WorkspaceConfiguration) -> None:
+        """Refuse to arm against a fault the selected target cannot inject.
+
+        §13.3 names six profiles and this build ships some of them. The
+        recognised-but-unbuilt case is the dangerous one, and it is refused here
+        rather than downgraded: a run armed with it would produce a report
+        naming an active defect while the target behaved honestly, which is
+        precisely the disagreement between claim and state that the product
+        exists to surface. Manufacturing one would be worse than any bug it
+        could hide.
+        """
+        profile = selected.failure_profile
+        if profile is None:
+            return
+        if self._registry.injects_fault_profile(selected.target_id, profile):
+            return
+        raise ApiError(
+            ApiErrorCode.CONTRACT_VALIDATION_FAILED,
+            f"The selected target cannot inject the {profile!r} fault profile, so a run "
+            "armed against it would report a defect that was never produced. It is "
+            "recognised by the specification and not implemented in this build.",
+            details=[{"path": "failure_profile", "message": "recognised but not implemented"}],
+        )
 
     # -- phase 1 and 3: the selected configuration ---------------------------
 

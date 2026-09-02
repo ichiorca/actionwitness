@@ -73,13 +73,34 @@ __all__ = [
 TARGET_ID: Final = "buggy-store"
 ADAPTER_ID: Final = "integrations.buggy_store"
 
+#: The fault profiles this build can actually inject (012-T8).
+#:
+#: Restated here rather than imported: this package translates to the demo
+#: application's public HTTP API and never imports its service objects (§26.7).
+#: The duplication is deliberate and *guarded* —
+#: `tests/contracts/test_buggy_store_templates.py` holds this equal to the
+#: store's own `IMPLEMENTED_PROFILES`, the same way the harness tool names are
+#: held equal across the server and the frontend. A drift between the two would
+#: resurrect exactly the defect this list was added to close: a profile the
+#: harness records and the store refuses.
+SUPPORTED_FAULT_PROFILES: Final[tuple[str, ...]] = (
+    "none",
+    "discount_reported_but_not_applied",
+    "duplicate_on_retry",
+    "undeclared_side_effect",
+    "tool_surface_poisoned",
+)
+
 #: §9.1: the adapter advertises the modes it supports, and the core validates a
-#: selection against this list without interpreting the names.
+#: selection against this list without interpreting the names. The same is now
+#: true of fault profiles — `checkout_without_confirmation` is recognised by
+#: §13.3 and not built (012 plan.md D1), so it is deliberately absent.
 DESCRIPTOR: Final = TargetDescriptor(
     target_type="managed_application",
     target_id=TARGET_ID,
     execution_mode=ExecutionMode.MANAGED,
     supported_scenario_modes=("pre_fix", "post_fix"),
+    supported_fault_profiles=SUPPORTED_FAULT_PROFILES,
 )
 
 #: The store's own confirmation window. Short, because it is opened and spent

@@ -210,6 +210,7 @@ async def _select_and_prepare(
         before = await WorkspaceService(work, workspace_id).status()
     _require_supported_mode(before, preparer, scenario_mode)
     _require_demo_only_profile(registry, before["selected_target_id"], failure_profile)
+    _require_injectable_profile(registry, before["selected_target_id"], failure_profile)
 
     target_id = before["selected_target_id"]
     intended_mode = before["scenario_mode"] if scenario_mode is None else scenario_mode
@@ -282,6 +283,35 @@ def _require_demo_only_profile(registry: Any, target_id: Any, failure_profile: s
             "target (§13.3).",
             details=[{"path": "failure_profile", "message": "demo-only profile"}],
         )
+
+
+def _require_injectable_profile(registry: Any, target_id: Any, failure_profile: str | None) -> None:
+    """Refuse a profile the target cannot inject (§13.3, M11 cut hygiene; 012-T8).
+
+    §13.3 names six fault profiles and a build ships some of them. A *recognised
+    but unbuilt* profile is the dangerous case, and it used to be recorded
+    silently: preparation is what asked the target, preparation is skipped when
+    no target is selected yet, and arming copies the workspace's profile into
+    the run without re-asking. The result was a run whose report named an active
+    fault while the store behaved honestly — the harness making exactly the
+    false claim it exists to catch.
+
+    Checked before anything is prepared or written, against the adapter's own
+    advertised list, so the refusal does not depend on which order an operator
+    happened to click.
+    """
+    if failure_profile is None:
+        return
+    if registry.injects_fault_profile(
+        None if target_id is None else str(target_id), failure_profile
+    ):
+        return
+    raise ApiError(
+        ApiErrorCode.CONTRACT_VALIDATION_FAILED,
+        f"The selected target cannot inject the {failure_profile!r} fault profile. "
+        "It is recognised by the specification and not implemented in this build.",
+        details=[{"path": "failure_profile", "message": "recognised but not implemented"}],
+    )
 
 
 def _require_supported_mode(

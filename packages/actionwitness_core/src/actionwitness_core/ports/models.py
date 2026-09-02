@@ -87,9 +87,32 @@ class TargetDescriptor(CoreModel):
     target_id: Identifier
     execution_mode: ExecutionMode
     supported_scenario_modes: Annotated[tuple[Token, ...], Field(min_length=1)]
+    #: The fault profiles this target can actually inject (012-T8).
+    #:
+    #: Same rule as the modes above: opaque tokens the core compares and never
+    #: interprets. Empty means the adapter advertises nothing, which a caller
+    #: must read as "cannot judge" rather than "nothing is allowed" — an
+    #: external target injects no faults at all and would otherwise have to
+    #: enumerate an empty policy it has no concept of.
+    #:
+    #: This exists because a *recognised but unbuilt* profile is not the same
+    #: as an unknown one. §13.3 names six; a build ships some. Recording one it
+    #: cannot inject would arm a run whose report names an active fault while
+    #: the target behaves honestly — the harness making exactly the false claim
+    #: it exists to catch.
+    supported_fault_profiles: tuple[Token, ...] = ()
 
     def supports(self, scenario_mode: str) -> bool:
         return scenario_mode in self.supported_scenario_modes
+
+    def injects(self, fault_profile: str) -> bool:
+        """Whether this target advertises the named profile.
+
+        `True` when nothing is advertised: an adapter that publishes no profile
+        list is making no claim, and treating silence as refusal would break
+        every target that has no faults to describe.
+        """
+        return not self.supported_fault_profiles or fault_profile in self.supported_fault_profiles
 
 
 class ScenarioSelection(CoreModel):

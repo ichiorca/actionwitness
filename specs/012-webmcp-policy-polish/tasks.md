@@ -54,9 +54,15 @@ tool is the failure this milestone exists to prevent.
       makes SSE an enhancement, and a second live transport in the UI is the
       risk this item was made conditional over. D7 records a rail test that was
       vacuous and what replaced it.
-- [ ] T8 — Cut hygiene for every item not shipped: control and tool
-      registration removed or visibly disabled, verified rather than asserted.
-      Extend 009-T12's existing gate rather than writing a second one.
+- [x] T8 — Cut hygiene for every item not shipped, verified rather than
+      asserted, by extending 009-T12's gate rather than writing a second one.
+      That gate covered optional *modules*; M11's cut is a fault profile, so it
+      now also covers those. **The verification found a real defect** (plan.md
+      D8): `checkout_without_confirmation` was recorded by the harness with a
+      200 and could be armed into a run, whose report would have named an
+      active fault the store never injected. Closed by having the adapter
+      advertise what it can inject, refused at selection when a target can
+      answer and at arming regardless of the operator's order.
 - [ ] T9 — The exit gate: the acceptance criteria of shipped items green
       (AC-02, AC-05, AC-07, AC-13, AC-14 **for what ships**); no partially
       implemented feature exposed; product copy claiming nothing unshipped
