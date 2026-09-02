@@ -16,7 +16,11 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { describeTool, readSurface, useToolSurfaceWitness } from "./surface";
+// `describeTool` and `readSurface` moved to the adapter in 012-T6: the
+// product has one `getTools()` call, shared by the capture and the
+// registration view, so the two cannot disagree about what is registered.
+import { describeTool, readSurface } from "./adapter";
+import { useToolSurfaceWitness } from "./surface";
 import { type InstalledDouble, installModelContextDouble } from "../test/modelContextDouble";
 
 let installed: InstalledDouble | null = null;

@@ -25,7 +25,7 @@ import {
 } from "./api/workspace";
 import { type ContractTemplateSummary, listContractTemplates } from "./api/contracts";
 import { ConfirmationDialog } from "./components/ConfirmationDialog";
-import { ContractForm } from "./components/ContractForm";
+import { CREATE_CONTRACT_TOOL, ContractForm } from "./components/ContractForm";
 import { GuidanceBanner } from "./components/GuidanceBanner";
 import {
   CapabilityBar,
@@ -34,6 +34,7 @@ import {
   type ContractTemplate,
   ContractPanel,
   FindingsPanel,
+  ToolRegistrationPanel,
   ToolSurfacePanel,
   UndeclaredChangesPanel,
   RunTimeline,
@@ -45,8 +46,13 @@ import { confirmations } from "./state/confirmations";
 import { useRunTimeline } from "./state/useRunTimeline";
 import { useWorkspace } from "./state/useWorkspace";
 import { useHarnessToolset } from "./tools/harnessTools";
-import { useWorkspaceStatusTool } from "./tools/workspaceStatus";
-import { isWebMcpSupported, useRegisteredToolNames } from "./webmcp/adapter";
+import { GET_WORKSPACE_STATUS, useWorkspaceStatusTool } from "./tools/workspaceStatus";
+import {
+  type ToolExpectation,
+  expectationOf,
+  isWebMcpSupported,
+  useToolReconciliation,
+} from "./webmcp/adapter";
 import { useToolSurfaceWitness } from "./webmcp/surface";
 
 const TERMINAL = ["passed", "passed_with_warnings", "failed", "error", "cancelled"];
@@ -72,13 +78,27 @@ export default function App(): React.ReactElement {
 
   const phase = status?.guidance.phase ?? "";
   const runId = status?.activeRun?.runId ?? null;
-  const registeredTools = useRegisteredToolNames();
 
   // Registration is unconditional — the hooks themselves are no-ops without
   // WebMCP, which keeps the rules of hooks satisfied and AC-09 true.
-  useWorkspaceStatusTool();
-  useHarnessToolset(status, refresh);
-  useBuggyStoreTools(runId, phase, refresh);
+  const statusTool = useWorkspaceStatusTool();
+  const harnessTools = useHarnessToolset(status, refresh);
+  const storeTools = useBuggyStoreTools(runId, phase, refresh);
+
+  // FR-003 (012-T6): reconcile what this app claims against what the browser
+  // reports. Assembled here because this is the only place that sees all three
+  // registration mechanisms at once — the native status tool, the hook-driven
+  // toolsets, and the declarative form, which is *declared* but never claimed
+  // because nothing in this app registers it.
+  const harnessExpectation: ToolExpectation = (() => {
+    const hooked = expectationOf(harnessTools.states);
+    const native = expectationOf({ [GET_WORKSPACE_STATUS]: statusTool });
+    return {
+      declared: [...hooked.declared, ...native.declared, CREATE_CONTRACT_TOOL],
+      claimed: [...hooked.claimed, ...native.claimed],
+    };
+  })();
+  const reconciliation = useToolReconciliation(harnessExpectation, expectationOf(storeTools.states));
   // FR-166/FR-167: capture the surface at arming and on every `toolchange`,
   // for the life of this run. The server judges what it is sent.
   useToolSurfaceWitness(runId);
@@ -233,7 +253,7 @@ export default function App(): React.ReactElement {
       <CapabilityBar
         capabilities={status?.capabilities ?? []}
         webMcpSupported={isWebMcpSupported()}
-        registeredToolCount={registeredTools.length}
+        registeredToolCount={reconciliation.count}
       />
 
       <GuidanceBanner guidance={status?.guidance ?? null} loading={loading} />
@@ -270,6 +290,8 @@ export default function App(): React.ReactElement {
               );
             }}
           />
+
+          <ToolRegistrationPanel reconciliation={reconciliation} />
 
           <ContractForm
             templates={templates}

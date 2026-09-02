@@ -170,6 +170,37 @@ cannot expand and hide the five it can. The appendix is read as a shape — one
 `template_id` chosen from a closed published set, plus three optional scalars —
 and that shape is implemented exactly. No behaviour differs; the names do.
 
+### D5 — two `getTools()` readers existed, and were merged (T6)
+
+**Constitution §1 / §25.1 / FR-003.** 014 built the surface capture with its own
+`getTools()` call and its own `toolchange` listener in `webmcp/surface.ts`,
+while `webmcp/adapter.ts` already had a second pair for the registration view.
+Both were reasonable in isolation. Together they were the exact failure T6 is
+named against: the page could show "all registered" from one read while the
+evidence recorded something else from another, and a person would have no way to
+know which was true.
+
+**Taken: one read, one subscription, both in the adapter.** `describeTool`,
+`readSurface`, and a new `subscribeToToolChange` moved to `adapter.ts` — the
+home the constitution names — and `surface.ts` now consumes them. The witness's
+debounce, in-flight guard, and stale-drop semantics are untouched; its 14 tests
+pass unchanged.
+
+**A gate now holds it.** `tests/architecture/test_webmcp_adapter_isolation.py`
+confines direct WebMCP access to the adapter and asserts `getTools()` has
+exactly one caller. It scans code with comments stripped, because these modules
+explain the browser API constantly and a raw-text scan would flag the
+explanation as the violation — which teaches people to delete the explanation.
+
+Two exceptions are allowlisted **by name, with reasons**, rather than left
+tacit: `integrations/buggyStore/poisoned.ts` (§13.3's injected fault
+impersonates a *hostile* registrar, and a hostile page would not use this app's
+adapter — routing it through would make the injected attack weaker than the real
+one it stands in for) and `spike/**` (ADR-0002's decision harness, a separate
+Vite entry point deliberately outside the product surface). A third test fails
+if an allowlisted path stops existing, so a stale entry cannot silently
+re-permit whatever later takes that path.
+
 ### D4 — `contract_name` is bounded twice, at different limits (T5)
 
 **Appendix G / §20.2.** Appendix G bounds `contract_name` at 80 characters, which

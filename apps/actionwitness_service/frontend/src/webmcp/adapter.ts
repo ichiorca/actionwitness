@@ -442,49 +442,267 @@ export function useDeclarativeTool(
 }
 
 /**
- * What the browser currently believes is registered (FR-003).
+ * One tool as the browser reports it, narrowed (FR-166, FR-167).
  *
- * Reconciled from `getTools()` and re-read on every `toolchange`, rather than
- * from what this app thinks it registered. Those two can disagree — another
- * page on the origin registers tools too, and a registration can fail after
- * the effect that started it returned — and the browser is the authority.
+ * No `identity_hash` and no `namespace`: the server computes both. Adding
+ * either here would not merely be redundant — it would move a decision the
+ * server must own onto the least trustworthy side of the boundary.
  */
-export function useRegisteredToolNames(): readonly string[] {
-  const [names, setNames] = useState<readonly string[]>([]);
+export interface CapturedTool {
+  readonly name: string;
+  readonly description: string;
+  readonly read_only_hint: boolean | null;
+  readonly untrusted_content_hint: boolean | null;
+  readonly input_schema: Record<string, unknown>;
+}
+
+/**
+ * Narrow one descriptor from `getTools()`.
+ *
+ * Everything arrives as `unknown`: these objects come from the browser's tool
+ * registry, which any script on the origin can write to. A descriptor missing a
+ * usable name is dropped rather than defaulted — a tool the server cannot name
+ * is one it cannot compare against a baseline, and inventing a name would
+ * invent a delta.
+ */
+export function describeTool(value: unknown): CapturedTool | null {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const name = record["name"];
+  if (typeof name !== "string" || name.length === 0) {
+    return null;
+  }
+  return {
+    name,
+    description: typeof record["description"] === "string" ? record["description"] : "",
+    // Absent stays absent. A tool that stopped *declaring* itself read-only
+    // changed its hints, and coercing the absence to `false` would hide that.
+    read_only_hint: typeof record["readOnlyHint"] === "boolean" ? record["readOnlyHint"] : null,
+    untrusted_content_hint:
+      typeof record["untrustedContentHint"] === "boolean" ? record["untrustedContentHint"] : null,
+    input_schema: isPlainRecord(record["inputSchema"]) ? record["inputSchema"] : {},
+  };
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Read the whole surface, or `null` when this browser has no WebMCP.
+ *
+ * **The one `getTools()` call in the product.** Both things that need the
+ * surface go through here — the registration view a person reads and the
+ * capture the server judges — so the two cannot end up looking at different
+ * reads and disagreeing about what is registered. A page that showed "all
+ * registered" while the evidence recorded something else would be worse than
+ * one that showed nothing.
+ */
+export async function readSurface(): Promise<readonly CapturedTool[] | null> {
+  const modelContext = document.modelContext;
+  if (modelContext === undefined) {
+    return null;
+  }
+  const tools = await modelContext.getTools();
+  return tools
+    .map((tool) => describeTool(tool))
+    .filter((tool): tool is CapturedTool => tool !== null);
+}
+
+/**
+ * Subscribe to `toolchange`, or `null` when this browser has no WebMCP.
+ *
+ * The caller gets an unsubscribe rather than an event target, so nothing
+ * outside this module needs to hold `document.modelContext` to listen. Both
+ * things that watch the surface — the registration view and the capture the
+ * server judges — subscribe here, which is what keeps them from watching
+ * different objects and disagreeing about when the surface changed.
+ *
+ * `null` rather than a no-op unsubscribe: "there is no WebMCP" is a case the
+ * caller must handle, not one to paper over. The surface witness in particular
+ * has to *stop* there, because a run with no baseline is an explicit non-pass
+ * at verification (§16.1) rather than a run that quietly captured nothing.
+ */
+export function subscribeToToolChange(onChange: () => void): (() => void) | null {
+  const modelContext = document.modelContext;
+  if (modelContext === undefined) {
+    return null;
+  }
+  modelContext.addEventListener("toolchange", onChange);
+  return () => {
+    modelContext.removeEventListener("toolchange", onChange);
+  };
+}
+
+/**
+ * What one group of tools claims, so the reconciliation has something to check.
+ *
+ * `declared` is every tool the group can register in any phase; `claimed` is
+ * the subset this app currently believes is registered. The distinction keeps
+ * a tool that is *deliberately* unavailable — §11.5 changes the visible set
+ * with the workspace phase — from reading as one that failed to register.
+ */
+export interface ToolExpectation {
+  readonly declared: readonly string[];
+  readonly claimed: readonly string[];
+}
+
+/**
+ * Derive an expectation from a toolset's registration states.
+ *
+ * Taken from the states the registrations actually produced rather than from a
+ * hand-written list, so a tool added to a toolset cannot be forgotten here and
+ * quietly become "unexpected" — which would report the product's own tool as a
+ * stranger on the origin.
+ */
+export function expectationOf(
+  states: Readonly<Record<string, RegistrationState>>,
+): ToolExpectation {
+  const declared = Object.keys(states);
+  return {
+    declared,
+    claimed: declared.filter((name) => states[name]?.phase === "registered"),
+  };
+}
+
+export interface ToolGroupReconciliation {
+  /** Every tool this group can register in some phase. */
+  readonly declared: readonly string[];
+  /** The subset this app believes it registered. */
+  readonly claimed: readonly string[];
+  /**
+   * Declared *and* reported by the browser — FR-003's "whether ... tools are
+   * registered", answered by the browser rather than by this app.
+   *
+   * Measured against `declared` rather than `claimed` so it can also account
+   * for the declarative tool, which the app never claims: nothing here called
+   * `registerTool` for it, so the browser's answer is the only evidence there
+   * is that the markup was read.
+   */
+  readonly present: readonly string[];
+  /**
+   * Claimed but absent from `getTools()` — the disagreement worth showing.
+   *
+   * A registration can fail after the effect that started it returned. Mount
+   * state alone would call that a success, which is the inference FR-003
+   * forbids.
+   */
+  readonly missing: readonly string[];
+}
+
+export interface ToolReconciliation {
+  readonly supported: boolean;
+  /** How many tools the browser reports, in total (FR-003). */
+  readonly count: number;
+  readonly harness: ToolGroupReconciliation;
+  readonly target: ToolGroupReconciliation;
+  /**
+   * Reported by the browser and declared by neither group.
+   *
+   * Surfaced, never swallowed. This view has no authority to call an extra tool
+   * acceptable — `stable_tool_surface` decides that from recorded evidence, and
+   * a reconciliation that quietly accepted a name would be a second, softer
+   * opinion about the exact thing the policy exists to judge.
+   */
+  readonly unexpected: readonly string[];
+}
+
+const NOTHING: ToolGroupReconciliation = {
+  declared: [],
+  claimed: [],
+  present: [],
+  missing: [],
+};
+
+function reconcile(
+  expectation: ToolExpectation,
+  reported: ReadonlySet<string>,
+): ToolGroupReconciliation {
+  return {
+    declared: expectation.declared,
+    claimed: expectation.claimed,
+    present: expectation.declared.filter((name) => reported.has(name)),
+    missing: expectation.claimed.filter((name) => !reported.has(name)),
+  };
+}
+
+/**
+ * Reconcile registration status against the browser (FR-003).
+ *
+ * FR-003: "The UI shall reconcile registration status against
+ * `document.modelContext.getTools()` and the `toolchange` event, then show
+ * whether harness and selected-target tools are registered and the number
+ * currently available. It shall not infer success solely from React component
+ * mount state."
+ *
+ * The last sentence is the requirement. A mounted effect proves a registration
+ * was *attempted*; only the browser knows whether one exists. The two genuinely
+ * disagree — a registration can fail after the effect that started it returned,
+ * and another script on the origin can register tools this app never mounted —
+ * so the comparison is between what this app claims and what the browser
+ * reports, re-read on every `toolchange`.
+ *
+ * This is diagnosis, not judgement. Nothing here decides whether a surface is
+ * acceptable: that is `stable_tool_surface`, evaluated by the server from
+ * recorded evidence, and the panel says so.
+ */
+export function useToolReconciliation(
+  harness: ToolExpectation,
+  target: ToolExpectation,
+): ToolReconciliation {
+  const [reported, setReported] = useState<readonly string[] | null>(null);
 
   useEffect(() => {
-    const modelContext = document.modelContext;
-    if (modelContext === undefined) {
-      setNames([]);
-      return;
-    }
-
     let live = true;
     const refresh = (): void => {
-      void modelContext.getTools().then(
+      void readSurface().then(
         (tools) => {
           // Ignore a read that resolved after unmount: it would write state
           // belonging to a page that has gone.
           if (live) {
-            setNames(tools.map((tool) => tool.name));
+            setReported(tools === null ? null : tools.map((tool) => tool.name));
           }
         },
         () => {
+          // A failed read is not an empty surface. Reporting one would show
+          // every tool as missing and invite somebody to go looking for a
+          // registration bug that is not there.
           if (live) {
-            setNames([]);
+            setReported(null);
           }
         },
       );
     };
 
-    modelContext.addEventListener("toolchange", refresh);
+    const unsubscribe = subscribeToToolChange(refresh);
+    if (unsubscribe === null) {
+      setReported(null);
+      return;
+    }
     refresh();
 
     return () => {
       live = false;
-      modelContext.removeEventListener("toolchange", refresh);
+      unsubscribe();
     };
   }, []);
 
-  return names;
+  if (reported === null) {
+    return { supported: false, count: 0, harness: NOTHING, target: NOTHING, unexpected: [] };
+  }
+
+  const names = new Set(reported);
+  const declared = new Set([...harness.declared, ...target.declared]);
+  return {
+    supported: true,
+    count: reported.length,
+    harness: reconcile(harness, names),
+    target: reconcile(target, names),
+    // Compared against everything *declared*, not everything claimed: a tool
+    // still mid-registration is ours, and flagging it as a stranger would cry
+    // wolf on every page load.
+    unexpected: reported.filter((name) => !declared.has(name)),
+  };
 }

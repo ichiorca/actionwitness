@@ -19,6 +19,7 @@
 
 import type { BenchmarkView, Rate } from "../api/benchmark";
 import type { CapabilityReport, Finding, TimelineEvent, WorkspaceStatus } from "../api/workspace";
+import type { ToolGroupReconciliation, ToolReconciliation } from "../webmcp/adapter";
 
 export interface CapabilityBarProps {
   readonly capabilities: readonly CapabilityReport[];
@@ -60,6 +61,88 @@ export function CapabilityBar({
         ))}
       </ul>
     </section>
+  );
+}
+
+export interface ToolRegistrationPanelProps {
+  readonly reconciliation: ToolReconciliation;
+}
+
+/**
+ * FR-003's registration status, reconciled against the browser (012-T6).
+ *
+ * FR-003: "show whether harness and selected-target tools are registered and
+ * the number currently available. It shall not infer success solely from React
+ * component mount state."
+ *
+ * Two groups rather than one number, because they fail for different reasons: a
+ * missing harness tool is a defect in this app, while a missing target tool is
+ * usually the workspace phase doing its job (§11.5). A single count cannot say
+ * which happened.
+ *
+ * **This panel judges nothing.** An unexpected tool is named here and nothing
+ * more — whether a surface is acceptable is `stable_tool_surface`'s answer,
+ * evaluated by the server from recorded evidence. A view that called an extra
+ * tool "fine" would be a second, softer opinion about the exact thing the
+ * policy exists to decide, and the person reading it would have no way to know
+ * which opinion counted. Every name is rendered as text: they come from a tool
+ * registry any script on the origin can write to.
+ */
+export function ToolRegistrationPanel({
+  reconciliation,
+}: ToolRegistrationPanelProps): React.ReactElement {
+  if (!reconciliation.supported) {
+    // AC-09: a fact about the browser, not a fault. Said plainly, because the
+    // whole workspace below works either way.
+    return (
+      <section className="panel" aria-label="Tool registration">
+        <h3>Tool registration</h3>
+        <p>This browser has no WebMCP, so no tools are registered. Every step can be done by hand.</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="panel" aria-label="Tool registration">
+      <h3>Tool registration</h3>
+      <p>
+        <span className="panel__label">Reported by the browser:</span>{" "}
+        <strong>{reconciliation.count}</strong> tool{reconciliation.count === 1 ? "" : "s"}
+      </p>
+      <ul>
+        <ToolGroupLine label="Harness tools" group={reconciliation.harness} />
+        <ToolGroupLine label="Target tools" group={reconciliation.target} />
+      </ul>
+      {reconciliation.unexpected.length === 0 ? null : (
+        <p>
+          <span className="panel__label">Not declared by this page:</span>{" "}
+          {reconciliation.unexpected.join(", ")} — the run&rsquo;s{" "}
+          <code>stable_tool_surface</code> finding decides whether that matters.
+        </p>
+      )}
+    </section>
+  );
+}
+
+function ToolGroupLine({
+  label,
+  group,
+}: {
+  readonly label: string;
+  readonly group: ToolGroupReconciliation;
+}): React.ReactElement {
+  return (
+    <li>
+      <span className="panel__label">{label}:</span>{" "}
+      <strong>
+        {group.present.length} of {group.declared.length} registered
+      </strong>
+      {group.missing.length === 0 ? null : (
+        // The disagreement FR-003 exists to surface: this app believes it
+        // registered these and the browser does not list them.
+        <> — claimed but not reported: {group.missing.join(", ")}</>
+      )}
+    </li>
   );
 }
 

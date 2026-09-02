@@ -36,10 +36,15 @@ tool is the failure this milestone exists to prevent.
       `POST /contracts`, and the annotated form that is the third registration
       mechanism. D3 and D4 record where the implementation reads Appendix G as
       a shape rather than transcribing it.
-- [ ] T6 — `getTools()` / `toolchange` reconciliation, feeding
-      `stable_tool_surface` rather than routing around it. Reconciliation that
-      silently accepted a changed surface would undermine the policy 007's case
-      format already carries.
+- [x] T6 — `getTools()` / `toolchange` reconciliation (FR-003), feeding
+      `stable_tool_surface` rather than routing around it. 014 shipped the
+      capture; this adds the reconciliation FR-003 asks for — harness and target
+      answered separately, claimed-but-not-reported named, and an undeclared
+      tool surfaced with the verdict left to the policy. The two watchers now
+      share one `getTools()` call and one `toolchange` subscription, so the view
+      a person reads and the evidence the server judges cannot disagree, and
+      `tests/architecture/test_webmcp_adapter_isolation.py` keeps a third from
+      appearing.
 - [ ] T7 — SSE, **only if** polling is already stable and every earlier gate is
       green. A second transport brings its own reconnection and stale-response
       semantics; adding it while anything earlier is red means debugging two

@@ -1,12 +1,17 @@
 /**
  * Capturing the browser's tool surface for the server to judge (FR-166, FR-167).
  *
- * This is the only place `getTools()` can be read from, so it is the only place
- * a capture can begin — and it deliberately does almost nothing with what it
- * reads. Definitions go to the server exactly as the browser reported them. No
- * hash is computed here and no namespace is assigned here, because a page that
- * could do either would be the tool surface vouching for its own integrity,
- * which is the category error this whole feature exists to catch.
+ * The surface itself is read through the adapter's `readSurface`, which is the
+ * product's only `getTools()` call (012-T6). That matters here specifically:
+ * the registration view a person reads and the capture the server judges must
+ * come from the same read, or the page could show "all registered" while the
+ * evidence recorded something else.
+ *
+ * This module deliberately does almost nothing with what it reads. Definitions
+ * go to the server exactly as the browser reported them. No hash is computed
+ * here and no namespace is assigned here, because a page that could do either
+ * would be the tool surface vouching for its own integrity, which is the
+ * category error this whole feature exists to catch.
  *
  * Three behaviours follow from FR-167 and the 006 lifecycle discipline:
  *
@@ -29,72 +34,10 @@
 import { useEffect } from "react";
 
 import { request } from "../api/client";
+import { readSurface, subscribeToToolChange } from "./adapter";
 
 /** How long a `toolchange` burst is allowed to settle before re-reading. */
 export const TOOLCHANGE_QUIET_PERIOD_MS = 150;
-
-/**
- * One tool, in the shape the capture route accepts.
- *
- * No `identity_hash` and no `namespace`: the server computes both. Adding
- * either here would not merely be redundant — it would move a decision the
- * server must own onto the least trustworthy side of the boundary.
- */
-export interface CapturedTool {
-  readonly name: string;
-  readonly description: string;
-  readonly read_only_hint: boolean | null;
-  readonly untrusted_content_hint: boolean | null;
-  readonly input_schema: Record<string, unknown>;
-}
-
-/**
- * Narrow one descriptor from `getTools()`.
- *
- * Everything arrives as `unknown`: these objects come from the browser's tool
- * registry, which any script on the origin can write to. A descriptor missing a
- * usable name is dropped rather than defaulted — a tool the server cannot name
- * is one it cannot compare against a baseline, and inventing a name would
- * invent a delta.
- */
-export function describeTool(value: unknown): CapturedTool | null {
-  if (typeof value !== "object" || value === null) {
-    return null;
-  }
-  const record = value as Record<string, unknown>;
-  const name = record["name"];
-  if (typeof name !== "string" || name.length === 0) {
-    return null;
-  }
-  return {
-    name,
-    description: typeof record["description"] === "string" ? record["description"] : "",
-    // Absent stays absent. A tool that stopped *declaring* itself read-only
-    // changed its hints, and coercing the absence to `false` would hide that.
-    read_only_hint: typeof record["readOnlyHint"] === "boolean" ? record["readOnlyHint"] : null,
-    untrusted_content_hint:
-      typeof record["untrustedContentHint"] === "boolean"
-        ? record["untrustedContentHint"]
-        : null,
-    input_schema: isRecord(record["inputSchema"]) ? record["inputSchema"] : {},
-  };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/** Read the whole surface, or `null` when this browser has no WebMCP. */
-export async function readSurface(): Promise<readonly CapturedTool[] | null> {
-  const modelContext = document.modelContext;
-  if (modelContext === undefined) {
-    return null;
-  }
-  const tools = await modelContext.getTools();
-  return tools
-    .map((tool) => describeTool(tool))
-    .filter((tool): tool is CapturedTool => tool !== null);
-}
 
 /**
  * Capture at arming and on every `toolchange` for the life of `runId`.
@@ -110,11 +53,6 @@ export function useToolSurfaceWitness(runId: string | null): void {
     if (runId === null) {
       return;
     }
-    const modelContext = document.modelContext;
-    if (modelContext === undefined) {
-      return;
-    }
-
     let live = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
     // Scoped to this effect, deliberately not a ref. A ref survives StrictMode's
@@ -162,7 +100,13 @@ export function useToolSurfaceWitness(runId: string | null): void {
       timer = setTimeout(() => void capture(), TOOLCHANGE_QUIET_PERIOD_MS);
     };
 
-    modelContext.addEventListener("toolchange", onToolChange);
+    // `null` means this browser has no WebMCP, so there is nothing to watch and
+    // nothing to capture. The run is then left with no baseline — which §16.1
+    // turns into an explicit non-pass rather than a silent gap.
+    const unsubscribe = subscribeToToolChange(onToolChange);
+    if (unsubscribe === null) {
+      return;
+    }
     void capture();
 
     return () => {
@@ -170,7 +114,7 @@ export function useToolSurfaceWitness(runId: string | null): void {
       if (timer !== undefined) {
         clearTimeout(timer);
       }
-      modelContext.removeEventListener("toolchange", onToolChange);
+      unsubscribe();
     };
   }, [runId]);
 }

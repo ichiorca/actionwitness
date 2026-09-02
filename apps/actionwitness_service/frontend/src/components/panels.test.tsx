@@ -21,6 +21,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { Finding } from "../api/workspace";
+import type { ToolGroupReconciliation, ToolReconciliation } from "../webmcp/adapter";
 import { parseGuidance, parseWorkspace } from "../api/workspace";
 import { ConfirmationDialog } from "./ConfirmationDialog";
 import { GuidanceBanner } from "./GuidanceBanner";
@@ -28,6 +29,7 @@ import {
   CapabilityBar,
   ComparisonPanel,
   ConfigPanel,
+  ToolRegistrationPanel,
   EvalPanel,
   ToolSurfacePanel,
   UndeclaredChangesPanel,
@@ -621,5 +623,107 @@ describe("ToolSurfacePanel", () => {
     );
 
     expect(container.querySelector("section")).toBeNull();
+  });
+});
+
+/**
+ * FR-003's registration status (012-T6).
+ *
+ * The panel reports a reconciliation and decides nothing. The property worth
+ * guarding is the last one: an undeclared tool is *named*, and the copy points
+ * at `stable_tool_surface` for the verdict. A panel that called an extra tool
+ * acceptable would be a second, softer opinion about exactly what that policy
+ * exists to judge.
+ */
+describe("ToolRegistrationPanel", () => {
+  const group = (
+    declared: string[],
+    present: string[],
+    missing: string[] = [],
+  ): ToolGroupReconciliation => ({ declared, claimed: present, present, missing });
+
+  const reconciliation = (
+    overrides: Partial<ToolReconciliation> = {},
+  ): ToolReconciliation => ({
+    supported: true,
+    count: 2,
+    harness: group(["verify_outcome"], ["verify_outcome"]),
+    target: group(["update_cart"], ["update_cart"]),
+    unexpected: [],
+    ...overrides,
+  });
+
+  it("reports the number the browser says is available", () => {
+    // Arrange / Act
+    render(<ToolRegistrationPanel reconciliation={reconciliation()} />);
+
+    // Assert
+    expect(screen.getByText(/Reported by the browser/)).toBeTruthy();
+    expect(screen.getByText("2")).toBeTruthy();
+  });
+
+  it("answers for harness and target tools separately", () => {
+    // Arrange / Act — FR-003 asks about both, and they fail for different
+    // reasons: a missing harness tool is a defect in this app, a missing target
+    // tool is usually the workspace phase doing its job.
+    render(<ToolRegistrationPanel reconciliation={reconciliation()} />);
+
+    // Assert
+    expect(screen.getByText("Harness tools:")).toBeTruthy();
+    expect(screen.getByText("Target tools:")).toBeTruthy();
+  });
+
+  it("names a tool this app claimed that the browser does not report", () => {
+    // Arrange — the disagreement FR-003 exists to surface. Mount state alone
+    // would call this registered.
+    const view = reconciliation({
+      harness: group(["verify_outcome", "arm_outcome_contract"], [], ["verify_outcome"]),
+    });
+
+    // Act
+    render(<ToolRegistrationPanel reconciliation={view} />);
+
+    // Assert
+    expect(screen.getByText(/claimed but not reported: verify_outcome/)).toBeTruthy();
+  });
+
+  it("names an undeclared tool and leaves the verdict to the policy", () => {
+    // Arrange
+    const view = reconciliation({ unexpected: ["proceed_to_checkout_v2"] });
+
+    // Act
+    render(<ToolRegistrationPanel reconciliation={view} />);
+
+    // Assert — both halves matter. Naming it without pointing at the policy
+    // invites the reader to treat this panel as the judgement; pointing at the
+    // policy without naming it leaves them nothing to look at.
+    expect(screen.getByText(/proceed_to_checkout_v2/)).toBeTruthy();
+    expect(screen.getByText(/stable_tool_surface/)).toBeTruthy();
+  });
+
+  it("says nothing about undeclared tools when there are none", () => {
+    // Arrange / Act — a standing warning that is always present is one nobody
+    // reads when it finally matters.
+    render(<ToolRegistrationPanel reconciliation={reconciliation()} />);
+
+    // Assert
+    expect(screen.queryByText(/Not declared by this page/)).toBeNull();
+  });
+
+  it("reports an absent WebMCP as a fact about the browser", () => {
+    // Arrange
+    const view = reconciliation({
+      supported: false,
+      count: 0,
+      harness: group([], []),
+      target: group([], []),
+    });
+
+    // Act
+    render(<ToolRegistrationPanel reconciliation={view} />);
+
+    // Assert — AC-09: the workspace still works, and the copy has to say so or
+    // a person will reasonably assume it does not.
+    expect(screen.getByText(/can be done by hand/)).toBeTruthy();
   });
 });

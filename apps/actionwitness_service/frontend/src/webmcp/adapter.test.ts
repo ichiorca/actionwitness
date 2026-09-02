@@ -24,11 +24,13 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   MAX_TOOL_RESULT_CHARS,
+  type RegistrationState,
+  expectationOf,
   isWebMcpSupported,
   normalizeError,
   normalizeResult,
   useNativeTool,
-  useRegisteredToolNames,
+  useToolReconciliation,
 } from "./adapter";
 import { type InstalledDouble, installModelContextDouble } from "../test/modelContextDouble";
 
@@ -232,29 +234,162 @@ describe("result normalization", () => {
   });
 });
 
+/**
+ * FR-003 (012-T6): "The UI shall reconcile registration status against
+ * `document.modelContext.getTools()` and the `toolchange` event ... It shall
+ * not infer success solely from React component mount state."
+ *
+ * The reconciliation compares two things that can genuinely disagree: what this
+ * app claims it registered, and what the browser says exists. A mounted effect
+ * proves an attempt; only `getTools()` proves a tool.
+ */
 describe("reconciliation", () => {
-  it("reports what the browser says is registered, not what we asked for", async () => {
-    installed = installModelContextDouble();
-    const { result } = renderHook(() => useRegisteredToolNames());
+  const registered: RegistrationState = { phase: "registered", detail: "Registered." };
+  const pending: RegistrationState = { phase: "registering", detail: "Registering…" };
 
-    await waitFor(() => expect(result.current).toEqual([]));
+  function expectation(states: Record<string, RegistrationState>) {
+    return expectationOf(states);
+  }
 
-    // Something else on the origin registers a tool. FR-003 makes the browser
-    // the authority, so it has to appear here without us registering it.
+  async function registerExtra(name: string): Promise<void> {
     await act(async () => {
       await installed?.modelContext.registerTool({
-        name: "search_catalog",
-        description: "Search seeded products.",
+        name,
+        description: "Registered by something other than this app.",
         execute: async () => ({ content: [] }),
       } as unknown as WebMCP.ModelContextTool);
     });
+  }
 
-    await waitFor(() => expect(result.current).toEqual(["search_catalog"]));
+  it("counts what the browser reports, not what we asked for", async () => {
+    installed = installModelContextDouble();
+    const { result } = renderHook(() =>
+      useToolReconciliation(expectation({}), expectation({})),
+    );
+
+    await waitFor(() => expect(result.current.supported).toBe(true));
+    expect(result.current.count).toBe(0);
+
+    // Something else on the origin registers a tool. FR-003 makes the browser
+    // the authority, so it has to appear here without us registering it.
+    await registerExtra("search_catalog");
+
+    await waitFor(() => expect(result.current.count).toBe(1));
   });
 
-  it("reports nothing in a browser without WebMCP", async () => {
-    const { result } = renderHook(() => useRegisteredToolNames());
+  it("names a tool the browser reports that neither group declared", async () => {
+    // The property T6 exists for. An extra tool is *surfaced*, never swallowed:
+    // a view that quietly accepted it would be a second, softer opinion about
+    // the exact thing `stable_tool_surface` is there to judge.
+    installed = installModelContextDouble();
+    const { result } = renderHook(() =>
+      useToolReconciliation(
+        expectation({ verify_outcome: registered }),
+        expectation({}),
+      ),
+    );
+    await waitFor(() => expect(result.current.supported).toBe(true));
 
-    await waitFor(() => expect(result.current).toEqual([]));
+    await registerExtra("proceed_to_checkout_v2");
+
+    await waitFor(() => expect(result.current.unexpected).toEqual(["proceed_to_checkout_v2"]));
+  });
+
+  it("reports a claimed tool the browser does not list as missing", async () => {
+    // The disagreement worth showing. A registration can fail *after* the
+    // effect that started it returned, and mount state alone would call that a
+    // success — which is the inference FR-003 forbids.
+    installed = installModelContextDouble();
+    const { result } = renderHook(() =>
+      useToolReconciliation(
+        expectation({ verify_outcome: registered }),
+        expectation({}),
+      ),
+    );
+
+    await waitFor(() => expect(result.current.harness.missing).toEqual(["verify_outcome"]));
+    expect(result.current.harness.present).toEqual([]);
+  });
+
+  it("separates harness tools from the selected target's", async () => {
+    // FR-003 asks for "whether harness and selected-target tools are
+    // registered" — two answers, because they fail for different reasons and a
+    // single number cannot say which one went wrong.
+    installed = installModelContextDouble();
+    await registerExtra("verify_outcome");
+    await registerExtra("update_cart");
+
+    const { result } = renderHook(() =>
+      useToolReconciliation(
+        expectation({ verify_outcome: registered }),
+        expectation({ update_cart: registered }),
+      ),
+    );
+
+    await waitFor(() => expect(result.current.harness.present).toEqual(["verify_outcome"]));
+    expect(result.current.target.present).toEqual(["update_cart"]);
+    expect(result.current.unexpected).toEqual([]);
+  });
+
+  it("does not call a tool that is still registering a stranger", async () => {
+    // `unexpected` is measured against everything *declared*, not everything
+    // claimed. Otherwise every page load would briefly accuse the product's own
+    // tools of being someone else's.
+    installed = installModelContextDouble();
+    await registerExtra("arm_outcome_contract");
+
+    const { result } = renderHook(() =>
+      useToolReconciliation(
+        expectation({ arm_outcome_contract: pending }),
+        expectation({}),
+      ),
+    );
+
+    await waitFor(() => expect(result.current.supported).toBe(true));
+    expect(result.current.unexpected).toEqual([]);
+    // Not claimed, so its absence from `registered` is not a failure either.
+    expect(result.current.harness.missing).toEqual([]);
+  });
+
+  it("does not treat a deliberately unavailable tool as missing", async () => {
+    // §11.5 changes the visible tool set with the workspace phase. A tool that
+    // is not registered *because the phase says so* is the product working, and
+    // reporting it as missing would send somebody hunting a bug.
+    installed = installModelContextDouble();
+    const { result } = renderHook(() =>
+      useToolReconciliation(
+        expectation({ run_regression_eval: pending }),
+        expectation({}),
+      ),
+    );
+
+    await waitFor(() => expect(result.current.supported).toBe(true));
+    expect(result.current.harness.missing).toEqual([]);
+  });
+
+  it("reports unsupported in a browser without WebMCP", async () => {
+    // Distinct from "an empty surface". AC-09 keeps the whole human workspace
+    // usable here, so this is a fact about the browser rather than a fault.
+    const { result } = renderHook(() =>
+      useToolReconciliation(expectation({}), expectation({})),
+    );
+
+    await waitFor(() => expect(result.current.supported).toBe(false));
+    expect(result.current.count).toBe(0);
+  });
+
+  it("re-reads on toolchange rather than only at mount", async () => {
+    // The event half of FR-003. Without it the view is a snapshot from page
+    // load, and a surface swapped mid-run would still read as the one the
+    // person approved.
+    installed = installModelContextDouble();
+    const { result } = renderHook(() =>
+      useToolReconciliation(expectation({}), expectation({})),
+    );
+    await waitFor(() => expect(result.current.count).toBe(0));
+
+    await registerExtra("impostor");
+
+    await waitFor(() => expect(result.current.unexpected).toEqual(["impostor"]));
   });
 });
