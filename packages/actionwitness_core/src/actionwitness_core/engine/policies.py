@@ -48,7 +48,9 @@ from actionwitness_core.contracts.models import (
 from actionwitness_core.contracts.paths import ObservationPath
 from actionwitness_core.engine.enums import CheckStatus, CheckType, FailureClassification
 from actionwitness_core.engine.findings import Finding
+from actionwitness_core.evidence.enums import ToolNamespace
 from actionwitness_core.evidence.models import RunEvent, changed_state, ordered
+from actionwitness_core.evidence.surface import SurfaceDelta, ToolDefinition
 from actionwitness_core.journeys.enums import EventActor, OutcomeEventType
 from actionwitness_core.kernel import CoreModel, JsonValue
 
@@ -57,7 +59,71 @@ __all__ = [
     "declared_contract_paths",
     "evaluate_policies",
     "evaluate_policy",
+    "surface_evidence",
 ]
+
+
+def surface_evidence(events: Sequence[RunEvent]) -> tuple[bool, tuple[SurfaceDelta, ...]]:
+    """The two facts `stable_tool_surface` needs, read out of the event stream.
+
+    Single-sourced in the core because verification and §24 replay both need it,
+    and a replay that read the timeline even slightly differently would judge the
+    same events differently — surfacing under §24.1's set equality as a
+    regression nobody introduced.
+
+    Derived from the events rather than from a second record, so the policy
+    judges the same timeline the report shows. A delta the models cannot parse is
+    dropped rather than guessed at: an unrecognised shape cannot be matched
+    against the policy's configuration, and mapping it to a known one would
+    manufacture a verdict.
+    """
+    baseline_recorded = any(
+        event.event_type is OutcomeEventType.TOOL_SURFACE_CAPTURED for event in events
+    )
+    deltas: list[SurfaceDelta] = []
+    for event in events:
+        if event.event_type is not OutcomeEventType.TOOL_SURFACE_CHANGED:
+            continue
+        payload = dict(event.redacted_payload)
+        try:
+            # Named fields, not `model_validate` over the whole payload. A
+            # recorded event legitimately carries more than the delta — a
+            # replayed one adds `recorded_sequence` — and a strict validation
+            # would reject it for the extra key and drop the delta *silently*,
+            # which turns a poisoned surface into a clean run. Reading what is
+            # needed is the difference between tolerating extra context and
+            # tolerating a missing classification.
+            deltas.append(
+                SurfaceDelta(
+                    tool_name=str(payload.get("tool_name") or ""),
+                    namespace=ToolNamespace(payload["namespace"]),
+                    kind=SurfaceDeltaKind(payload["kind"]),
+                    before=_definition(payload.get("before")),
+                    after=_definition(payload.get("after")),
+                )
+            )
+        except (KeyError, TypeError, ValueError):
+            # A delta whose kind or partition the vocabulary does not know
+            # cannot be matched against the policy's configuration, and mapping
+            # it to a known one would manufacture a verdict.
+            continue
+    return baseline_recorded, tuple(deltas)
+
+
+def _definition(value: object) -> ToolDefinition | None:
+    """One side of a delta, when the record carried it.
+
+    A replayed §24.3a case has neither side: the case format never recorded the
+    definitions. That costs FR-169's side-by-side diff on a replay and nothing
+    else — the classification comes from the kind, and a replay's evidence is
+    the case it came from.
+    """
+    if not isinstance(value, Mapping):
+        return None
+    try:
+        return ToolDefinition.model_validate(dict(value))
+    except ValueError:
+        return None
 
 
 def declared_contract_paths(contract: OutcomeContract) -> tuple[ObservationPath, ...]:
@@ -119,8 +185,12 @@ class PolicyEvidence(CoreModel):
     changed_paths: tuple[ObservationPath, ...] | None = None
     #: Whether a `tool_surface_captured` baseline exists for this run (§16.1).
     surface_baseline_recorded: bool = False
-    #: Delta kinds observed against that baseline (§9.11).
-    observed_surface_deltas: tuple[SurfaceDeltaKind, ...] = ()
+    #: Deltas observed against that baseline (§9.5, §9.11). Carries the tool
+    #: name and namespace as well as the kind, because the policy has to ask
+    #: three questions of each one — is it in the watched partition, is its kind
+    #: configured to fail, and was this tool's churn declared — and a bare kind
+    #: can only answer the second.
+    observed_surface_deltas: tuple[SurfaceDelta, ...] = ()
 
 
 def _finding(
@@ -456,6 +526,25 @@ def _evaluate_stable_tool_surface(
     §16.1 is explicit about the missing-baseline case: a run "whose surface
     baseline has not been recorded when verification begins shall evaluate that
     policy as `observation_unavailable`... it shall never be reported as passed."
+
+    Three filters, in this order, and the order is the meaning:
+
+    1. **Partition** (§9.11). Only the target namespace is watched by default.
+       The harness's own tools legitimately appear and disappear as a run moves
+       through §11.5's phases, and judging them would fail every run at its
+       first lifecycle transition.
+    2. **Configured kind** (§9.5). `description_change` warns by default
+       "because benign copy edits should not fail a run".
+
+    014's scope also names a declared-churn allowlist for *target* tools that
+    legitimately come and go. It is deliberately absent: adding the field changes
+    the published eval-case schema, which is an operator decision. The case the
+    scope actually names — the 006 phase-driven harness tool set — is excused by
+    filter 1 structurally, which is stronger than an allowlist could be.
+
+    A delta that survives both is `tool_surface_mutation`, and FR-169 wants
+    "a side-by-side diff of the tool definition before and after as evidence" —
+    so the surviving deltas are carried whole, not counted.
     """
     if not evidence.surface_baseline_recorded:
         return _finding(
@@ -465,20 +554,14 @@ def _evaluate_stable_tool_surface(
             evidence={"reason": "no tool-surface baseline was recorded for this run (§16.1)"},
         )
 
-    failing = sorted(
-        {
-            kind.value
-            for kind in evidence.observed_surface_deltas
-            if kind in policy.failing_delta_kinds
-        }
-    )
-    warned = sorted(
-        {
-            kind.value
-            for kind in evidence.observed_surface_deltas
-            if kind not in policy.failing_delta_kinds
-        }
-    )
+    watched = [
+        delta
+        for delta in evidence.observed_surface_deltas
+        if delta.namespace is ToolNamespace.TARGET
+    ]
+    failing = [delta for delta in watched if delta.kind in policy.failing_delta_kinds]
+    warned = sorted({delta.kind.value for delta in watched if delta not in failing})
+
     if failing:
         return _finding(
             policy,
@@ -486,8 +569,12 @@ def _evaluate_stable_tool_surface(
             classification=FailureClassification.TOOL_SURFACE_MUTATION,
             evidence={
                 "reason": "the target tool surface changed outside a declared delta",
-                "failing_delta_kinds": failing,
+                "failing_delta_kinds": sorted({delta.kind.value for delta in failing}),
                 "warned_delta_kinds": warned,
+                # FR-169's side-by-side diff. The whole definitions, because a
+                # reader told only that a schema changed cannot see what it
+                # changed to — an alert rather than evidence.
+                "deltas": [delta.canonical_document() for delta in failing],
             },
         )
     return _finding(

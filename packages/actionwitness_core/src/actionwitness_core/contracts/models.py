@@ -287,6 +287,18 @@ class StableToolSurfacePolicy(CoreModel):
     """
 
     type: Literal[PolicyType.STABLE_TOOL_SURFACE] = PolicyType.STABLE_TOOL_SURFACE
+    # NOTE (014-T4): `declared_churn_tools` — an exact-name allowlist of target
+    # tools whose mid-run appearance is expected — is specified by 014's scope
+    # and is NOT here. Adding a field to this model changes
+    # `regression_eval_case_1_0.json`, which is a *published* artifact inside the
+    # protected eval corpus, and republishing it is an operator decision rather
+    # than a side effect of a feature branch.
+    #
+    # §9.11's partition already excuses the case 014's scope actually names —
+    # the 006 phase-driven harness tool set — structurally, by namespace, which
+    # is stronger than an allowlist. What is missing is the ability to excuse a
+    # *target* tool that legitimately churns, which no shipped contract needs.
+    # See the 014 deviations ledger.
     failing_delta_kinds: tuple[SurfaceDeltaKind, ...] = (
         SurfaceDeltaKind.ADDED,
         SurfaceDeltaKind.REMOVED,

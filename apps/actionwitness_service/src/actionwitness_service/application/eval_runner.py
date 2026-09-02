@@ -35,7 +35,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from actionwitness_core.contracts.enums import SurfaceDeltaKind
 from actionwitness_core.evals.models import RegressionEvalCase, TrajectoryStep
 from actionwitness_core.evidence.effects import effect_context
 from actionwitness_core.evidence.models import RunEvent
@@ -426,39 +425,23 @@ def surface_events(surface: Any, *, step_count: int, now: datetime) -> tuple[Run
             actor=EventActor.EVAL,
             created_at=now,
             tool_name=delta.tool,
+            # The same payload shape a live capture writes (014-T1), so one core
+            # reader serves both. A replayed case carries no before/after
+            # definitions — §24.3a never recorded them — and the policy does not
+            # need them to classify; FR-169's side-by-side diff is evidence for a
+            # human, and a replay's evidence is the case it came from.
             redacted_payload={
                 "kind": delta.kind,
-                "partition": delta.partition,
+                "namespace": delta.partition,
+                "tool_name": delta.tool or "",
+                "before": None,
+                "after": None,
                 "recorded_sequence": delta.sequence,
             },
         )
         for offset, delta in enumerate(surface.deltas, start=1)
     )
     return (baseline, *deltas)
-
-
-def surface_evidence(events: Sequence[RunEvent]) -> tuple[bool, tuple[SurfaceDeltaKind, ...]]:
-    """Read the two facts `stable_tool_surface` needs out of the event stream.
-
-    Derived from the events rather than read a second time from the case, so
-    the policy judges the same timeline the report shows. A delta kind the
-    enum does not know is dropped rather than guessed at — an unrecognised
-    kind cannot be matched against the policy's failing set, and silently
-    mapping it to a known one would manufacture a verdict.
-    """
-    baseline_recorded = any(
-        event.event_type is OutcomeEventType.TOOL_SURFACE_CAPTURED for event in events
-    )
-    kinds: list[SurfaceDeltaKind] = []
-    for event in events:
-        if event.event_type is not OutcomeEventType.TOOL_SURFACE_CHANGED:
-            continue
-        raw = event.redacted_payload.get("kind")
-        try:
-            kinds.append(SurfaceDeltaKind(raw))
-        except ValueError:
-            continue
-    return baseline_recorded, tuple(kinds)
 
 
 def _run_event(

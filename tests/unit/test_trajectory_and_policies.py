@@ -30,10 +30,16 @@ from actionwitness_core.contracts.models import (
 )
 from actionwitness_core.contracts.paths import ObservationPath
 from actionwitness_core.engine.enums import CheckStatus, CheckType, FailureClassification
-from actionwitness_core.engine.policies import PolicyEvidence, evaluate_policies, evaluate_policy
+from actionwitness_core.engine.policies import (
+    PolicyEvidence,
+    evaluate_policies,
+    evaluate_policy,
+    surface_evidence,
+)
 from actionwitness_core.engine.trajectory import evaluate_expected_tools, observed_calls
-from actionwitness_core.evidence.enums import ToolReportedStatus
+from actionwitness_core.evidence.enums import ToolNamespace, ToolReportedStatus
 from actionwitness_core.evidence.models import RunEvent
+from actionwitness_core.evidence.surface import SurfaceDelta, ToolDefinition
 from actionwitness_core.journeys.enums import EventActor, OutcomeEventType
 
 EPOCH = datetime(2026, 1, 1, tzinfo=UTC)
@@ -568,6 +574,24 @@ def test_a_run_with_no_effect_metadata_records_that_fact() -> None:
 # --- stable_tool_surface (§9.5, §16.1) --------------------------------------
 
 
+def _delta(
+    kind: SurfaceDeltaKind,
+    *,
+    tool: str = "apply_discount",
+    namespace: ToolNamespace = ToolNamespace.TARGET,
+) -> SurfaceDelta:
+    """One observed delta.
+
+    A whole `SurfaceDelta` rather than a bare kind, because 014 gave the policy
+    three questions to ask of each one — which partition, which tool, which kind
+    — and a bare kind can only answer the last.
+    """
+    definition = ToolDefinition(name=tool, namespace=namespace)
+    return SurfaceDelta(
+        tool_name=tool, namespace=namespace, kind=kind, before=definition, after=definition
+    )
+
+
 @pytest.mark.unit
 def test_a_missing_surface_baseline_is_unresolved_and_never_passed() -> None:
     """§16.1 states this outcome explicitly."""
@@ -597,7 +621,7 @@ def test_a_recorded_baseline_with_no_deltas_passes() -> None:
 def test_a_delta_in_the_failing_set_fails_the_policy(kind: SurfaceDeltaKind) -> None:
     finding = evaluate_policy(
         StableToolSurfacePolicy(),
-        PolicyEvidence(surface_baseline_recorded=True, observed_surface_deltas=(kind,)),
+        PolicyEvidence(surface_baseline_recorded=True, observed_surface_deltas=(_delta(kind),)),
     )
     assert finding.status is CheckStatus.FAILED
     assert finding.classification is FailureClassification.TOOL_SURFACE_MUTATION
@@ -610,7 +634,7 @@ def test_a_description_change_is_a_warning_by_default_and_is_still_reported() ->
         StableToolSurfacePolicy(),
         PolicyEvidence(
             surface_baseline_recorded=True,
-            observed_surface_deltas=(SurfaceDeltaKind.DESCRIPTION_CHANGE,),
+            observed_surface_deltas=(_delta(SurfaceDeltaKind.DESCRIPTION_CHANGE),),
         ),
     )
     assert finding.status is CheckStatus.PASSED
@@ -623,7 +647,7 @@ def test_strictness_can_promote_a_description_change_to_a_failure() -> None:
         StableToolSurfacePolicy(failing_delta_kinds=(SurfaceDeltaKind.DESCRIPTION_CHANGE,)),
         PolicyEvidence(
             surface_baseline_recorded=True,
-            observed_surface_deltas=(SurfaceDeltaKind.DESCRIPTION_CHANGE,),
+            observed_surface_deltas=(_delta(SurfaceDeltaKind.DESCRIPTION_CHANGE),),
         ),
     )
     assert finding.status is CheckStatus.FAILED
@@ -725,3 +749,86 @@ def test_an_event_is_immutable() -> None:
     event = _start(1, "update_cart")
     with pytest.raises(ValidationError):
         event.sequence_number = 2
+
+
+# --- stable_tool_surface: partition and declared churn (014-T4) -------------
+
+
+@pytest.mark.unit
+def test_a_harness_partition_delta_does_not_fail_the_policy() -> None:
+    """§9.11: stability policy applies to the target partition by default.
+
+    The harness's own tools appear and disappear as a run moves through §11.5's
+    phases. Judging them would fail every run at its first lifecycle transition,
+    which is why the partition exists at all.
+    """
+    finding = evaluate_policy(
+        StableToolSurfacePolicy(),
+        PolicyEvidence(
+            surface_baseline_recorded=True,
+            observed_surface_deltas=(
+                _delta(
+                    SurfaceDeltaKind.ADDED, tool="verify_outcome", namespace=ToolNamespace.HARNESS
+                ),
+            ),
+        ),
+    )
+    assert finding.status is CheckStatus.PASSED
+
+
+@pytest.mark.unit
+def test_a_failure_carries_the_side_by_side_definitions() -> None:
+    """FR-169: "a side-by-side diff of the tool definition before and after"."""
+    finding = evaluate_policy(
+        StableToolSurfacePolicy(),
+        PolicyEvidence(
+            surface_baseline_recorded=True,
+            observed_surface_deltas=(_delta(SurfaceDeltaKind.SCHEMA_CHANGE),),
+        ),
+    )
+    assert finding.status is CheckStatus.FAILED
+    (recorded,) = finding.evidence["deltas"]
+    assert recorded["before"] is not None
+    assert recorded["after"] is not None
+
+
+@pytest.mark.unit
+def test_a_delta_the_vocabulary_does_not_know_is_dropped_rather_than_guessed() -> None:
+    """Mapping an unrecognised kind onto a known one would manufacture a verdict."""
+    events = (
+        _event(1, OutcomeEventType.TOOL_SURFACE_CAPTURED, actor=EventActor.HARNESS),
+        _event(
+            2,
+            OutcomeEventType.TOOL_SURFACE_CHANGED,
+            actor=EventActor.HARNESS,
+            redacted_payload={"kind": "teleported", "namespace": "target", "tool_name": "x"},
+        ),
+    )
+    recorded, deltas = surface_evidence(events)
+    assert recorded is True
+    assert deltas == ()
+
+
+@pytest.mark.unit
+def test_extra_payload_context_does_not_drop_a_delta() -> None:
+    """A replayed event carries `recorded_sequence` beside the delta.
+
+    Strict validation over the whole payload would reject it for the extra key
+    and drop the delta silently — turning a poisoned surface into a clean run.
+    """
+    events = (
+        _event(1, OutcomeEventType.TOOL_SURFACE_CAPTURED, actor=EventActor.HARNESS),
+        _event(
+            2,
+            OutcomeEventType.TOOL_SURFACE_CHANGED,
+            actor=EventActor.HARNESS,
+            redacted_payload={
+                "kind": "added",
+                "namespace": "target",
+                "tool_name": "exfiltrate",
+                "recorded_sequence": 3,
+            },
+        ),
+    )
+    _, deltas = surface_evidence(events)
+    assert [delta.tool_name for delta in deltas] == ["exfiltrate"]

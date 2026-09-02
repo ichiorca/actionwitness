@@ -197,7 +197,11 @@ class SurfaceDelta(CoreModel):
     between an alert and evidence.
     """
 
-    tool_name: str
+    #: Empty only for a delta replayed from a §24.3a case that recorded no tool
+    #: name. Such a delta can never be excused by `declared_churn_tools`, which
+    #: matches on exact names — the safe direction, since the alternative is an
+    #: unnamed delta matching an empty allowlist entry and being waved through.
+    tool_name: str = ""
     namespace: ToolNamespace
     kind: SurfaceDeltaKind
     before: ToolDefinition | None = None

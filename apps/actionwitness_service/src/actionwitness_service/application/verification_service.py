@@ -48,6 +48,7 @@ from actionwitness_core.engine.policies import (
     PolicyEvidence,
     declared_contract_paths,
     evaluate_policies,
+    surface_evidence,
 )
 from actionwitness_core.engine.trajectory import evaluate_expected_tools
 from actionwitness_core.evidence.effects import redacted_observation
@@ -416,6 +417,7 @@ def _evaluate(
     # are different answers, and only the second may leave a policy
     # `not_evaluated` (§12.2, §16.1).
     changes = None if initial is None or final is None else diff_states(initial, final)
+    baseline_recorded, observed_deltas = surface_evidence(events)
 
     return Evaluation(
         assertions=assertions,
@@ -427,6 +429,13 @@ def _evaluate(
                 effect_map=effect_map,
                 contract_paths=declared_contract_paths(contract),
                 changed_paths=None if changes is None else changed_paths_of(changes),
+                # 014-T4. Read from the recorded timeline by the same core
+                # function §24 replay uses, so a replayed run and its source
+                # judge the same events the same way. Absent captures leave
+                # `surface_baseline_recorded` false, which §16.1 requires to
+                # fail closed rather than pass.
+                surface_baseline_recorded=baseline_recorded,
+                observed_surface_deltas=observed_deltas,
             ),
         ),
         changes=changes,

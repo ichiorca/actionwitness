@@ -389,7 +389,7 @@ def test_gate_5_recorded_surface_replays_into_the_policy_that_needs_it() -> None
 
     # Act
     events = surface_events(surface, step_count=3, now=datetime(2026, 1, 1, tzinfo=UTC))
-    from actionwitness_service.application.eval_runner import surface_evidence
+    from actionwitness_core.engine.policies import surface_evidence
 
     recorded, kinds = surface_evidence(events)
     findings = evaluate_policies(
@@ -399,7 +399,10 @@ def test_gate_5_recorded_surface_replays_into_the_policy_that_needs_it() -> None
 
     # Assert — the recorded poisoning reproduces its own classification.
     assert recorded is True
-    assert kinds == (SurfaceDeltaKind.ADDED,)
+    assert [delta.kind for delta in kinds] == [SurfaceDeltaKind.ADDED]
+    assert [delta.tool_name for delta in kinds] == ["exfiltrate"], (
+        "the replayed delta must still name the tool it concerns"
+    )
     assert findings[0].status is CheckStatus.FAILED
     assert findings[0].classification is FailureClassification.TOOL_SURFACE_MUTATION
 
@@ -411,7 +414,7 @@ def test_gate_5_a_case_with_no_recorded_surface_never_reads_as_satisfied() -> No
     synthesised an empty baseline would pass both.
     """
     # Arrange / Act
-    from actionwitness_service.application.eval_runner import surface_evidence
+    from actionwitness_core.engine.policies import surface_evidence
 
     recorded, kinds = surface_evidence(surface_events(None, step_count=3, now=_epoch()))
     findings = evaluate_policies(

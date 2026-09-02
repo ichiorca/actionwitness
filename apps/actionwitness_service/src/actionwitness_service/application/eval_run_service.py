@@ -41,7 +41,6 @@ from actionwitness_service.application.eval_runner import (
     ReplayOutcome,
     TrajectoryReplayer,
     prepare_eval_workspace,
-    surface_evidence,
 )
 from actionwitness_service.persistence.database import Database
 from actionwitness_service.persistence.repositories import new_id
@@ -329,6 +328,7 @@ class EvalRunService:
             PolicyEvidence,
             declared_contract_paths,
             evaluate_policies,
+            surface_evidence,
         )
 
         # §24.3a's surface facts come out of the replayed stream, so the
