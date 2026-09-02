@@ -26,7 +26,7 @@ tool is the failure this milestone exists to prevent.
       posture — and no test claims AC-07. Needs a specification decision, not
       more code.
 - [x] T3 — Observed-trajectory edge cases; AC-13 green.
-- [ ] T4 — Invocation `AbortSignal` propagation; AC-14 green. A cancelled
+- [x] T4 — Invocation `AbortSignal` propagation; AC-14 green. A cancelled
       invocation leaves a clean refusal rather than a half-finished mutation,
       and a partially completed operation stays visible.
 - [ ] T5 — Flat declarative contract-instantiation form; AC-02 green.
