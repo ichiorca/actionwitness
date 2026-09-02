@@ -39,6 +39,7 @@ from actionwitness_service.api.middleware import (
     WorkspaceCookieMiddleware,
 )
 from actionwitness_service.api.origins import OriginPolicy
+from actionwitness_service.api.routes import audits as audit_routes
 from actionwitness_service.api.routes import benchmarks as benchmark_routes
 from actionwitness_service.api.routes import contracts as contract_routes
 from actionwitness_service.api.routes import evals as eval_routes
@@ -282,6 +283,10 @@ def create_app(
     app.include_router(contract_routes.router, prefix=API_PREFIX)
     app.include_router(run_routes.router, prefix=API_PREFIX)
     app.include_router(eval_routes.router, prefix=API_PREFIX)
+    # §12.17's audit surface. Mounted unconditionally so an unconfigured
+    # deployment answers with a named refusal (§21.1) rather than a 404 that
+    # reads as a wrong URL; the module state is what gates it, not the route.
+    app.include_router(audit_routes.router, prefix=API_PREFIX)
     app.include_router(benchmark_routes.router, prefix=API_PREFIX)
 
     # §29.1's one-origin composition, registered after the harness API so that

@@ -604,6 +604,61 @@ MIGRATIONS: Final[tuple[Migration, ...]] = (
             """,
         ),
     ),
+    Migration(
+        version=5,
+        name="authorized external-surface audits",
+        statements=(
+            # §22's `external_audits`. One row per authorized audit, and the row
+            # cannot exist without the assertion that authorized it — FR-160:
+            # "Absent authorization there is no audit."
+            #
+            # `authorized_origin` is immutable by convention *and* by absence:
+            # nothing in the service updates it, because re-pointing an audit at
+            # a second origin would let one assertion authorize a target the
+            # operator never named.
+            #
+            # The status vocabulary is §22's, verbatim, and `expired` is in it
+            # for a reason worth stating: "expiry never converts an incomplete
+            # audit into a pass", so an audit that ran out of time is a terminal
+            # state of its own rather than a completion.
+            """
+            CREATE TABLE external_audits (
+                id                        TEXT NOT NULL PRIMARY KEY,
+                workspace_id              TEXT NOT NULL,
+                authorized_origin         TEXT NOT NULL,
+                authorization_asserted_by TEXT NOT NULL,
+                authorization_asserted_at TEXT NOT NULL,
+                contract_pack_id          TEXT,
+                run_id                    TEXT,
+                surface_record_id         TEXT,
+                status                    TEXT NOT NULL,
+                report_artifact_id        TEXT,
+                created_at                TEXT NOT NULL,
+                completed_at              TEXT,
+                FOREIGN KEY (workspace_id) REFERENCES workspaces (id) ON DELETE CASCADE,
+                FOREIGN KEY (run_id) REFERENCES runs (id) ON DELETE SET NULL,
+                CHECK (status IN (
+                    'authorized', 'paired', 'enumerated', 'pack_selected',
+                    'running', 'completed', 'expired', 'cancelled', 'error'
+                ))
+            )
+            """,
+            # §22: "At most one nonterminal audit may exist per interactive
+            # workspace." Enforced as a partial unique index rather than by a
+            # read-then-write check, because two tabs asserting at once would
+            # both read zero and both insert — and the second audit would be
+            # pointed at an origin the first one's operator never saw.
+            """
+            CREATE UNIQUE INDEX external_audits_one_live_per_workspace
+                ON external_audits (workspace_id)
+             WHERE status NOT IN ('completed', 'expired', 'cancelled', 'error')
+            """,
+            """
+            CREATE INDEX external_audits_by_workspace
+                ON external_audits (workspace_id, created_at DESC)
+            """,
+        ),
+    ),
 )
 
 #: §17.1's Tier 2 eval tables, added by migration 2. Migration 4 rebuilt
