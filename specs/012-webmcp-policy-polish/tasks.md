@@ -63,8 +63,14 @@ tool is the failure this milestone exists to prevent.
       active fault the store never injected. Closed by having the adapter
       advertise what it can inject, refused at selection when a target can
       answer and at arming regardless of the operator's order.
-- [ ] T9 — The exit gate: the acceptance criteria of shipped items green
-      (AC-02, AC-05, AC-07, AC-13, AC-14 **for what ships**); no partially
-      implemented feature exposed; product copy claiming nothing unshipped
-      (constitution §8); every earlier gate still green. Extend the
-      architecture lane's traceability map to 012.
+- [x] T9 — The exit gate. AC-02, AC-05, AC-13 and AC-14 green for what shipped;
+      AC-07 has no row **because the item was cut**, and criterion 2 carries two
+      entries so that absence is a proven fact rather than a convenient silence
+      — the profile is refused, never recorded, and ships no injector. Product
+      copy checked. Every earlier gate green (2664 Python, 167 frontend,
+      type-check, lint and build clean). The traceability map now covers 012.
+
+**Milestone status: 5 of 7 items shipped, 1 cut, 1 scoped.** T1, T3, T4, T5 and
+T6 shipped whole with their criteria. T2 is cut (D1) and verified absent. T7
+shipped server-side with the workspace left on polling (D6). Nothing is
+half-exposed, which is the one outcome M11 forbids outright.

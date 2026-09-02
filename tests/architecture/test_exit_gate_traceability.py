@@ -747,6 +747,75 @@ EXIT_GATE_015: dict[str, tuple[str, str]] = {
     ),
 }
 
+#: 012's exit gate, in the spec's own words (012-T9).
+#:
+#: Criterion 1 is conditional — "green **for what ships** — an item's criterion
+#: is required if and only if the item shipped" — so AC-07 has no row. That is
+#: the only conditional criterion in any of these maps, and it is the reason
+#: criterion 2 below carries two entries: an unasserted criterion is honest only
+#: if the item really is absent, so the cut has to be refused *and* have no
+#: injector. Without both, AC-07's silence would quietly become a claim.
+#:
+#: AC-02 is split for the same reason 010's live-run row is. Its server half is
+#: testable and tested; its "visible in Chrome DevTools" half needs a person at
+#: a flagged browser (§26.4, §7.5), so it is named as the checklist it is rather
+#: than folded into a test that cannot reach it.
+EXIT_GATE_012: dict[str, tuple[str, str]] = {
+    "1a. AC-02 — the declarative form creates a contract a run can be armed against": (
+        "tests/integration/test_012_exit_gate.py",
+        "test_gate_1_the_declarative_form_creates_an_armable_contract",
+    ),
+    "1b. AC-02 — the three registration mechanisms, visible in DevTools "
+    "(operator checklist; jsdom has no WebMCP and a declarative tool has no "
+    "registration call to intercept)": (
+        "tests/integration/test_012_exit_gate.py",
+        "test_gate_5_the_browser_criteria_are_written_down_for_the_operator",
+    ),
+    "1c. AC-05 — a duplicated retry is convicted by independently observed state": (
+        "tests/integration/test_012_exit_gate.py",
+        "test_gate_1_a_duplicated_retry_is_caught_by_independent_state",
+    ),
+    "1d. AC-13 — a missing required call fails the trajectory layer and leaves "
+    "model selection not_evaluated": (
+        "tests/integration/test_012_exit_gate.py",
+        "test_gate_1_a_missing_required_call_fails_only_the_trajectory_layer",
+    ),
+    "1e. AC-14 — a cancelled checkout records the cancellation and creates no order": (
+        "tests/integration/test_012_exit_gate.py",
+        "test_gate_1_a_cancelled_checkout_creates_no_order",
+    ),
+    "2a. the cut item is refused at selection and never recorded": (
+        "tests/integration/test_012_exit_gate.py",
+        "test_gate_2_the_cut_item_is_genuinely_absent",
+    ),
+    "2b. …and ships no injector, so AC-07's absence from criterion 1 is a fact "
+    "rather than an omission": (
+        "tests/integration/test_012_exit_gate.py",
+        "test_gate_2_the_cut_item_ships_no_injector",
+    ),
+    "2c. no shipped control offers a cut fault profile": (
+        "tests/integration/test_cut_feature_hygiene.py",
+        "test_no_shipped_control_offers_a_cut_profile",
+    ),
+    "2d. a cut profile can never reach a run, whichever order the operator worked in": (
+        "tests/integration/test_cut_feature_hygiene.py",
+        "test_a_cut_profile_can_never_reach_a_run",
+    ),
+    "3. product copy claims nothing unshipped": (
+        "tests/integration/test_012_exit_gate.py",
+        "test_gate_3_no_document_claims_the_cut_item_works",
+    ),
+    "4. SSE ships only on the stated condition: the sequence is the SSE id, "
+    "Last-Event-ID resumes, and the paged endpoint stays the default": (
+        "tests/integration/test_event_stream.py",
+        "test_last_event_id_resumes_rather_than_replaying",
+    ),
+    "5. each shipped item has one integration test through the real boundary": (
+        "tests/integration/test_012_exit_gate.py",
+        "test_gate_5_every_shipped_item_has_an_integration_test",
+    ),
+}
+
 MAPS = {
     "003": EXIT_GATE_003,
     "004": EXIT_GATE_004,
@@ -756,6 +825,7 @@ MAPS = {
     "008": EXIT_GATE_008,
     "009": EXIT_GATE_009,
     "010": EXIT_GATE_010,
+    "012": EXIT_GATE_012,
     "013": EXIT_GATE_013,
     "014": EXIT_GATE_014,
     "015": EXIT_GATE_015,
@@ -872,6 +942,7 @@ PUBLISHED_CRITERIA: dict[str, int] = {
     "008": 5,
     "009": 6,
     "010": 6,
+    "012": 5,
     "013": 6,
     "014": 6,
     "015": 5,
