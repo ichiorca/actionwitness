@@ -32,9 +32,51 @@ const ACTOR_LABELS: Readonly<Record<string, string>> = {
 export interface GuidanceBannerProps {
   readonly guidance: Guidance | null;
   readonly loading: boolean;
+  /**
+   * The `id` of the control that performs the server's named action, when this
+   * page has one. `null`/absent renders no shortcut — some actions have no
+   * human control here (an agent's turn, a modal that presents itself), and a
+   * missing mapping must degrade to the banner exactly as it was.
+   */
+  readonly actionTargetId?: string | null;
 }
 
-export function GuidanceBanner({ guidance, loading }: GuidanceBannerProps): React.ReactElement {
+/**
+ * Bring the reader to the control the instruction names (FR-120-compatible:
+ * the *server* chose the action; this only closes the distance to the control
+ * that performs it, and invents nothing when the element is not on the page).
+ *
+ * The flash class is removed on `animationend` rather than a timer, so nothing
+ * here depends on wall-clock time; in an environment that never animates the
+ * class is inert. Smooth scrolling defers to `prefers-reduced-motion`.
+ */
+function goToAction(targetId: string): void {
+  const target = document.getElementById(targetId);
+  if (target === null) {
+    return;
+  }
+  if (typeof target.scrollIntoView === "function") {
+    const reduced =
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    target.scrollIntoView({ block: "center", behavior: reduced ? "auto" : "smooth" });
+  }
+  target.focus({ preventScroll: true });
+  target.classList.add("target-flash");
+  target.addEventListener(
+    "animationend",
+    () => {
+      target.classList.remove("target-flash");
+    },
+    { once: true },
+  );
+}
+
+export function GuidanceBanner({
+  guidance,
+  loading,
+  actionTargetId,
+}: GuidanceBannerProps): React.ReactElement {
   if (guidance === null) {
     return (
       <section className="banner" aria-live="polite" aria-busy={loading}>
@@ -60,6 +102,19 @@ export function GuidanceBanner({ guidance, loading }: GuidanceBannerProps): Reac
       ) : (
         <p className="banner__action">
           <span className="banner__label">Next:</span> {guidance.instruction}
+          {actionTargetId == null ? null : (
+            // The instruction in words stays the guidance; this only walks the
+            // reader to the control that performs it, several panels down.
+            <button
+              type="button"
+              className="banner__go"
+              onClick={() => {
+                goToAction(actionTargetId);
+              }}
+            >
+              Go to this step
+            </button>
+          )}
         </p>
       )}
       <p className="banner__reason">

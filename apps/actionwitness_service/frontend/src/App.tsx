@@ -99,6 +99,25 @@ const STAGE_OF_PHASE: Readonly<Record<string, StageId>> = {
   eval_running: "regression",
 };
 
+/**
+ * Where each server-named action is performed on this page (AC-21's "the
+ * banner and the enabled controls agree", made walkable).
+ *
+ * A lookup, not a decision: the server chose the `action_code`, and this map
+ * only says which element carries it here. Codes with no human control on
+ * this page — `invoke_target_tool` (the agent's turn), `decide_confirmation`
+ * (the modal presents itself), `curate_candidates` (no panel yet), `wait` —
+ * are deliberately absent, and an unknown code degrades to no shortcut.
+ */
+const ACTION_TARGET_IDS: Readonly<Record<string, string>> = {
+  select_contract: "panel-contract",
+  arm_run: "action-arm-run",
+  verify_outcome: "action-verify-outcome",
+  review_findings: "panel-findings",
+  run_regression_eval: "panel-regression-evals",
+  reset_workspace: "action-reset-workspace",
+};
+
 interface StageProps {
   readonly id: StageId;
   readonly step: number;
@@ -426,7 +445,15 @@ export default function App(): React.ReactElement {
         registeredToolCount={reconciliation.count}
       />
 
-      <GuidanceBanner guidance={status?.guidance ?? null} loading={loading} />
+      <GuidanceBanner
+        guidance={status?.guidance ?? null}
+        loading={loading}
+        actionTargetId={
+          status?.guidance.actionCode == null
+            ? null
+            : (ACTION_TARGET_IDS[status.guidance.actionCode] ?? null)
+        }
+      />
 
       {error === null ? null : <p role="alert">{error}</p>}
       {actionError === null ? null : <p role="alert">{actionError}</p>}

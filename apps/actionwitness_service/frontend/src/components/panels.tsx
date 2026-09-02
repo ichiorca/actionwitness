@@ -211,7 +211,8 @@ export function ConfigPanel({
           />
         </label>
       </fieldset>
-      <button type="button" onClick={onReset} disabled={busy}>
+      {/* `id`: the banner's "Go to this step" target for `reset_workspace`. */}
+      <button type="button" id="action-reset-workspace" onClick={onReset} disabled={busy}>
         Reset workspace
       </button>
     </section>
@@ -240,7 +241,9 @@ export function ContractPanel({
   onSelect,
 }: ContractPanelProps): React.ReactElement {
   return (
-    <section className="panel" aria-label="Contract">
+    // `id` + `tabIndex={-1}`: the banner's `select_contract` shortcut lands
+    // here — programmatically focusable, never in the tab order.
+    <section className="panel" aria-label="Contract" id="panel-contract" tabIndex={-1}>
       <h3>Outcome contract</h3>
       {canSelect ? null : (
         <p className="panel__note">
@@ -296,10 +299,16 @@ export function TargetPanel({
         <span className="panel__label">Run:</span>{" "}
         {status.activeRun === null ? "none" : `${status.activeRun.runId} (${status.activeRun.status})`}
       </p>
-      <button type="button" onClick={onArm} disabled={busy || !canArm}>
+      {/* `id`s: the banner's shortcut targets for `arm_run` / `verify_outcome`. */}
+      <button type="button" id="action-arm-run" onClick={onArm} disabled={busy || !canArm}>
         Arm the contract
       </button>
-      <button type="button" onClick={onVerify} disabled={busy || !canVerify}>
+      <button
+        type="button"
+        id="action-verify-outcome"
+        onClick={onVerify}
+        disabled={busy || !canVerify}
+      >
         Verify the outcome
       </button>
     </section>
@@ -375,7 +384,8 @@ export function FindingsPanel({
   overallResult,
 }: FindingsPanelProps): React.ReactElement {
   return (
-    <section className="panel" aria-label="Findings">
+    // `id` + `tabIndex={-1}`: the banner's `review_findings` shortcut target.
+    <section className="panel" aria-label="Findings" id="panel-findings" tabIndex={-1}>
       <h3>Findings</h3>
       {overallResult === null ? (
         <p>No verdict yet.</p>
@@ -682,7 +692,13 @@ export function EvalPanel({
   onReplay,
 }: EvalPanelProps): React.ReactElement {
   return (
-    <section className="panel" aria-label="Regression evals">
+    // `id` + `tabIndex={-1}`: the banner's `run_regression_eval` shortcut target.
+    <section
+      className="panel"
+      aria-label="Regression evals"
+      id="panel-regression-evals"
+      tabIndex={-1}
+    >
       <h3>Regression evals</h3>
       <p className="panel__note">
         A case turns this failure into a file CI can replay. Replaying against{" "}

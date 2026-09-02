@@ -242,6 +242,36 @@ label {
   font-weight: 600;
 }
 
+/* The walk-to-the-control shortcut beside the instruction. */
+.banner__go {
+  margin-left: 0.75rem;
+  padding: 0.15rem 0.65rem;
+  font-size: 0.82rem;
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Where "Go to this step" lands: one visible pulse, then back to normal.
+   Removed on `animationend`; under reduced motion it never starts. */
+@keyframes target-flash {
+  0%,
+  60% {
+    outline: 3px solid var(--accent);
+    outline-offset: 3px;
+  }
+  100% {
+    outline: 3px solid transparent;
+    outline-offset: 3px;
+  }
+}
+
+/* Not gated on reduced motion: an outline fading in place is not movement
+   (the smooth *scroll* is, and the click handler already defers there), and
+   `animation: none` would orphan the class by never firing `animationend`. */
+.target-flash {
+  animation: target-flash 1.6s ease-out 1;
+}
+
 /* Phase tint — a second channel behind the banner's own words. */
 .banner[data-phase="awaiting_confirmation"] {
   border-left-color: var(--wait);
@@ -621,6 +651,47 @@ label {
 .dialog h2 {
   font-size: 1.1rem;
   margin: 0 0 0.5rem;
+}
+
+.dialog__countdown {
+  font-weight: 600;
+}
+
+.dialog__rows {
+  margin: 0.35rem 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.dialog__row {
+  display: grid;
+  grid-template-columns: minmax(7rem, auto) 1fr;
+  gap: 0 0.75rem;
+  padding: 0.3rem 0.6rem;
+}
+
+.dialog__row + .dialog__row {
+  border-top: 1px solid var(--border);
+}
+
+.dialog__row dt {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
+.dialog__row dd {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+
+.dialog__raw summary {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  cursor: pointer;
 }
 
 .dialog__consequence {

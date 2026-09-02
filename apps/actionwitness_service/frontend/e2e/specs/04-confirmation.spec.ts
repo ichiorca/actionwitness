@@ -153,6 +153,10 @@ test.describe("the dialog is operable without a mouse", () => {
     await expect(workspace.dialog.getByRole("button", { name: "Approve once" })).not.toBeFocused();
     await expect(workspace.dialog.getByRole("button", { name: "Deny" })).not.toBeFocused();
 
+    // The raw-JSON disclosure is the first stop — the reading aid comes
+    // before the decision — then the two choices, in order.
+    await workspace.page.keyboard.press("Tab");
+    await expect(workspace.dialog.locator("summary")).toBeFocused();
     await workspace.page.keyboard.press("Tab");
     await expect(workspace.dialog.getByRole("button", { name: "Approve once" })).toBeFocused();
     await workspace.page.keyboard.press("Tab");
@@ -161,7 +165,7 @@ test.describe("the dialog is operable without a mouse", () => {
     // The trap wraps at both ends. A trap that only caught forward Tab lets
     // Shift+Tab walk out of the modal — the same bug facing the other way.
     await workspace.page.keyboard.press("Tab");
-    await expect(workspace.dialog.getByRole("button", { name: "Approve once" })).toBeFocused();
+    await expect(workspace.dialog.locator("summary")).toBeFocused();
     await workspace.page.keyboard.press("Shift+Tab");
     await expect(workspace.dialog.getByRole("button", { name: "Deny" })).toBeFocused();
 
@@ -171,6 +175,8 @@ test.describe("the dialog is operable without a mouse", () => {
   test("can be answered from the keyboard alone", async ({ workspace, agent }) => {
     await reachPendingCheckout(workspace, agent, "checkout", "e2e-confirm-keyboard");
 
+    // Past the disclosure, onto Approve, and Enter — three keys, no mouse.
+    await workspace.page.keyboard.press("Tab");
     await workspace.page.keyboard.press("Tab");
     await workspace.page.keyboard.press("Enter");
 

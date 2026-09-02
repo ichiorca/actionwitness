@@ -93,7 +93,7 @@ function urlOf(input: RequestInfo | URL): string {
   return typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
 }
 
-function installFetch(comparisonBody: unknown): void {
+function installFetch(comparisonBody: unknown, workspaceBody: unknown = WORKSPACE_BODY): void {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL) => {
@@ -119,7 +119,7 @@ function installFetch(comparisonBody: unknown): void {
         return jsonResponse(RUN_BODY);
       }
       if (url.includes("/workspace")) {
-        return jsonResponse(WORKSPACE_BODY);
+        return jsonResponse(workspaceBody);
       }
       throw new Error(`unmocked fetch in test: ${url}`);
     }),
@@ -189,6 +189,26 @@ describe("App — the lifecycle layout follows the reported phase (§11.5)", () 
     ).toBeNull();
     // Exactly one stage says so in words — getByText throws on a second.
     expect(screen.getByText("current phase")).toBeDefined();
+  });
+
+  it("walks the reader from the banner to the control the server named", async () => {
+    // The server names `review_findings`; the page maps that code to the
+    // Findings panel and the shortcut lands focus there. The map decides
+    // nothing — an unmapped code renders no button at all.
+    installFetch(
+      { comparable: null },
+      {
+        ...WORKSPACE_BODY,
+        guidance: { ...WORKSPACE_BODY.guidance, action_code: "review_findings" },
+      },
+    );
+
+    render(<App />);
+    const go = await waitFor(() => screen.getByRole("button", { name: "Go to this step" }));
+
+    fireEvent.click(go);
+
+    expect(document.activeElement).toBe(screen.getByRole("region", { name: "Findings" }));
   });
 
   it("summarises the active run beside the title, from the same server facts", async () => {

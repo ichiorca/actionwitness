@@ -17,7 +17,7 @@
  * class names.
  */
 
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Finding } from "../api/workspace";
@@ -113,6 +113,40 @@ describe("GuidanceBanner (AC-21)", () => {
     // Control moving between a person and an agent is exactly the change a
     // screen-reader user must not have to go looking for.
     expect(container.querySelector('[aria-live="polite"]')).not.toBeNull();
+  });
+
+  it("walks the reader to the control that performs the named action", () => {
+    // The control lives several panels down; the shortcut closes the distance
+    // without deciding anything — the server chose the action, the map only
+    // says where its control is.
+    const target = document.createElement("button");
+    target.id = "action-arm-run";
+    document.body.appendChild(target);
+
+    render(
+      <GuidanceBanner
+        guidance={parseGuidance(GUIDANCE)}
+        loading={false}
+        actionTargetId="action-arm-run"
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Go to this step" }));
+
+    expect(document.activeElement).toBe(target);
+    // The one visible pulse that says "here" — removed on animationend, which
+    // jsdom never fires, so it is asserted as present rather than as gone.
+    expect(target.classList.contains("target-flash")).toBe(true);
+    target.remove();
+  });
+
+  it("offers no shortcut when the named action has no control on this page", () => {
+    // `invoke_target_tool` is the agent's turn and `wait` is nobody's: an
+    // unmapped code must degrade to the banner exactly as it was.
+    render(
+      <GuidanceBanner guidance={parseGuidance(GUIDANCE)} loading={false} actionTargetId={null} />,
+    );
+
+    expect(screen.queryByRole("button", { name: "Go to this step" })).toBeNull();
   });
 });
 
@@ -285,6 +319,12 @@ describe("ConfirmationDialog (§14.4, AC-06)", () => {
     );
   }
 
+  // The countdown tests install fake timers; real ones must come back
+  // whatever order the tests run in.
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("preselects neither choice", () => {
     renderDialog();
 
@@ -297,10 +337,56 @@ describe("ConfirmationDialog (§14.4, AC-06)", () => {
   it("states the action, the expiry, and what it affects in text", () => {
     renderDialog();
 
-    expect(screen.getByText("proceed_to_checkout")).toBeDefined();
+    // Twice, both as text: once as the tool the agent wants to run, once as
+    // the consequence row's `action` value.
+    expect(screen.getAllByText("proceed_to_checkout").length).toBeGreaterThan(0);
     // A countdown ring nobody can read is an expiry that will surprise them.
     expect(screen.getByText(/2026-01-01T00:01:00/)).toBeDefined();
     expect(screen.getByText(/"total": "20.00"/)).toBeDefined();
+  });
+
+  it("counts down to the expiry in words, beside the absolute time", () => {
+    // Fake timers, restored in this describe's afterEach: the countdown reads
+    // the clock, and the test must own the clock rather than race it.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:30Z"));
+
+    renderDialog();
+
+    // The absolute expiry stays; the countdown saves the subtraction.
+    expect(screen.getByText(/2026-01-01T00:01:00/)).toBeDefined();
+    expect(screen.getByText(/in 30s/)).toBeDefined();
+
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(screen.getByText(/in 28s/)).toBeDefined();
+  });
+
+  it("says in words when the window has already passed", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:02:00Z"));
+
+    renderDialog();
+
+    expect(screen.getByText(/past its expiry time/)).toBeDefined();
+  });
+
+  it("shows the consequence as labelled rows, with the raw payload one disclosure away", () => {
+    const { container } = renderDialog();
+
+    // The rows: each field a person can actually read. A nested value falls
+    // back to its compact JSON — still text, never markup. Scoped to the rows
+    // container because the same strings appear elsewhere in the dialog.
+    const rows = container.querySelector(".dialog__rows");
+    expect(rows?.textContent).toContain("action");
+    expect(rows?.textContent).toContain("proceed_to_checkout");
+    expect(rows?.textContent).toContain('{"cart":{"total":"20.00"}}');
+
+    // The verbatim payload survives untouched behind the disclosure — the
+    // rows are a reading aid, not a substitute for what was actually sent.
+    const raw = container.querySelector("details pre");
+    expect(raw?.textContent).toContain('"total": "20.00"');
   });
 
   it("says plainly that nothing has changed yet", () => {
@@ -369,9 +455,13 @@ describe("ConfirmationDialog (§14.4, AC-06)", () => {
     // confirmation tests must cover keyboard operation). A trap that only
     // caught forward Tab at one end and not the other would let a keyboard
     // user Tab straight out of the modal.
-    renderDialog();
+    //
+    // The first focusable control is the raw-JSON disclosure's `<summary>`,
+    // which sits above the buttons — the trap has to hold it too, or Shift+Tab
+    // from it would walk out of the modal.
+    const { container } = renderDialog();
 
-    const approve = screen.getByRole("button", { name: /approve once/i });
+    const summary = container.querySelector("summary");
     const deny = screen.getByRole("button", { name: /deny/i });
 
     deny.focus();
@@ -381,17 +471,17 @@ describe("ConfirmationDialog (§14.4, AC-06)", () => {
     // listens (`document.addEventListener("keydown", ...)`).
     fireEvent.keyDown(document, { key: "Tab" });
 
-    expect(document.activeElement).toBe(approve);
+    expect(document.activeElement).toBe(summary);
   });
 
   it("traps Shift+Tab at the start, wrapping focus back to the last control", () => {
-    renderDialog();
+    const { container } = renderDialog();
 
-    const approve = screen.getByRole("button", { name: /approve once/i });
+    const summary = container.querySelector<HTMLElement>("summary");
     const deny = screen.getByRole("button", { name: /deny/i });
 
-    approve.focus();
-    expect(document.activeElement).toBe(approve);
+    summary?.focus();
+    expect(document.activeElement).toBe(summary);
 
     fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
 
