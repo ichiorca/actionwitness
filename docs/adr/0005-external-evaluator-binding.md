@@ -97,3 +97,10 @@ own schema validation.
 reporter, linked from the README as a first-consumer contribution. The
 optional-`name`/`runIndex` finding above strengthens that proposal. Filing is
 an outward-facing act reserved for the operator's go-ahead.
+
+**Drafted 2026-09-01: `docs/upstream/webmcp-evals-stable-trial-id.md`.** The text
+is written against the shapes recorded above and asks for an opaque per-trial
+`id`, unique within a report and present even on trials with no `name` and no
+`runIndex`. Still unfiled, and deliberately so — the draft names what to re-verify
+first, because a report shape that has moved since `fe33c1b` would make the issue
+read as though nobody looked.

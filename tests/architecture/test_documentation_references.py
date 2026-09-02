@@ -124,3 +124,32 @@ def test_readme_documents_the_full_command_surface() -> None:
     )
     missing = [command for command in required if command not in readme]
     assert missing == [], f"README omits required commands: {missing}"
+
+
+@pytest.mark.architecture
+def test_the_unfiled_upstream_issue_is_drafted_and_pointed_at() -> None:
+    """§25.3's first-consumer contribution: drafted here, filed by the operator.
+
+    "Not yet filed" was a note pointing at nothing for as long as it stood, which
+    is the least useful shape an open item can take — a reader could not tell
+    whether the work was pending, lost, or decided against.
+
+    So the draft is in the repository and the two places that used to say
+    "not filed" now say where it is. This asserts the pointer resolves. Filing
+    itself stays the operator's call: it publishes text on somebody else's
+    project, and neither this test nor any other should make that look automatic.
+    """
+    draft = REPO_ROOT / "docs" / "upstream" / "webmcp-evals-stable-trial-id.md"
+    assert draft.is_file(), "the drafted upstream issue is missing"
+
+    text = draft.read_text(encoding="utf-8")
+    assert "Status: drafted, not filed" in text
+    assert "fe33c1b" in text, "the draft no longer names the version it was verified against"
+
+    for referrer in (
+        REPO_ROOT / "README.md",
+        REPO_ROOT / "docs/adr/0005-external-evaluator-binding.md",
+    ):
+        assert "docs/upstream/webmcp-evals-stable-trial-id.md" in referrer.read_text(
+            encoding="utf-8"
+        ), f"{referrer.name} no longer points at the draft"

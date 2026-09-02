@@ -375,8 +375,10 @@ POST /api/v1/benchmarks/{benchmark_id}/imports
   allowlisted schema before parsing, all displayed text is escaped, executable or
   HTML content is rejected, and replay is limited to allowlisted target tools.
 
-_Upstream stable-trial-ID reporter issue: not yet filed. Filing is recommended and
-non-blocking (spec §25.3)._
+_Upstream stable-trial-ID reporter issue: **drafted, not filed** —
+`docs/upstream/webmcp-evals-stable-trial-id.md` carries the text, verified against
+`webmcp-evals` v0.0.4 (`fe33c1b`). Filing is an outward-facing act on another
+project's repository and is the operator's call (spec §25.3, ADR-0005)._
 
 ## Auditing a storefront you did not build
 
