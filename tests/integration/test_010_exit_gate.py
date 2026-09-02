@@ -41,7 +41,7 @@ CONTRACTS = f"{API_PREFIX}/contracts"
 CANONICAL = "one_mug_save20_no_checkout"
 FAULT = "discount_reported_but_not_applied"
 CREDENTIAL = "EXAMPLE_MODEL_KEY"
-SECRET = "sk-live-this-would-be-a-real-key"
+SECRET = "sk-live-this-would-be-a-real-key"  # not-a-real-credential
 
 FAULTY = "SAVE20 on one mug against the faulty build"
 CORRECTED = "SAVE20 on one mug against the corrected build"

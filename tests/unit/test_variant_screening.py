@@ -154,7 +154,10 @@ def test_the_phrase_list_is_stated_rather_than_inferred() -> None:
 @pytest.mark.parametrize(
     ("text", "what"),
     [
-        ("Use the key sk-abcdefghijklmnopqrstuvwx to add the mug.", "openai-style"),
+        (
+            "Use the key sk-abcdefghijklmnopqrstuvwx to add the mug.",  # not-a-real-credential
+            "openai-style",
+        ),
         ("Send Bearer abcdefghijklmnopqrst and add a mug.", "bearer"),
         ("Authenticate with AKIAIOSFODNN7EXAMPLE then add the mug.", "aws"),
         ("Log in with password = hunter2xyz and buy the mug.", "assignment"),
@@ -211,7 +214,7 @@ def test_a_finding_names_the_kind_of_match_never_the_matched_value() -> None:
     """A finding reaches a log and a review screen. Repeating a suspected
     secret there would copy it into two more places."""
     # Arrange
-    secret = "sk-abcdefghijklmnopqrstuvwx"
+    secret = "sk-abcdefghijklmnopqrstuvwx"  # not-a-real-credential
     candidates = _candidates(f"Use the key {secret} to add the mug.")
 
     # Act
@@ -272,7 +275,9 @@ def test_the_refusal_says_a_matched_secret_must_be_rotated() -> None:
     """An exposed credential is an incident, not a validation failure
     (constitution §7)."""
     # Arrange
-    candidates = _candidates("Use the key sk-abcdefghijklmnopqrstuvwx to add the mug.")
+    candidates = _candidates(
+        "Use the key sk-abcdefghijklmnopqrstuvwx to add the mug."  # not-a-real-credential
+    )
 
     # Act / Assert
     with pytest.raises(CoreError) as refused:

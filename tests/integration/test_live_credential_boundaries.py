@@ -42,7 +42,7 @@ pytestmark = pytest.mark.integration
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 BENCHMARKS = f"{API_PREFIX}/benchmarks"
 CREDENTIAL = "EXAMPLE_MODEL_KEY"
-SECRET = "sk-live-this-would-be-a-real-key"
+SECRET = "sk-live-this-would-be-a-real-key"  # not-a-real-credential
 
 
 @pytest.fixture
