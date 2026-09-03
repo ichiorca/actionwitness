@@ -59,6 +59,12 @@ def test_the_core_only_suite_selection_is_not_empty_and_excludes_service_tests()
     assert "tests/unit/test_registry.py" not in relative
     assert "tests/unit/test_config.py" not in relative
     assert "tests/guidance/test_guidance_lane.py" not in relative
+    # This module has no direct service import, but its lane conftest builds the
+    # real FastAPI application. Pytest loads that support before collecting it.
+    # The existence check keeps the exclusion honest: were the file renamed
+    # away, `not in` would hold vacuously and guard nothing.
+    assert (REPO_ROOT / "tests" / "shopify" / "test_shopify_status_projection.py").is_file()
+    assert "tests/shopify/test_shopify_status_projection.py" not in relative
     # These are the core's own, and must be in.
     assert "tests/unit/test_assertions.py" in relative
     assert "tests/contracts/test_contract_models.py" in relative
@@ -73,6 +79,61 @@ def test_the_selection_rule_is_derived_rather_than_hand_maintained() -> None:
         for root in NON_CORE_ROOTS:
             assert f"import {root}" not in source, f"{path} imports {root}"
     assert "architecture" in EXCLUDED_LANES
+
+
+@pytest.mark.architecture
+def test_no_selected_file_sits_beneath_a_conftest_that_needs_the_service() -> None:
+    """The regression this guards fails otherwise only inside the isolated venv.
+
+    Pytest imports every `conftest.py` between a collected file and `tests/`,
+    so a core-looking test placed in a lane whose conftest imports the service
+    stack drags that stack into the core-only run — and the first symptom is a
+    `ModuleNotFoundError` minutes into the expensive venv build (this is
+    exactly how `tests/shopify/test_shopify_status_projection.py` broke the
+    gate once). The ancestor-conftest walk here is re-derived from the AST
+    rather than taken from the selector's own bookkeeping, so a selector that
+    regresses to reading only the test module fails this test in seconds.
+    """
+    import ast
+
+    def module_load_roots(path: Path) -> set[str]:
+        # Module-load imports only: function bodies (fixtures included) do not
+        # run when pytest merely imports the conftest.
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        roots: set[str] = set()
+        stack: list[ast.AST] = list(ast.iter_child_nodes(tree))
+        while stack:
+            node = stack.pop()
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda):
+                continue
+            if isinstance(node, ast.Import):
+                roots.update(alias.name.split(".")[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                roots.add(node.module.split(".")[0])
+            stack.extend(ast.iter_child_nodes(node))
+        return roots
+
+    tests_root = REPO_ROOT / "tests"
+    offending: list[str] = []
+    for path in core_only_test_files():
+        directory = path.parent
+        while directory.is_relative_to(tests_root):
+            conftest = directory / "conftest.py"
+            if conftest.is_file():
+                needed = module_load_roots(conftest) & NON_CORE_ROOTS
+                if needed:
+                    offending.append(
+                        f"{path.relative_to(REPO_ROOT).as_posix()} loads "
+                        f"{conftest.relative_to(REPO_ROOT).as_posix()}, which "
+                        f"imports {sorted(needed)}"
+                    )
+            if directory == tests_root:
+                break
+            directory = directory.parent
+    assert offending == [], (
+        "core-only selected tests would import service dependencies through "
+        "their lane conftest inside the isolated venv:\n" + "\n".join(offending)
+    )
 
 
 @pytest.mark.architecture

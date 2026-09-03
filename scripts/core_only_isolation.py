@@ -29,6 +29,7 @@ Run directly, or through `tests/architecture/test_core_only_install.py`:
 from __future__ import annotations
 
 import argparse
+import ast
 import sys
 from pathlib import Path
 from typing import Final
@@ -77,6 +78,37 @@ EXCLUDED_LANES: Final[frozenset[str]] = frozenset({"architecture"})
 MUST_NOT_IMPORT: Final = ("actionwitness_service", "buggy_store", "fastapi", "httpx", "aiosqlite")
 
 
+class _ModuleLoadImports(ast.NodeVisitor):
+    """Collect imports executed while Python initializes a support module."""
+
+    def __init__(self) -> None:
+        self.roots: set[str] = set()
+
+    def visit_Import(self, node: ast.Import) -> None:
+        self.roots.update(alias.name.split(".")[0] for alias in node.names)
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        if node.level == 0 and node.module:
+            self.roots.add(node.module.split(".")[0])
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        # Function bodies, including optional fixtures, are not run at import.
+        return None
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        return None
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        return None
+
+
+def _module_load_import_roots(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    visitor = _ModuleLoadImports()
+    visitor.visit(tree)
+    return visitor.roots
+
+
 def core_only_test_files() -> list[Path]:
     """Every test file that can run with only the core installed.
 
@@ -90,8 +122,28 @@ def core_only_test_files() -> list[Path]:
         for path in TESTS_ROOT.rglob("test_*.py")
         if "__pycache__" not in path.parts
         and not (set(path.relative_to(TESTS_ROOT).parts) & EXCLUDED_LANES)
-        and not (import_roots(path) & NON_CORE_ROOTS)
+        and not (_pytest_import_roots(path) & NON_CORE_ROOTS)
     )
+
+
+def _pytest_import_roots(path: Path) -> set[str]:
+    """Imports pytest will load for ``path``, including ancestor conftests.
+
+    Selecting only from the test module is insufficient: pytest imports every
+    ``conftest.py`` between that module and ``tests/`` before collection. A
+    core-looking test inside an integration lane must therefore leave the
+    isolated suite when its lane fixtures require service dependencies.
+    """
+    roots = import_roots(path)
+    directory = path.parent
+    while directory.is_relative_to(TESTS_ROOT):
+        conftest = directory / "conftest.py"
+        if conftest.is_file():
+            roots.update(_module_load_import_roots(conftest))
+        if directory == TESTS_ROOT:
+            break
+        directory = directory.parent
+    return roots
 
 
 def job() -> IsolationJob:
