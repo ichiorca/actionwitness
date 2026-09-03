@@ -55,15 +55,20 @@ __all__ = ["HARNESS_TOOL_NAMES", "SurfaceCaptureOutcome", "SurfaceService"]
 #: partition, where its ordinary lifecycle appearance and disappearance would
 #: fail the run.
 #:
-#: The frontend declares these in two places, because the harness registers by
-#: two mechanisms. Most come from `frontend/src/tools/harnessTools.ts`;
+#: The frontend declares these in three places, because the harness registers by
+#: three mechanisms. Most come from `frontend/src/tools/harnessTools.ts`;
 #: `create_outcome_contract` is §25.2's *declarative* tool, which exists because
 #: a visible form carries `toolname` rather than because anything called
-#: `registerTool`. The browser reports it in `getTools()` exactly like the
-#: others, so the partition has to know it either way.
+#: `registerTool`; and `get_workspace_status` registers natively in
+#: `frontend/src/tools/workspaceStatus.ts` (ADR-0002 rule 3). The browser
+#: reports all of them in `getTools()` identically, so the partition has to know
+#: every one — an always-on tool missing from this set sits in the *target*
+#: baseline under a name the harness owns, which is a misfiling even while it
+#: happens to be stable.
 HARNESS_TOOL_NAMES: frozenset[str] = frozenset(
     {
         "create_outcome_contract",
+        "get_workspace_status",
         "list_contract_templates",
         "get_outcome_contract",
         "arm_outcome_contract",

@@ -137,16 +137,18 @@ def test_the_harness_venv_ships_every_integration_its_mounted_routes_import() ->
     installed, which is exactly why this failed first on the deployed instance
     (2026-09-03, criterion-4 attestation run).
 
-    `integrations/shopify` is deliberately not listed: its only imports sit
-    behind the `EXTERNAL_AUDIT_ENABLED` gate, which refuses with
-    `AUDIT_NOT_AUTHORIZED` before any import runs — verified against the
-    deployed instance in the same attestation run. If an audit import ever
-    moves ahead of that gate, add it here.
+    `integrations/shopify` is listed too, though its imports sit behind the
+    `EXTERNAL_AUDIT_ENABLED` gate (which refuses with `AUDIT_NOT_AUTHORIZED`
+    before any import runs — verified against the deployed instance): the gate
+    protects the *disabled* deployment, but an operator who enables the module
+    on the shipped image is one environment variable away from the same
+    image-only 500, so the distribution ships.
     """
     body = DOCKERFILE.read_text(encoding="utf-8")
     for member, package in (
         ("./integrations/buggy_store", "actionwitness-integration-buggy-store"),
         ("./integrations/google_evals", "actionwitness-integration-google-evals"),
+        ("./integrations/shopify", "actionwitness-integration-shopify"),
     ):
         assert member in body, f"{member} is not installed into the harness venv"
         assert f"--package {package}" in body, f"{package}'s pinned deps are not exported"

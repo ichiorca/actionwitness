@@ -37,6 +37,11 @@ AUDIT_MODULES: tuple[Path, ...] = (
     REPO_ROOT
     / "apps/actionwitness_service/src/actionwitness_service/application/audit_evidence.py",
     REPO_ROOT / "apps/actionwitness_service/src/actionwitness_service/application/audit_report.py",
+    # Spec 015's pass orchestrator — pure by design (no I/O, no clock, no
+    # database), and this gate is what keeps "the server never touches the
+    # audited site" true of it rather than merely intended.
+    REPO_ROOT
+    / "apps/actionwitness_service/src/actionwitness_service/application/audit_workflow.py",
     REPO_ROOT / "apps/actionwitness_service/src/actionwitness_service/api/routes/audits.py",
     REPO_ROOT / "integrations/shopify/src/integrations/shopify/audit.py",
     REPO_ROOT / "integrations/shopify/src/integrations/shopify/pack.py",

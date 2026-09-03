@@ -11,10 +11,12 @@ That failure would be confusing in the worst way: the harness accusing the
 target of mutating its surface, because somebody renamed one of the harness's
 own tools. So the two lists are held in agreement here rather than by memory.
 
-Two frontend files are scanned, because the harness registers by two
-mechanisms: the hook module, and §25.2's declarative form whose `toolname`
-attribute *is* its registration (012-T5). Both reach `getTools()` identically,
-so both have to be partitioned identically.
+Three frontend files are scanned, because the harness registers by three
+mechanisms: the hook module, §25.2's declarative form whose `toolname`
+attribute *is* its registration (012-T5), and the native registration in
+`tools/workspaceStatus.ts` (ADR-0002 rule 3). All reach `getTools()`
+identically, so all have to be partitioned identically — the native one was
+the miss that put `get_workspace_status` in the target partition unnoticed.
 
 Parsed with a regex rather than a TS toolchain, because the Python lane has no
 Node — the same tradeoff `test_exit_gate_traceability` makes for vitest titles.
@@ -38,16 +40,25 @@ HARNESS_TOOLS_TS = FRONTEND_SRC / "tools" / "harnessTools.ts"
 #: it still has to be partitioned as one (012-T5).
 CONTRACT_FORM_TSX = FRONTEND_SRC / "components" / "ContractForm.tsx"
 
+#: The native registration (ADR-0002 rule 3): `get_workspace_status` never
+#: passes through the hook module, which is exactly how it went missing from
+#: the server's partition once.
+WORKSPACE_STATUS_TS = FRONTEND_SRC / "tools" / "workspaceStatus.ts"
+
 #: `name: "list_contract_templates",` — the shape every entry in that file uses.
 _NAME = re.compile(r'^\s*name:\s*"([a-z_]+)"', re.MULTILINE)
 
-#: `export const CREATE_CONTRACT_TOOL = "create_outcome_contract";`
-_DECLARATIVE_NAME = re.compile(r'^export const \w+_TOOL = "([a-z_]+)";', re.MULTILINE)
+#: `export const CREATE_CONTRACT_TOOL = "create_outcome_contract";` and
+#: `export const GET_WORKSPACE_STATUS = "get_workspace_status";` — an exported
+#: string constant is each file's single source for its tool name.
+_CONSTANT_NAME = re.compile(r'^export const [A-Z_]+ = "([a-z_]+)";', re.MULTILINE)
 
 
 def _declared_in_frontend() -> set[str]:
-    return set(_NAME.findall(HARNESS_TOOLS_TS.read_text(encoding="utf-8"))) | set(
-        _DECLARATIVE_NAME.findall(CONTRACT_FORM_TSX.read_text(encoding="utf-8"))
+    return (
+        set(_NAME.findall(HARNESS_TOOLS_TS.read_text(encoding="utf-8")))
+        | set(_CONSTANT_NAME.findall(CONTRACT_FORM_TSX.read_text(encoding="utf-8")))
+        | set(_CONSTANT_NAME.findall(WORKSPACE_STATUS_TS.read_text(encoding="utf-8")))
     )
 
 
@@ -56,6 +67,7 @@ def test_the_frontend_tool_modules_are_still_where_the_server_expects() -> None:
     """The guard on the comparison below: an empty scan would prove nothing."""
     assert HARNESS_TOOLS_TS.is_file(), "the harness tool definitions moved"
     assert CONTRACT_FORM_TSX.is_file(), "the declarative contract form moved"
+    assert WORKSPACE_STATUS_TS.is_file(), "the native status tool moved"
     assert _declared_in_frontend(), "no tool names were parsed, so the check is vacuous"
 
 
@@ -67,9 +79,12 @@ def test_the_declarative_tool_is_scanned_too() -> None:
     exported constant. If the declarative pattern silently stopped matching, the
     union above would still be non-empty and the check below would still pass —
     while `create_outcome_contract` quietly became a name the server excuses and
-    nothing declares, which is the direction an attacker would want.
+    nothing declares, which is the direction an attacker would want. The native
+    status tool is guarded for the same reason — its pattern is the constant
+    export, not the hook module's `name:` shape.
     """
     assert "create_outcome_contract" in _declared_in_frontend()
+    assert "get_workspace_status" in _declared_in_frontend()
 
 
 @pytest.mark.architecture

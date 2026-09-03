@@ -104,6 +104,7 @@ RUN uv export --frozen --no-dev --no-emit-workspace --no-hashes \
         --package actionwitness-service \
         --package actionwitness-integration-buggy-store \
         --package actionwitness-integration-google-evals \
+        --package actionwitness-integration-shopify \
         -o /tmp/harness-requirements.txt \
  && uv venv /opt/harness \
  && VIRTUAL_ENV=/opt/harness uv pip install -r /tmp/harness-requirements.txt \
@@ -111,7 +112,8 @@ RUN uv export --frozen --no-dev --no-emit-workspace --no-hashes \
         ./packages/actionwitness_core \
         ./apps/actionwitness_service \
         ./integrations/buggy_store \
-        ./integrations/google_evals
+        ./integrations/google_evals \
+        ./integrations/shopify
 
 # §29.1 step 3 — the store prefix. Resolved from its own manifest alone, so the
 # environment that ends up in the image is the same one
