@@ -116,9 +116,15 @@ against the deployed URL once 009 lands.
 nothing in the page, network log, or `/healthz` carries a credential). Run it
 there, then tick and date this row too.
 
-- [ ] The live URL loads without credentials and reports WebMCP support status.
+- [x] The live URL loads without credentials and reports WebMCP support status.
 
-Attested by: ______________________  Date: ____________  Build: ____________
+Attested by: operator (Claude-driven session, operator-directed; both support
+states verified on https://actionwitness.onrender.com — "not available … every
+step below can still be done by hand" in a WebMCP-less fresh Chromium context,
+"available — 4 tools registered" in Chrome with the flag on; full procedure and
+evidence in docs/release-checklist.md criterion 3)
+Date: 2026-09-03 (UTC)  Build: Playwright Chromium (1.62.1) / Chrome stable,
+#enable-webmcp-testing Enabled
 
 ## If something here fails
 

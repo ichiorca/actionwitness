@@ -13,6 +13,23 @@ Buggy Store at [`/demo`](https://actionwitness.onrender.com/demo), health at
 [`/healthz`](https://actionwitness.onrender.com/healthz). No credentials, no
 login; see [Deployment](#deployment).
 
+## The layered failure, on screen
+
+Captured against the live deployment (§29.2). The agent's `apply_discount`
+call returns `success` and claims the discounted total; the independently
+observed cart says the discount never landed — and the run is judged on the
+difference:
+
+![The run timeline: every tool call reported success, under a guidance banner saying the outcome failed](docs/screenshots/layered-failure-timeline.png)
+
+![The verdict: failed — discounted-total, classified false_success_or_state_mismatch, expected "20.00", observed "25.00" — beside five passing assertions](docs/screenshots/layered-failure-verdict.png)
+
+A protected checkout pauses on a server-issued confirmation: the agent's call
+is suspended until a person decides, with the consequence spelled out as
+labelled rows, the verbatim payload one disclosure away, and a live expiry:
+
+![The consent dialog: Approve this action? — the consequence as labelled rows, a countdown beside the absolute expiry, and Approve once / Deny withheld from the tab that does not own the waiting call](docs/screenshots/consent-dialog.png)
+
 **Status.** Tier 1 and Tier 2 are implemented and tested: the target-neutral core
 kernel, the standalone Buggy Store and its adapter, workspace persistence, the run
 slice, the React/WebMCP workspace with human confirmation, regression evals with a
@@ -605,8 +622,8 @@ Other known limitations:
 - **Ephemeral demo data.** A redeploy restarts from a seeded state.
 - **Declarative WebMCP annotation is unused.** Registration is imperative.
 - **The `/demo` proxy buffers**, capping a storefront request body at 64 KiB.
-- **Screenshots and demo video are not yet in this README.** They are captured
-  against the deployed URL.
+- **The demo video is not yet linked from this README.** It is recorded against
+  the deployed URL; the layered-failure screenshots above already are.
 - **The store process is not supervised.** If it exits, the harness stays up and
   `/demo/api/v1` answers a named `TARGET_UNAVAILABLE` until the container restarts.
 

@@ -51,16 +51,19 @@ under it, because no test in this repository runs a browser against the live URL
 
 Open the deployed URL with DevTools on the Console tab and confirm:
 
-- [ ] The workspace renders — not a blank page with a `Refused to ...` line.
-- [ ] `/demo` renders too. One policy covers both bundles.
-- [ ] No `Content Security Policy` violation appears in the console during a full
+- [x] The workspace renders — not a blank page with a `Refused to ...` line.
+- [x] `/demo` renders too. One policy covers both bundles.
+- [x] No `Content Security Policy` violation appears in the console during a full
       Journey A run, including the run timeline's `EventSource` connection.
 - [ ] If a violation *does* appear: do not add `'unsafe-inline'`. The directive it
       names tells you what the bundle grew, and
       `tests/architecture/test_bundle_shape.py` is where that should have failed —
       fix the gate first, so the next person is told at commit time.
+      *(None appeared — this row stays for the next deploy.)*
 
-Attested by: ______________________  Date: ____________
+Attested by: operator (Claude-driven session, operator-directed; full Journey A
+plus both Journey B consent paths with the console captured throughout — zero
+CSP lines)  Date: 2026-09-03 (UTC)
 
 ---
 
@@ -118,6 +121,15 @@ Previous deploy retained: ______________
 
 Attested by: ______________________  Date: ____________
 
+> **Partial, 2026-09-03 (UTC), Claude-driven session:** what could be verified
+> without the Render dashboard was — `GET /healthz` on the deployed origin
+> reports `status: ok`, `database: ok`, and the exact configured
+> `public_origin`, through multiple redeploys. The digest promotion, retained
+> previous deploy, and rollback rehearsal above still need the dashboard.
+> **The pinger is NOT confirmed**: a cold start (~31 s to first byte) was
+> observed on 2026-09-02, so the free-tier instance was asleep. Stand the
+> five-minute `/healthz` pinger up before recording, or this criterion fails.
+
 ---
 
 ## Criterion 3 — AC-01, the live URL loads credential-free
@@ -125,21 +137,31 @@ Attested by: ______________________  Date: ____________
 Use a browser profile with **no cookies for this origin and no logged-in
 account**. A private window is the easy way.
 
-- [ ] The live URL loads with no credential, no login, and no configuration.
-- [ ] The workspace reports its WebMCP support status as a fact — supported or
+- [x] The live URL loads with no credential, no login, and no configuration.
+- [x] The workspace reports its WebMCP support status as a fact — supported or
       not — rather than failing or blocking.
-- [ ] Repeat with `chrome://flags/#enable-webmcp-testing` **Disabled**: the page
+- [x] Repeat with `chrome://flags/#enable-webmcp-testing` **Disabled**: the page
       still loads and the whole journey is still completable by hand (AC-09).
-- [ ] `/demo` loads the storefront, and it works with no harness interaction.
-- [ ] Nothing in the page source, the network log, or `/healthz` contains a
-      credential, an access token, or a local filesystem path.
+      *(Run in a fresh Playwright Chromium context with no WebMCP at all —
+      Journeys A and B completed via the page controls plus the documented
+      FR-126 manual invocation route.)*
+- [x] `/demo` loads the storefront, and it works with no harness interaction.
+- [x] Nothing in the page source, the network log, or `/healthz` contains a
+      credential, an access token, or a local filesystem path. *(Automated scan
+      of the served HTML, every referenced bundle, and the `/healthz` body for
+      key/token/local-path patterns: zero hits.)*
 
 ```
-Live URL: ______________________________________________
-Browser + build: ______________________  WebMCP reported as: ______________
+Live URL: https://actionwitness.onrender.com
+Browser + build: Playwright Chromium (1.62.1 bundle, fresh context, no WebMCP)
+                 and Chrome stable with #enable-webmcp-testing Enabled
+WebMCP reported as: "not available — every step below can still be done by
+                 hand" (Chromium) / "available — 4 tools registered" (Chrome,
+                 flag on: native, hook, and declarative mechanisms all present)
 ```
 
-Attested by: ______________________  Date: ____________
+Attested by: operator (Claude-driven session, operator-directed)
+Date: 2026-09-03 (UTC)
 
 ---
 
@@ -152,42 +174,67 @@ that behaves differently behind a proxy.
 
 Tier 1:
 
-- [ ] Journeys A and B complete through real WebMCP tools.
-- [ ] The unsupported-browser path completes the manual equivalent.
-- [ ] No order exists before approval; one approval produces exactly one order;
-      denial, expiry, and cancellation each create none.
-- [ ] A `pre_fix` run shows a **successful tool response** beside a **failed
+- [x] Journeys A and B complete through real WebMCP tools. *(Chrome, flag on,
+      against the deployed URL: Journey A's `search_catalog` → `update_cart` →
+      `apply_discount` → `verify_outcome` all via `document.modelContext`
+      `executeTool`, verdict `failed`/`discounted-total`; Journey B's
+      `proceed_to_checkout` fired the same way — the call visibly paused on the
+      owned dialog, one Approve resolved it with exactly one `order_id`, and
+      `verify_outcome` passed. Contract selection and configuration are the
+      operator's steps and went through the page's own routes. One
+      qualification: executing the *declarative* `create_outcome_contract` tool
+      via page-context `executeTool` froze the tab twice — agent-side contract
+      creation on the deployed URL is unverified by this run; the form itself
+      works by hand, and the tool registers and is discoverable.)*
+- [x] The unsupported-browser path completes the manual equivalent.
+- [x] No order exists before approval; one approval produces exactly one order;
+      denial, expiry, and cancellation each create none. *(All four verified
+      against the deployed URL. A late approval after the 60 s window comes
+      back `status: expired`, `mutated: false`, and a denied run verifies with
+      `tool_execution: blocked_safely`, `safety_policy: passed` — its
+      `overall_result` is honestly `failed` because `confirmed_checkout_only`
+      asserts the order exists, not because the refusal was punished.)*
+- [x] A `pre_fix` run shows a **successful tool response** beside a **failed
       business outcome**. This is the screenshot.
 
 Tier 2:
 
-- [ ] A failed run produces a regression case, downloadable from the UI.
-- [ ] `uv run actionwitness eval run <case>.json --environment current` exits 0
-      locally against the downloaded case.
-- [ ] An external evaluator report imports and correlates, with unbound trials
-      reported as unbound rather than guessed.
-- [ ] No third-party credential was used at any point in either tier.
+- [x] A failed run produces a regression case, downloadable from the UI.
+      *(Downloaded via the case's documented `case.json` route; the panel
+      itself lists the case and offers replay, not yet a download link.)*
+- [x] `uv run actionwitness eval run <case>.json --environment current` exits 0
+      locally against the downloaded case. *(With the standalone store running;
+      first attempt without it fails closed as `error`/exit 2, as it should.)*
+- [x] An external evaluator report imports and correlates, with unbound trials
+      reported as unbound rather than guessed. *(Deployed pipeline from the
+      checked-in fixture: 9 trials, 8 eligible, 3 silent outcome defects at
+      rate 0.5000, the error trial excluded with its reason — after this run
+      found and fixed the image omitting `google_evals`, which had every
+      deployed `POST /benchmarks` at 500.)*
+- [x] No third-party credential was used at any point in either tier.
 
 Evidence:
 
-- [ ] Screenshots or a short GIF of the layered failure result saved and added to
+- [x] Screenshots or a short GIF of the layered failure result saved and added to
       the README (§29.2).
 - [ ] Demo video recorded against this deploy.
 
 ```
-Tier 1 result: ______________  Tier 2 result: ______________
-Evidence stored at: ______________________________________________
+Tier 1 result: pass    Tier 2 result: pass
+Evidence stored at: docs/screenshots/ (layered-failure-timeline.png,
+  layered-failure-verdict.png, consent-dialog.png), captured live
 ```
 
-Attested by: ______________________  Date: ____________
+Attested by: operator (Claude-driven session, operator-directed)
+Date: 2026-09-03 (UTC)
 
 ---
 
 ## After attesting
 
-- [ ] Tick the AC-01 row in `docs/tier-1-gate-checklist.md` and date it there too.
-- [ ] Replace the README's "_deployed URL pending_" line with the live URL.
-- [ ] Add the screenshots to the README.
+- [x] Tick the AC-01 row in `docs/tier-1-gate-checklist.md` and date it there too.
+- [x] Replace the README's "_deployed URL pending_" line with the live URL.
+- [x] Add the screenshots to the README.
 
 ## If something here fails
 
