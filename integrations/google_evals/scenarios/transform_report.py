@@ -20,7 +20,7 @@ Two transformations, both stated rather than silent:
   report remains the full record; this file is the replayable projection.
 
 Usage:
-    python integrations/google_evals/live_suite/transform_report.py \
+    python integrations/google_evals/scenarios/transform_report.py \
         RAW_REPORT.json OUT.json \
         --model gemini-2.5-flash --commit "$(git rev-parse HEAD)" \
         --fixture buggy-store-canonical-empty-cart

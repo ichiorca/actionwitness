@@ -32,7 +32,11 @@ Prerequisites:
   `--enable-features=WebMCP`; pass `--chrome-channel chrome` to use stable.
 - The credential: the evaluator's `gemini` backend reads **`GOOGLE_AI`** from
   its own process environment via dotenv — run it from a directory whose
-  `.env` carries that key (FR-099: the harness process never holds it).
+  `.env` carries that key (FR-099: the harness process never holds it). Only
+  the default `vercel` backend wants the `@ai-sdk/google` name instead
+  (`GOOGLE_GENERATIVE_AI_API_KEY`); export that alias only if you choose that
+  backend. Either way this is an **operator-run** command — nothing in the
+  harness, and no agent session, reads the key.
 
 ```bash
 npx webmcp-evals@0.0.4 \
@@ -41,7 +45,7 @@ npx webmcp-evals@0.0.4 \
   --reporter json console \
   -o .evals-live \
   browser -u http://localhost:5173 \
-  -e integrations/google_evals/live_suite/save20_suite.json
+  -e integrations/google_evals/scenarios/save20_suite.json
 ```
 
 Mind FR-009 while running — measured, not hypothetical (smoke runs,
@@ -82,7 +86,7 @@ but its `config` block is the CLI invocation rather than the pinned header,
 and its trajectories carry harness calls the replayer would refuse. Run
 
 ```bash
-python integrations/google_evals/live_suite/transform_report.py \
+python integrations/google_evals/scenarios/transform_report.py \
   .evals-live/report-<ts>.json report-import.json \
   --model gemini-2.5-flash --commit "$(git rev-parse HEAD)"
 ```
@@ -101,10 +105,41 @@ the full record). Then, with the module configured
 4. `POST /api/v1/benchmarks/{id}/replay` — the deterministic outcome layer.
 5. `POST /api/v1/benchmarks/{id}/finalize`, then `GET /api/v1/benchmarks/{id}`.
 
-`source_kind_for` decides `live_model_run` from the resolved configuration —
-a deployment without the module configured labels the suite `recorded_fixture`
-whatever the caller asked for, which is the honest fallback, not a bug.
+The import steps need no file writes on the server, so they can be driven
+against the running container directly. `source_kind_for` decides
+`live_model_run` from the resolved configuration — a deployment without the
+module configured labels the suite `recorded_fixture` whatever the caller
+asked for, which is the honest fallback, not a bug. AC-17 additionally
+requires the suite labelled `live_model_run` (never `recorded_fixture`), the
+evaluator's *actually exported* model parameters recorded without inventing
+missing values (the transform copies `modelParameters` from the raw report
+and defaults nothing), every eligible trial bound explicitly by its scenario
+id (FR-091 — which is why the case names above must match
+`tests/integration/test_010_exit_gate.py` byte for byte), and the dual-layer
+matrix with silent-outcome-defect evidence — the matrix half already ships
+(repeated trials + `benchmark_correlation.correlate`).
 
-**Nothing in `specs/011-shopify-cart-proof/tasks.md` or the AC-17 row is
-ticked until the matrix above is real** — `test_gate_6_shopify_work_has_not_
-started` enforces the former mechanically.
+## Closing out milestone 011 — only after AC-17 genuinely passes
+
+The order matters, and none of it happens on an unproven AC-17:
+
+1. **Record the evidence first**: the imported suite id and its
+   `live_model_run` labelling. The gate below exists to stop Tier 3 being
+   built on an unproven Tier 2; retiring it without the evidence recreates
+   the hole it guards.
+2. Ticking any 011 task will fail
+   `tests/integration/test_010_exit_gate.py::test_gate_6_shopify_work_has_not_started`
+   — at that point its premise has legitimately expired. **Replace it with a
+   gate asserting what is now true** (the BUILD_ORDER ordering rule still
+   matters to the next reader); never just delete it, and never weaken it to
+   get past it early.
+3. Tick only what actually happened. **T11** (the operator running the proof
+   against the authorized development store) and **T12** (the AC-18 exit
+   gate) are separate from AC-17 and stay unticked until the real cart proof
+   ran.
+4. The deviations ledger preamble in `specs/011-shopify-cart-proof/plan.md`
+   is **updated to record that AC-17 has passed, never deleted** — the
+   history is the point.
+
+Until then: **nothing in `specs/011-shopify-cart-proof/tasks.md` is ticked**,
+and the gate enforces it mechanically.
