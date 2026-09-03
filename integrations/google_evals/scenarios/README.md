@@ -10,9 +10,15 @@ unbound (which is correct, and useless).
 |---|---|---|
 | `SAVE20 on one mug against the faulty build` | `pre_fix` + `discount_reported_but_not_applied` | call pass · outcome fail — the silent defect |
 | `SAVE20 on one mug against the corrected build` | `post_fix` | call pass · outcome pass |
-| `SAVE20 on one mug, discount step omitted` | `post_fix` | call fail (the prompt forbids the discount `expectedCall` requires) |
+| `SAVE20 on one mug, discount step omitted` | `post_fix` | call pass · outcome fail (the prompt forbids the discount, `expectedCall` agrees, but the contract still expects SAVE20 — the layer that sees the cart reports what the call layer cannot) |
 
-`expectedCall` deliberately lists only the three target-tool calls. The prompt
+Each case's `expectedCall` matches its own prompt — the omitted case expects
+only `search_catalog` and `update_cart`, because a rubric requiring a call its
+prompt forbids would score an obedient model as failing at the call level
+(`tests/integration/test_010_exit_gate.py` enforces this consistency, and that
+the case names above stay byte-identical to the ids the gate binds).
+
+`expectedCall` deliberately lists only target-tool calls. The prompt
 also has the agent create the contract, arm, and verify — those are harness
 tools, and FR-091 imports only the **allowlisted** target calls as the
 replayable trajectory, so the transform below keeps target calls and drops the
@@ -88,12 +94,17 @@ and its trajectories carry harness calls the replayer would refuse. Run
 ```bash
 python integrations/google_evals/scenarios/transform_report.py \
   .evals-live/report-<ts>.json report-import.json \
-  --model gemini-2.5-flash --commit "$(git rev-parse HEAD)"
+  --model gemini-2.5-flash --commit "$(git rev-parse HEAD)" \
+  --fixture buggy-store-canonical-empty-cart
 ```
 
 which replaces the header and reduces each trajectory to the adapter's five
 target tools (both stated in that script's docstring — the raw report stays
-the full record). Then, with the module configured
+the full record). All three provenance arguments are required; nothing is
+defaulted. The transform also refuses a raw report it cannot establish as a
+**browser**-mode run (the raw config's own keys say which subcommand ran) —
+a local-mode report relabelled browser would claim a verification that never
+happened. Then, with the module configured
 (`LIVE_EVALUATOR_ENABLED`, `LIVE_EVALUATOR_PROVIDER=google`,
 `LIVE_EVALUATOR_MODEL`, `LIVE_EVALUATOR_CREDENTIAL_VAR=GOOGLE_AI` — the
 *name*, never the value):
