@@ -1,0 +1,73 @@
+# Keep the free Render instance awake during judging.
+#
+# Render's free plan spins a service down after 15 idle minutes, and the cold
+# start that follows takes ~30 seconds. A judge who opens the link cold sees a
+# blank page for long enough to conclude the deployment is broken, so the point
+# of this workflow is that the first request of the day is never the one that
+# pays for the boot.
+#
+# **Cadence.** Every five minutes, against a 15-minute idle timer. That margin is
+# deliberate: GitHub does not promise punctual scheduled runs and routinely
+# delays them under load, so a cadence that only just fit would drop below the
+# threshold the first time the queue was busy.
+#
+# **Cost.** Scheduled runs are free only while the repository is public. On a
+# private repository this draws from the 2,000 minute/month allowance at a
+# one-minute minimum per run — roughly 8,600 minutes a month, which exhausts the
+# quota in about a week and then stops silently. If this repository is private,
+# use an external pinger (cron-job.org, UptimeRobot) instead; it costs nothing
+# and does not depend on Actions quota.
+#
+# **This is a convenience, not a guarantee.** GitHub disables scheduled workflows
+# on repositories with no activity for 60 days, delays them under load, and skips
+# them during incidents. The durable fix for a deployment that must not cold-start
+# is a paid instance with no spin-down.
+name: keep-warm
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  # So a human can warm it on demand — before a demo, or right after a deploy.
+  workflow_dispatch:
+
+# Never let a slow run stack up behind the next scheduled one.
+concurrency:
+  group: keep-warm
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  ping:
+    # Forks inherit the schedule but not the deployment; without this they would
+    # ping somebody else's service on their own quota.
+    if: github.repository == 'ichiorca/actionwitness'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ping /healthz
+        env:
+          # The health endpoint, not `/`: it is exempt from rate limiting and
+          # mints no workspace (FR-009), so this cannot consume a visitor's
+          # allowance or fill the workspace table with rows nobody visits.
+          URL: https://actionwitness.onrender.com/healthz
+        run: |
+          set -euo pipefail
+
+          # --max-time 90 covers a cold start with room to spare; the boot this
+          # workflow exists to absorb is the slow case, not an error.
+          # --retry rides out a transient 502 while the container is coming up.
+          code=$(curl -sS -o /dev/null \
+                      --max-time 90 \
+                      --retry 3 --retry-delay 10 --retry-all-errors \
+                      -w '%{http_code}' \
+                      -A 'actionwitness-keep-warm (github-actions)' \
+                      "$URL")
+          echo "GET $URL -> $code"
+
+          # Fail loudly. A keep-warm job that goes green while the service is
+          # down is worse than no job at all: it reports a mitigation that is
+          # not in effect, which is the exact failure mode this project exists
+          # to catch.
+          test "$code" = "200"

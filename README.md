@@ -13,6 +13,25 @@ Buggy Store at [`/demo`](https://actionwitness.onrender.com/demo), health at
 [`/healthz`](https://actionwitness.onrender.com/healthz). No credentials, no
 login; see [Deployment](#deployment).
 
+> **If the first load is slow, it is waking up, not broken.** The instance runs on
+> Render's free plan, which spins a service down after 15 idle minutes; the cold
+> start that follows takes about 30 seconds, after which every request is fast.
+> To warm it before you look at anything:
+>
+> ```bash
+> curl -s -o /dev/null -w '%{http_code} in %{time_total}s\n' \
+>   https://actionwitness.onrender.com/healthz
+> ```
+>
+> `200` in well under a second means it is awake. Around 30 seconds means that
+> request paid for the boot and the next one will be quick.
+>
+> `.github/workflows/keep-warm.yml` pings `/healthz` every five minutes to keep
+> the spin-down from happening at all. Treat it as a convenience rather than a
+> guarantee: GitHub delays scheduled runs under load, and on a private repository
+> the schedule also draws from the Actions minute allowance and stops once that is
+> spent. A deployment that must never cold-start needs a paid instance.
+
 ## The problem: a success response is not a correct outcome
 
 WebMCP gives agents structured tools on real websites — a real improvement over

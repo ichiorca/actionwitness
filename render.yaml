@@ -1,10 +1,17 @@
 # Render deployment — one web service, Docker runtime (spec §29.1).
 # FREE instance by operator decision (2026-09-01): Render is a challenge
 # sponsor, its free tier runs Docker with no card, and 750 free instance
-# hours/month cover one always-on service. The no-cold-start-during-judging
-# rule is met by an external /healthz pinger every 5 minutes (spin-down
-# triggers at 15 idle minutes). Upgrade to starter only if the pinger
-# arrangement is retired before September 21.
+# hours/month cover one always-on service.
+#
+# Spin-down triggers at 15 idle minutes and the cold start costs ~30 seconds,
+# which is why `.github/workflows/keep-warm.yml` pings /healthz every 5 minutes.
+# That workflow is a mitigation, not a guarantee, and this comment says so
+# because it previously claimed an external pinger was in place when none was
+# running — a measured cold start on 2026-09-03 took 31.3s against 0.2s warm.
+# GitHub delays scheduled runs under load, and while this repository is private
+# the schedule also spends Actions minutes (~8,600/month against a 2,000
+# allowance) and stops once they are gone. Upgrade to starter if the deployment
+# must not cold-start and the repository is not public.
 services:
   - type: web
     name: actionwitness
