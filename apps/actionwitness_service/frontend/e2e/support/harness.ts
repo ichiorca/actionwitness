@@ -302,6 +302,32 @@ export class Workspace {
   }
 
   /**
+   * Bring the administration view forward, the way a person would — through
+   * the left rail. Idempotent: a visible Configuration panel is left alone.
+   */
+  async showAdministration(): Promise<void> {
+    const config = this.panel("Configuration");
+    if (await config.isVisible()) {
+      return;
+    }
+    await this.page.getByRole("button", { name: /Setup & tools/ }).click();
+    await expect(config).toBeVisible();
+  }
+
+  /** The workflow view, by the same rail. Idempotent like its counterpart. */
+  async showWorkflow(): Promise<void> {
+    const contract = this.panel("Contract");
+    if (await contract.isVisible()) {
+      return;
+    }
+    await this.page
+      .locator("nav.sidebar")
+      .getByRole("button", { name: /Contract/ })
+      .click();
+    await expect(contract).toBeVisible();
+  }
+
+  /**
    * Select a built-in contract through the UI.
    *
    * The panel labels each button with its `source_template_id` and marks the
@@ -309,12 +335,14 @@ export class Workspace {
    * from what a screen reader would announce rather than from a class name.
    */
   async selectTemplate(templateId: string): Promise<void> {
+    await this.showWorkflow();
     const button = this.panel("Contract").getByRole("button", { name: templateId, exact: true });
     await button.click();
     await expect(button).toHaveAttribute("aria-pressed", "true");
   }
 
   async setScenarioMode(mode: "pre_fix" | "post_fix"): Promise<void> {
+    await this.showAdministration();
     await this.panel("Configuration").getByRole("radio", { name: mode, exact: true }).check();
   }
 
@@ -327,6 +355,7 @@ export class Workspace {
    * how `discount_reported_but_not_applied` is spelled.
    */
   async setFailureProfile(profile: string): Promise<void> {
+    await this.showAdministration();
     await this.panel("Configuration").locator("#failure-profile").selectOption(profile);
   }
 
@@ -339,17 +368,20 @@ export class Workspace {
    * fail somewhere unrelated to the thing they were testing.
    */
   async arm(): Promise<void> {
+    await this.showWorkflow();
     await this.panel("Target").getByRole("button", { name: /arm/i }).click();
     await this.expectPhase("armed");
   }
 
   /** Verify the outcome, and wait for the verdict. */
   async verify(): Promise<void> {
+    await this.showWorkflow();
     await this.panel("Target").getByRole("button", { name: /verify/i }).click();
     await this.expectTerminalPhase();
   }
 
   async reset(): Promise<void> {
+    await this.showAdministration();
     await this.panel("Configuration").getByRole("button", { name: /reset/i }).click();
   }
 }

@@ -32,7 +32,7 @@ import {
 } from "./api/evals";
 import { ConfirmationDialog } from "./components/ConfirmationDialog";
 import { CREATE_CONTRACT_TOOL, ContractForm } from "./components/ContractForm";
-import { GuidanceBanner } from "./components/GuidanceBanner";
+import { GuidanceBanner, goToAction } from "./components/GuidanceBanner";
 import {
   CapabilityBar,
   ComparisonPanel,
@@ -118,6 +118,24 @@ const ACTION_TARGET_IDS: Readonly<Record<string, string>> = {
   reset_workspace: "action-reset-workspace",
 };
 
+/** The left rail's workflow entries, in journey order. */
+const WORKFLOW_NAV = [
+  { id: "contract", step: 1, title: "Contract" },
+  { id: "run", step: 2, title: "Run" },
+  { id: "verdict", step: 3, title: "Verdict" },
+  { id: "regression", step: 4, title: "Regression" },
+] as const;
+
+/**
+ * Shortcut targets that live on the administration view. A walk to one of
+ * these must bring that view forward first — focusing a control on a hidden
+ * view moves nothing a person can see.
+ */
+const ADMINISTRATION_TARGETS: ReadonlySet<string> = new Set([
+  "stage-administration",
+  "action-reset-workspace",
+]);
+
 interface StageProps {
   readonly id: StageId;
   readonly step: number;
@@ -134,7 +152,15 @@ interface StageProps {
 function Stage({ id, step, title, activeStage, children }: StageProps): React.ReactElement {
   const active = activeStage === id;
   return (
-    <section className="stage" data-stage={id} data-active={active ? "true" : undefined}>
+    // `id` + `tabIndex={-1}`: the left rail's jump target — programmatically
+    // focusable, never in the tab order.
+    <section
+      className="stage"
+      id={`stage-${id}`}
+      tabIndex={-1}
+      data-stage={id}
+      data-active={active ? "true" : undefined}
+    >
       <h2 className="stage__title">
         <span className="stage__step" aria-hidden="true">
           {step}
@@ -415,17 +441,33 @@ export default function App(): React.ReactElement {
   // stage rather than guessing one.
   const activeStage = STAGE_OF_PHASE[phase] ?? null;
 
+  // Which of the two views the main area shows. Both stay mounted — the
+  // WebMCP surface (including the declarative form's tool) must not change
+  // shape because a person looked at the other view — so the inactive one is
+  // `hidden`, never unmounted.
+  const [view, setView] = useState<"workflow" | "administration">("workflow");
+
+  /** Bring the owning view forward, then walk to the control. */
+  const goTo = useCallback((targetId: string) => {
+    setView(ADMINISTRATION_TARGETS.has(targetId) ? "administration" : "workflow");
+    // After the view re-renders — a control on a hidden view can be focused
+    // but takes the reader nowhere they can see.
+    requestAnimationFrame(() => {
+      goToAction(targetId);
+    });
+  }, []);
+
   return (
-    <main className="workspace">
-      <header className="workspace__header">
-        <h1>ActionWitness</h1>
+    <div className="app">
+      <nav className="sidebar" aria-label="Workspace navigation">
+        <h1 className="sidebar__brand">ActionWitness</h1>
         {/* What this page is, for somebody who arrived without being told.
             Deliberately a description of the mechanism rather than a claim about
             outcomes: §8 requires product copy to state that this complements
             call-level evaluators and to claim no unverified protection, so the
             sentence says what the harness *does* — compare two sources — and
             promises nothing about what that prevents. */}
-        <p className="workspace__tagline">
+        <p className="sidebar__tagline">
           An agent&rsquo;s tool call reports its own result. This compares that report against
           business state observed independently, and judges the run on the difference.
         </p>
@@ -447,14 +489,59 @@ export default function App(): React.ReactElement {
             )}
           </p>
         )}
-      </header>
 
-      <CapabilityBar
-        capabilities={status?.capabilities ?? []}
-        webMcpSupported={isWebMcpSupported()}
-        registeredToolCount={reconciliation.count}
-      />
+        <p className="sidebar__heading">Workflow</p>
+        <ul className="sidebar__list">
+          {WORKFLOW_NAV.map((item) => (
+            <li key={item.id}>
+              <button
+                type="button"
+                className="sidebar__item"
+                aria-current={
+                  view === "workflow" && activeStage === item.id ? "step" : undefined
+                }
+                onClick={() => {
+                  goTo(`stage-${item.id}`);
+                }}
+              >
+                <span className="sidebar__step" aria-hidden="true">
+                  {item.step}
+                </span>
+                {item.title}
+                {/* The phase's home, said in a word — the rail must carry it
+                    even when the reader is on the other view (§8.4). */}
+                {activeStage === item.id ? <span className="sidebar__now">now</span> : null}
+              </button>
+            </li>
+          ))}
+        </ul>
 
+        <p className="sidebar__heading">Administration</p>
+        <ul className="sidebar__list">
+          <li>
+            <button
+              type="button"
+              className="sidebar__item"
+              aria-current={view === "administration" ? "page" : undefined}
+              onClick={() => {
+                goTo("stage-administration");
+              }}
+            >
+              Setup &amp; tools
+            </button>
+          </li>
+        </ul>
+
+        <div className="sidebar__foot">
+          <CapabilityBar
+            capabilities={status?.capabilities ?? []}
+            webMcpSupported={isWebMcpSupported()}
+            registeredToolCount={reconciliation.count}
+          />
+        </div>
+      </nav>
+
+      <main className="workspace">
       <GuidanceBanner
         guidance={status?.guidance ?? null}
         loading={loading}
@@ -463,13 +550,14 @@ export default function App(): React.ReactElement {
             ? null
             : (ACTION_TARGET_IDS[status.guidance.actionCode] ?? null)
         }
+        onGo={goTo}
       />
 
       {error === null ? null : <p role="alert">{error}</p>}
       {actionError === null ? null : <p role="alert">{actionError}</p>}
 
       {status === null ? null : (
-        <div className="workspace__panels">
+        <div className="workspace__panels" hidden={view !== "workflow"}>
           <Stage id="contract" step={1} title="Contract" activeStage={activeStage}>
             <ContractForm
             templates={templates}
@@ -512,39 +600,7 @@ export default function App(): React.ReactElement {
           />
           </Stage>
 
-          <Stage id="setup" step={2} title="Set up" activeStage={activeStage}>
-            <ConfigPanel
-            status={status}
-            busy={busy}
-            onScenarioMode={(mode) => {
-              void act(async () =>
-                request("/workspace/scenario-mode", {
-                  method: "PUT",
-                  body: { scenario_mode: mode },
-                  parse: (value) => value,
-                }),
-              );
-            }}
-            onFailureProfile={(profile) => {
-              void act(async () =>
-                request("/workspace/failure-profile", {
-                  method: "PUT",
-                  body: { failure_profile: profile },
-                  parse: (value) => value,
-                }),
-              );
-            }}
-            onReset={() => {
-              void act(async () =>
-                request("/workspace/reset", { method: "POST", body: {}, parse: (value) => value }),
-              );
-            }}
-          />
-
-            <ToolRegistrationPanel reconciliation={reconciliation} />
-          </Stage>
-
-          <Stage id="run" step={3} title="Run" activeStage={activeStage}>
+          <Stage id="run" step={2} title="Run" activeStage={activeStage}>
             <TargetPanel
             status={status}
             busy={busy}
@@ -573,7 +629,7 @@ export default function App(): React.ReactElement {
           />
           </Stage>
 
-          <Stage id="verdict" step={4} title="Verdict" activeStage={activeStage}>
+          <Stage id="verdict" step={3} title="Verdict" activeStage={activeStage}>
             <FindingsPanel
             findings={findings?.findings ?? []}
             total={findings?.total ?? 0}
@@ -599,7 +655,7 @@ export default function App(): React.ReactElement {
           />
           </Stage>
 
-          <Stage id="regression" step={5} title="Regression" activeStage={activeStage}>
+          <Stage id="regression" step={4} title="Regression" activeStage={activeStage}>
           {/* §24: a failed run becomes a file CI can replay. Rendered rather
               than left to the agent tools alone — AC-22 measures the §11.1
               table for reachability, and a capability with no human path is
@@ -650,6 +706,54 @@ export default function App(): React.ReactElement {
         </div>
       )}
 
+      {/* The administration view: configuration and the registration surface,
+          out of the workflow's way but one click from the rail. Hidden, never
+          unmounted — the tool surface must not change because a person looked
+          elsewhere. */}
+      {status === null ? null : (
+        <div className="workspace__panels" hidden={view !== "administration"}>
+          <section
+            className="stage"
+            id="stage-administration"
+            tabIndex={-1}
+            data-stage="administration"
+          >
+            <h2 className="stage__title">Administration</h2>
+            <div className="stage__panels">
+              <ConfigPanel
+                status={status}
+                busy={busy}
+                onScenarioMode={(mode) => {
+                  void act(async () =>
+                    request("/workspace/scenario-mode", {
+                      method: "PUT",
+                      body: { scenario_mode: mode },
+                      parse: (value) => value,
+                    }),
+                  );
+                }}
+                onFailureProfile={(profile) => {
+                  void act(async () =>
+                    request("/workspace/failure-profile", {
+                      method: "PUT",
+                      body: { failure_profile: profile },
+                      parse: (value) => value,
+                    }),
+                  );
+                }}
+                onReset={() => {
+                  void act(async () =>
+                    request("/workspace/reset", { method: "POST", body: {}, parse: (value) => value }),
+                  );
+                }}
+              />
+
+              <ToolRegistrationPanel reconciliation={reconciliation} />
+            </div>
+          </section>
+        </div>
+      )}
+
       {pending === null ? null : (
         <ConfirmationDialog
           pending={pending}
@@ -660,6 +764,7 @@ export default function App(): React.ReactElement {
           onDeny={() => void onDecision("deny")}
         />
       )}
-    </main>
+      </main>
+    </div>
   );
 }

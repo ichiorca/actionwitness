@@ -78,11 +78,16 @@ test.describe("capability reporting", () => {
     await expect(workspace.capabilities).toContainText("not available");
     await expect(workspace.capabilities).toContainText("Every step below can still be done by hand");
 
+    // Registration and configuration live on the administration view now,
+    // reached the way a person reaches it — through the left rail.
+    await workspace.showAdministration();
     const registration = workspace.panel("Tool registration");
     await expect(registration).toContainText("no tools are registered");
 
     // The controls a person needs are present and not gated on registration.
     await expect(workspace.panel("Configuration").getByRole("button", { name: /reset/i })).toBeEnabled();
+
+    await workspace.showWorkflow();
     await expect(workspace.panel("Target")).toBeVisible();
     await expect(workspace.panel("Contract")).toBeVisible();
   });
@@ -103,6 +108,7 @@ test.describe("capability reporting", () => {
     // Both read inside one poll, deliberately. Registration settles across
     // several effects, so reading the registry and then the panel would compare
     // two different moments and fail on the page being *right* a beat later.
+    await workspace.showAdministration();
     const panel = workspace.panel("Tool registration");
     await expect
       .poll(

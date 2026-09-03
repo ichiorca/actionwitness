@@ -142,35 +142,145 @@ label {
 
 /* ---- Page frame ------------------------------------------------------- */
 
-.workspace {
-  max-width: 1180px;
+/* The `hidden` attribute must win over any display this sheet sets — the
+   inactive view is hidden, never unmounted. */
+[hidden] {
+  display: none !important;
+}
+
+.app {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  max-width: 1440px;
   margin: 0 auto;
+  min-height: 100vh;
+}
+
+.workspace {
+  min-width: 0;
   padding: 1.25rem 1.5rem 4rem;
 }
 
-.workspace__header {
+/* ---- Left rail --------------------------------------------------------- */
+
+.sidebar {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  height: 100vh;
+  overflow-y: auto;
   display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0.5rem 1.5rem;
-  margin-bottom: 0.75rem;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 1.25rem 1rem;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
 }
 
-.workspace h1 {
-  font-size: 1.35rem;
+.sidebar__brand {
+  font-size: 1.2rem;
   letter-spacing: 0.01em;
   margin: 0;
 }
 
-/* The compact run summary beside the title: the one line that must survive
+.sidebar__tagline {
+  margin: 0.25rem 0 0.5rem;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.sidebar__heading {
+  margin: 1rem 0 0.25rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+.sidebar__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar__item {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: none;
+  padding: 0.45rem 0.6rem;
+  border-radius: 6px;
+  font-size: 0.92rem;
+  color: var(--text);
+}
+
+.sidebar__item:hover {
+  background: var(--surface-muted);
+  border: none;
+  color: var(--text);
+}
+
+/* Where the reader is (view) or where the phase lives (step) — both carried
+   in words too: aria-current, and the "now" badge. */
+.sidebar__item[aria-current] {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.sidebar__step {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.35rem;
+  height: 1.35rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  background: var(--surface);
+  flex: none;
+}
+
+.sidebar__item[aria-current] .sidebar__step {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.sidebar__now {
+  margin-left: auto;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 0 0.45rem;
+}
+
+.sidebar__foot {
+  margin-top: auto;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+/* The compact run summary under the brand: the one line that must survive
    scrolling past ten panels. Words carry the status; colour never does. */
 .workspace__status {
-  margin: 0;
+  margin: 0.25rem 0;
   padding: 0.15rem 0.65rem;
   border: 1px solid var(--border);
   border-radius: 999px;
   background: var(--surface);
-  font-size: 0.85rem;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
 }
 
 /* ---- Capability bar --------------------------------------------------- */
@@ -716,7 +826,60 @@ label {
   margin-top: 0.75rem;
 }
 
+/* The capability report, compacted for the rail's foot. */
+.sidebar .capabilities {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.35rem;
+  font-size: 0.78rem;
+  margin-bottom: 0;
+}
+
+.sidebar .capabilities__targets {
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
 /* ---- Narrow screens --------------------------------------------------- */
+
+@media (max-width: 900px) {
+  .app {
+    grid-template-columns: 1fr;
+    min-height: 0;
+  }
+
+  /* The rail becomes a top bar: same controls, same order, no hiding. */
+  .sidebar {
+    position: static;
+    height: auto;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem 1.25rem;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .sidebar__tagline {
+    display: none;
+  }
+
+  .sidebar__heading {
+    margin: 0;
+  }
+
+  .sidebar__list {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .sidebar__foot {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: none;
+    flex-basis: 100%;
+  }
+}
 
 @media (max-width: 640px) {
   .workspace {
@@ -730,20 +893,6 @@ label {
   .stage__panels {
     grid-template-columns: 1fr;
   }
-}
-
-/* ---- Header tagline ---------------------------------------------------- */
-
-/* Takes the whole second row of the header flex line, so the run chip stays
-   beside the title rather than being pushed under a sentence. */
-.workspace__tagline {
-  flex-basis: 100%;
-  order: 3;
-  margin: 0.15rem 0 0;
-  max-width: 62ch;
-  color: var(--text-muted);
-  font-size: 0.92rem;
-  line-height: 1.5;
 }
 
 /* ---- The contract list ------------------------------------------------- */

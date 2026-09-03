@@ -39,6 +39,12 @@ export interface GuidanceBannerProps {
    * missing mapping must degrade to the banner exactly as it was.
    */
   readonly actionTargetId?: string | null;
+  /**
+   * Overrides the default walk when the owner must do something first — the
+   * workspace passes this to bring the right view forward before focusing,
+   * since a control on a hidden view cannot receive the reader.
+   */
+  readonly onGo?: (targetId: string) => void;
 }
 
 /**
@@ -50,7 +56,7 @@ export interface GuidanceBannerProps {
  * here depends on wall-clock time; in an environment that never animates the
  * class is inert. Smooth scrolling defers to `prefers-reduced-motion`.
  */
-function goToAction(targetId: string): void {
+export function goToAction(targetId: string): void {
   const target = document.getElementById(targetId);
   if (target === null) {
     return;
@@ -76,6 +82,7 @@ export function GuidanceBanner({
   guidance,
   loading,
   actionTargetId,
+  onGo,
 }: GuidanceBannerProps): React.ReactElement {
   if (guidance === null) {
     return (
@@ -109,7 +116,7 @@ export function GuidanceBanner({
               type="button"
               className="banner__go"
               onClick={() => {
-                goToAction(actionTargetId);
+                (onGo ?? goToAction)(actionTargetId);
               }}
             >
               Go to this step

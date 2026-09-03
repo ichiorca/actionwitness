@@ -142,6 +142,7 @@ test.describe("the registration panel reconciles against the browser, not the co
       "Registered by something other than this application.",
     );
 
+    await workspace.showAdministration();
     const panel = workspace.panel("Tool registration");
     await expect(panel).toContainText("Not declared by this page");
     await expect(panel).toContainText("totally_unrelated_tool");
@@ -162,6 +163,7 @@ test.describe("the registration panel reconciles against the browser, not the co
     // unusually convenient delivery mechanism.
     await agent.injectTool("<img src=x onerror=alert(1)>", "hostile name");
 
+    await workspace.showAdministration();
     const panel = workspace.panel("Tool registration");
     await expect(panel).toContainText("<img src=x onerror=alert(1)>");
     expect(await panel.locator("img").count()).toBe(0);

@@ -188,6 +188,7 @@ test.describe("the declarative tool is declared but never claimed", () => {
     // this page *declares* through markup and never *claims* to have
     // registered. The panel must not report it missing — nothing registered it,
     // so nothing failed — and it must not be silently dropped either.
+    await workspace.showAdministration();
     const panel = workspace.panel("Tool registration");
     await expect(panel).toContainText("Harness tools:");
     await expect(panel).not.toContainText("claimed but not reported");

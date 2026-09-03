@@ -174,6 +174,8 @@ test.describe("recovery", () => {
     // to the start of a journey they were halfway through.
     await workspace.expectPhase("contract_ready");
     expect(String((await harness.workspace())["selected_contract_id"])).toBe(before);
+    // Reset happens on the administration view; the Target panel is workflow.
+    await workspace.showWorkflow();
     await expect(workspace.panel("Target")).toContainText("Run: none");
   });
 

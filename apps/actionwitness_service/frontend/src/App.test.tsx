@@ -208,7 +208,36 @@ describe("App — the lifecycle layout follows the reported phase (§11.5)", () 
 
     fireEvent.click(go);
 
-    expect(document.activeElement).toBe(screen.getByRole("region", { name: "Findings" }));
+    // The walk defers a frame so the owning view can come forward first.
+    await waitFor(() => {
+      expect(document.activeElement).toBe(screen.getByRole("region", { name: "Findings" }));
+    });
+  });
+
+  it("keeps administration off the workflow view until the rail asks for it", async () => {
+    installFetch({ comparable: null });
+
+    const { container } = render(<App />);
+    await waitFor(() => {
+      expect(screen.getByRole("region", { name: "Findings" })).toBeDefined();
+    });
+
+    const adminView = container
+      .querySelector('[data-stage="administration"]')
+      ?.closest(".workspace__panels");
+    const workflowView = container
+      .querySelector('[data-stage="contract"]')
+      ?.closest(".workspace__panels");
+
+    // Mounted both ways — the tool surface must not change shape with the
+    // view — but only the workflow is on screen until the rail is used.
+    expect(adminView?.hasAttribute("hidden")).toBe(true);
+    expect(workflowView?.hasAttribute("hidden")).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: /Setup & tools/ }));
+
+    expect(adminView?.hasAttribute("hidden")).toBe(false);
+    expect(workflowView?.hasAttribute("hidden")).toBe(true);
   });
 
   it("summarises the active run beside the title, from the same server facts", async () => {
