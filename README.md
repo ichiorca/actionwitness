@@ -15,10 +15,16 @@ login; see [Deployment](#deployment).
 
 ## The layered failure, on screen
 
-Captured against the live deployment (§29.2). The agent's `apply_discount`
-call returns `success` and claims the discounted total; the independently
-observed cart says the discount never landed — and the run is judged on the
-difference:
+Captured against the live deployment (§29.2). The workspace: the left rail
+separates the workflow (contract → run → verdict → regression, with the
+server's phase pinned "now") from administration, and the guidance banner
+names whose turn it is and walks to the control that acts:
+
+![The workspace: a left rail with Workflow and Administration sections, the run-status pill, and the verdict stage showing a failed finding beside five passing ones](docs/screenshots/workspace-overview.png)
+
+The agent's `apply_discount` call returns `success` and claims the discounted
+total; the independently observed cart says the discount never landed — and
+the run is judged on the difference:
 
 ![The run timeline: every tool call reported success, under a guidance banner saying the outcome failed](docs/screenshots/layered-failure-timeline.png)
 
