@@ -12,7 +12,14 @@ Two transformations, both stated rather than silent:
 * **The config block is replaced** with the pinned header (FR-093): schema,
   evaluator name and version from ADR-0005; provider, model, build commit and
   fixture from the arguments to this script. Nothing is guessed — a field the
-  operator does not supply is refused, not defaulted.
+  operator does not supply is refused, not defaulted, and the command mode is
+  established from the raw report rather than asserted: the pinned evaluator
+  writes no `commandMode` field, but its `browser` subcommand's config carries
+  `url` where `local`/`analyze` carry `toolSchemaFile` (verified against
+  webmcp-evals@0.0.4 `dist/commands/index.js`; `smoke` writes no JSON report
+  at all). A raw report this cannot establish as a browser run is refused —
+  browser and local mode verify fundamentally different things, and AC-17
+  requires actual exported parameters, never invented ones.
 * **Trajectories are reduced to the adapter's tool surface.** FR-091 imports
   "the imported, redacted, **allowlisted** tool calls", and the replayer
   refuses a tool the adapter does not publish — a trajectory carrying
@@ -42,12 +49,43 @@ PINNED_CONFIG: dict[str, object] = {
     "evaluatorName": "webmcp-evals",
     "evaluatorPackage": "webmcp-evals",
     "evaluatorVersion": "0.0.4",
-    "commandMode": "browser",
     "modelProvider": "google",
 }
 
 
+def command_mode(config: object) -> str:
+    """The raw run's command mode, established from its config — never assumed.
+
+    The pinned evaluator's JSON report names no mode; the subcommand that ran
+    decides which keys its config carries (webmcp-evals@0.0.4
+    `dist/commands/index.js`): `browser` writes `url`, `local`/`analyze` write
+    `toolSchemaFile`, and `smoke` writes no JSON report. This kit is authored
+    for browser mode only (README) — local mode grades against a static tool
+    schema and never drives the real page, so a local report relabelled
+    "browser" would claim a verification that did not happen. Anything not
+    established as a browser run is refused.
+    """
+    if not isinstance(config, dict):
+        raise ValueError(
+            "the raw report carries no config object, so its command mode cannot "
+            "be established; this kit transforms browser-mode reports only"
+        )
+    if "toolSchemaFile" in config:
+        raise ValueError(
+            "the raw report is a local/analyze-mode run (its config carries "
+            "toolSchemaFile, not a page url); this kit is authored for browser "
+            "mode only and will not relabel a run that verified something else"
+        )
+    if "url" not in config:
+        raise ValueError(
+            "the raw report's config carries neither url nor toolSchemaFile, so "
+            "it cannot be established as a browser-mode run; nothing is guessed"
+        )
+    return "browser"
+
+
 def transform(raw: dict, *, model: str, commit: str, fixture: str) -> dict:
+    mode = command_mode(raw.get("config"))
     results = raw["results"]
     rows = []
     for row in results["results"]:
@@ -74,6 +112,7 @@ def transform(raw: dict, *, model: str, commit: str, fixture: str) -> dict:
     return {
         "config": {
             **PINNED_CONFIG,
+            "commandMode": mode,
             "modelName": model,
             "modelParameters": model_parameters,
             "targetBuildCommit": commit,
@@ -95,17 +134,24 @@ def main() -> None:
     parser.add_argument("out", type=Path, help="where to write the importable report")
     parser.add_argument("--model", required=True, help="model identifier the run used")
     parser.add_argument("--commit", required=True, help="target build commit (git rev-parse HEAD)")
+    # Required like --model and --commit: targetFixture is provenance, and a
+    # default would invent the very metadata this script promises not to guess.
     parser.add_argument(
         "--fixture",
-        default="buggy-store-canonical-empty-cart",
+        required=True,
         help="the fixture identifier the scenarios restore",
     )
     arguments = parser.parse_args()
 
     raw = json.loads(arguments.raw.read_text(encoding="utf-8"))
-    document = transform(
-        raw, model=arguments.model, commit=arguments.commit, fixture=arguments.fixture
-    )
+    try:
+        document = transform(
+            raw, model=arguments.model, commit=arguments.commit, fixture=arguments.fixture
+        )
+    except ValueError as refusal:
+        # A refusal is the tool doing its job; the operator needs the reason,
+        # not a traceback.
+        raise SystemExit(f"refused: {refusal}") from refusal
     arguments.out.write_text(json.dumps(document, indent=1), encoding="utf-8")
     print(f"wrote {arguments.out} ({len(document['results']['results'])} trials)")
 
