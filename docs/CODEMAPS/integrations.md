@@ -59,6 +59,7 @@ virtualenv.
 | `api.py` | 353 | `/demo/api/v1` | The only route between harness and target. |
 | `failure_injection.py` | 172 | Fault profiles, including the false-success one | The demo's whole point: a tool that reports success and changes nothing. |
 | `models.py` · `money.py` · `catalog.py` · `confirmations.py` · `errors.py` · `migrations.py` | 272 · 72 · 118 · 153 · 174 · 173 | Domain, money, catalogue, its own confirmation flow, errors, schema | Money is `Decimal` here too. |
+| `frontend/src/` (`App.tsx` 341 · `api.ts` 311 · `styles.css` 328 · `main.tsx` 48, plus `App.test.tsx`) | ~1,490 | The storefront's **own** React UI — the page a person uses with no agent, no harness, no WebMCP (AC-09) | Deliberately shares **nothing** with the harness frontend, its stylesheet included: §26.7 requires this app to run with the assurance packages absent, and a shared design system would be exactly the dependency it must not have. |
 
 ## Adding an adapter
 

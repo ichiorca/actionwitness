@@ -39,8 +39,8 @@ labelled rows, the verbatim payload one disclosure away, and a live expiry:
 **Status.** Tier 1 and Tier 2 are implemented and tested: the target-neutral core
 kernel, the standalone Buggy Store and its adapter, workspace persistence, the run
 slice, the React/WebMCP workspace with human confirmation, regression evals with a
-replay CLI, and external-evaluator report import. 2,000+ deterministic tests,
-including the false-success fault proof. Tier 3 modules are present as
+replay CLI, and external-evaluator report import. 2,800+ deterministic Python
+tests and 280+ frontend unit tests, including the false-success fault proof. Tier 3 modules are present as
 configuration-gated scaffolds and ship **off** — see [What is not
 here](#what-is-not-here).
 
@@ -210,9 +210,9 @@ rather than intended.
 
 | Style | File | What it does |
 |---|---|---|
-| **Native** (`navigator.modelContext.registerTool`) | `apps/actionwitness_service/frontend/src/webmcp/adapter.ts` | The **only** file that touches the WebMCP API. Owns registration, StrictMode-safe cleanup, error normalization, and the cancellation-sensitive direct path (ADR-0002 rule 3). |
-| **Hook-based** (`use-webmcp-tool@0.2.0`) | `apps/actionwitness_service/frontend/src/spike/hookPath.tsx` | The pinned lifecycle package, exercised in the ADR-0002 spike. Not used for cancellation-sensitive tools — no path in the tested build forwards the per-invocation signal. |
-| **Declarative** | not used | The MVP registers imperatively. Declarative form annotation is roadmap scope; recorded here so its absence is a statement rather than an omission. |
+| **Native** (`document.modelContext.registerTool`) | `apps/actionwitness_service/frontend/src/webmcp/adapter.ts` | The **only** file that touches the WebMCP API. Owns registration, StrictMode-safe cleanup, error normalization, and the cancellation-sensitive direct path (ADR-0002 rule 3) — `get_workspace_status` and the toolsets that must observe a cancelled invocation register this way. |
+| **Hook-based** (`use-webmcp-tool@0.2.0`) | `apps/actionwitness_service/frontend/src/webmcp/adapter.ts` (`useWebMCP`, wrapped) | The pinned lifecycle package registers the standard toolsets, wrapped by the adapter so nothing else learns its API. Not used for cancellation-sensitive tools — no path in the tested build forwards the per-invocation signal. The ADR-0002 selection spike that pinned it is preserved at `src/spike/hookPath.tsx`. |
+| **Declarative** (`toolname` on a `<form>`) | `apps/actionwitness_service/frontend/src/components/ContractForm.tsx`, attributes owned by `useDeclarativeTool` in `adapter.ts` | `create_outcome_contract` (§25.2, FR-021): the browser reads the tool off the form's own markup, so the agent's affordance and the person's are the same DOM node, and both submit through one handler. Flat scalars only — the form cannot author assertions or policies. |
 | Harness tool definitions | `apps/actionwitness_service/frontend/src/tools/harnessTools.ts` | `list_contract_templates`, `get_outcome_contract`, `arm_outcome_contract`, `verify_outcome`, `get_run_findings`, `reset_workspace`, `create_regression_eval`, `run_regression_eval` |
 | Target tool definitions | `apps/actionwitness_service/frontend/src/integrations/buggyStore/tools.ts` | `search_catalog`, `get_cart`, `update_cart`, `apply_discount`, `proceed_to_checkout` |
 
@@ -230,13 +230,18 @@ WebMCP is behind a flag in the tested build.
 1. Chrome 151 stable. Open `chrome://flags/#enable-webmcp-testing`, set it to
    **Enabled**, and relaunch.
 2. Open the workspace. The capability bar reports whether
-   `navigator.modelContext` / `document.modelContext` was found. Both were present
-   in the tested build (verified live 2026-08-31).
-3. Drive the tools from the ChatGPT in-app browser, or from Chrome DevTools:
+   `document.modelContext` was found. The 2026-08-31 spike saw the API at both
+   `document.modelContext` and `navigator.modelContext`; in the build used for
+   the 2026-09-03 deployed attestation only `document.modelContext` was present,
+   which is the location the adapter reads.
+3. Drive the tools from the ChatGPT in-app browser, or from Chrome DevTools —
+   note `executeTool` takes the registered tool *object* and a JSON *string*
+   (verified live against the deployed workspace, 2026-09-03):
 
    ```js
-   await navigator.modelContext.getTools();
-   await navigator.modelContext.executeTool("get_run_findings", { limit: 3 });
+   const tools = await document.modelContext.getTools();
+   const status = tools.find((t) => t.name === "get_workspace_status");
+   await document.modelContext.executeTool(status, "{}");
    ```
 
 If WebMCP is absent the workspace still works end to end — that is AC-09, and it is
@@ -416,8 +421,9 @@ POST /api/v1/benchmarks/{benchmark_id}/imports
 ```
 
 - **Pinned evaluator:** `webmcp-evals@0.0.4` (`fe33c1b`) — see ADR-0005
-- **Checked-in redacted fixture:** under `tests/fixtures/`, used by the import and
-  correlation tests
+- **Checked-in redacted fixture:**
+  `integrations/google_evals/fixtures/tier2_three_scenarios.json`, used by the
+  import and correlation tests (`tests/integration/test_008_exit_gate.py`)
 - **Binding rules:** binding is **explicit** and fails closed on weak addressing. A
   trial is bound to a run only by an unambiguous identifier; a report that cannot be
   bound is reported as unbound rather than guessed at. This matters because the
@@ -626,7 +632,9 @@ Other known limitations:
 - **SQLite, single worker, single instance.** Correct for the MVP and stated as a
   constraint rather than a default. Horizontal scaling needs a different store.
 - **Ephemeral demo data.** A redeploy restarts from a seeded state.
-- **Declarative WebMCP annotation is unused.** Registration is imperative.
+- **Declarative WebMCP annotation covers one form.** The contract form is the
+  only declarative tool; every other registration is imperative through the
+  adapter.
 - **The `/demo` proxy buffers**, capping a storefront request body at 64 KiB.
 - **The demo video is not yet linked from this README.** It is recorded against
   the deployed URL; the layered-failure screenshots above already are.
@@ -642,7 +650,7 @@ rule are in ADR-0002. Re-run the spike
 | Item | Pinned value |
 |---|---|
 | Chrome build + flag/origin-trial config (`chrome://flags/#enable-webmcp-testing`) | Chrome 151.0.0.0 stable (Windows), flag **Enabled** |
-| WebMCP API location | `document.modelContext` **and** `navigator.modelContext` (verified live 2026-08-31; `registerTool`/`getTools`/`executeTool`/`ontoolchange`) |
+| WebMCP API location | `document.modelContext` **and** `navigator.modelContext` (verified live 2026-08-31; `registerTool`/`getTools`/`executeTool`/`ontoolchange`). Re-verified 2026-09-03 against the deployed workspace: only `document.modelContext` present in that build — the adapter reads `document.modelContext` exclusively, so nothing depends on the second location |
 | `getTools()` / `toolchange` | both present; `toolchange` fires per change (bursts not coalesced, none dropped); descriptors carry descriptions + `readOnlyHint`/`untrustedContentHint` → `stable_tool_surface` viable |
 | Hook package (`use-webmcp-tool` vs `usewebmcp` spike decision) | `use-webmcp-tool@0.2.0` (exact); cancellation-sensitive tools use direct native registration — no path in this build forwards the per-invocation signal |
 | `webmcp-types` version | `0.1.5` (exact) |

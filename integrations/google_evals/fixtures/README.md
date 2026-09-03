@@ -4,9 +4,14 @@ This directory holds the redacted, version-pinned `webmcp-evals` JSON report
 fixture(s) used by CI and by the offline benchmark fallback. Requirements:
 
 - generated from the frozen benchmark manifest against the pinned evaluator version;
-- at least three scenarios × three completed trials, including one call-level
-  pass whose deterministic outcome fails (the `silent_outcome_defect` trial);
-- redacted before commit; always labeled `recorded_fixture`, never `live`.
+- at least three scenarios × three trials, including call-level passes whose
+  deterministic outcome fails (classified `silent_outcome_defect` downstream)
+  and one deliberate `error` trial, which the import reports as excluded
+  rather than guessed at;
+- redacted before commit. The `recorded_fixture` / `silent_outcome_defect`
+  labels are applied by the import and correlation path when the suite is
+  created — an evaluator report carries neither, and a suite built from this
+  file must never be labelled `live_model_run`.
 
 ## What is checked in
 

@@ -22,7 +22,7 @@ Workflow per spec: `/spec-kit-handoff <id>` → implement citing T-IDs →
 | `007-regression-evals` | M6 | Eval case generation, fixture replay, CLI exits 0/1/2, `EvalPanel` | `reproduce_source` recreates exact classification; AC-08/12/15 | §24 |
 | `008-evaluator-import` | M7 | Pinned evaluator report import, binding, replay, 2×2 matrix, benchmark artifact — **Tier 2 gate** | full fixture path runs with no Node/LLM/Shopify; AC-16 | §25, §23 |
 | `009-release-hardening` | M8 | Docker, single-origin mounting, CI lanes, README, deploy + rollback rehearsal | fresh checkout follows README; tested image is the deployed image; AC-10 | §29, §26, §28 |
-| `010-live-llm-benchmark` | M9 (Tier 3) | Configured live evaluator run through the M7 import path | AC-17; if red, do not start Shopify | §25, §32 |
+| `010-live-model-benchmark` | M9 (Tier 3) | Configured live evaluator run through the M7 import path | AC-17; if red, do not start Shopify | §25, §32 |
 | `011-shopify-cart-proof` | M10 (Tier 3) | Exact-origin pairing, theme bridge, `target.cart` observation | AC-18 with no Admin/customer/payment credential | §13.6, §20 |
 | `012-webmcp-policy-polish` | M11 (Tier 3) | Retry/confirmation injectors, AbortSignal, declarative form, reconciliation, SSE last | one focused test per shipped feature; AC-02/05/07/13/14 | §11–12, App. D |
 
@@ -36,21 +36,16 @@ Workflow per spec: `/spec-kit-handoff <id>` → implement citing T-IDs →
 - `specs/*/spec.md` is operator-owned once approved; sessions edit `plan.md`
   and `tasks.md` only.
 
-## Runway extension — round-2 features (planned 2026-09-01)
+## Runway extension — round-2 features (planned 2026-09-01, shipped 2026-09-02)
 
 Beyond the M0–M11 runway, from `docs/actionwitness-top3-features-round2.md`
 (local planning input). All three complete v1.9 requirements that shipped as
-honest scaffolds; none is an off-spec invention. Drafts staged for operator
-rename per the standing convention.
+honest scaffolds; none is an off-spec invention. All three landed ahead of the
+planned schedule: every task is checked in their `tasks.md` files and each has
+a shipped exit-gate suite.
 
-| Spec | Feature | Completes | Cost | When |
-|---|---|---|---|---|
-| `013-undeclared-change-detection` | the FR-157 diff behind `no_undeclared_changes`, plus the `undeclared_side_effect` injector and third contract template | §9.10, FR-157 | ~0.5 d | The only one plausibly pre-submission — enter after 009-T9/T11 and the demo |
-| `014-tool-surface-witness` | live surface capture/watch behind `stable_tool_surface`; `tool_surface_poisoned` demo profile | §9.5, §16.1 | ~1–1.5 d | post-submission |
-| `015-storefront-witness` | the `external_audit` module, Shopify ten-tool contract pack, merchant-readable report | §12.17, FR-110 | ~1–1.5 d net | post-submission; NOT gated on AC-17 |
-
-Priority preserved from the source: 013 always; 015 over 014 for the
-audience story, 014 over 015 for the research story. Zero-cost item taken
-immediately: the demo leads with the shared human-agent workspace and lands
-the eval/CI story as the payoff, not the opening — this goes in the demo
-script, not a spec.
+| Spec | Feature | Completes | Status |
+|---|---|---|---|
+| `013-undeclared-change-detection` | the FR-157 diff behind `no_undeclared_changes`, plus the `undeclared_side_effect` injector and third contract template | §9.10, FR-157 | complete — `tests/integration/test_013_exit_gate.py` |
+| `014-tool-surface-witness` | live surface capture/watch behind `stable_tool_surface`; `tool_surface_poisoned` demo profile | §9.5, §16.1 | complete — `tests/integration/test_014_exit_gate.py` |
+| `015-storefront-witness` | the `external_audit` module, Shopify ten-tool contract pack, merchant-readable report | §12.17, FR-110 | complete server-side — `tests/integration/test_015_exit_gate.py`; the browser client that runs an audit from the workspace is not built (015-T8 note) |

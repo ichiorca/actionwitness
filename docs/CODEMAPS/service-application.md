@@ -62,7 +62,7 @@ imports a network client. The server never contacts the audited origin.
 
 | File | Lines | Owns | Watch for |
 |---|---|---|---|
-| `adapter_registry.py` | 283 | Target adapter lookup by module name **or** target id | Registers `buggy_store` only. An unknown target resolves to `None` → `TARGET_UNAVAILABLE`, never a crash. |
+| `adapter_registry.py` | 309 | Target adapter lookup by module name **or** target id; `supported_fault_profiles()`, the read-only companion to `injects_fault_profile` (which stays the gate) | Registers `buggy_store` only. An unknown target resolves to `None` → `TARGET_UNAVAILABLE`, never a crash. |
 | `workspaces.py` · `workspace_service.py` | 216 · 300 | Workspace resolution, cookies, creation metering | |
 | `rate_limits.py` | 197 | Per-client token buckets | `release_idle()` must stay wired to the cleanup sweep, or the process keeps one entry per address it has ever seen. |
 | `cleanup.py` | 248 | FR-009 sweep: expired workspaces, rows, files | Also runs the process's other periodic maintenance via `on_sweep`. A failed sweep is logged, never silently swallowed. Files are unlinked **after** the rows commit. |

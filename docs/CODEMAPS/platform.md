@@ -55,7 +55,7 @@ factory the service does, so there is no second composition root.
 
 | Path | Watch for |
 |---|---|
-| `Dockerfile` | Two isolated virtualenvs enforce the harness/demo boundary inside the artifact. Non-root user. Single uvicorn worker is load-bearing (ADR-0003). |
+| `Dockerfile` | Two isolated virtualenvs enforce the harness/demo boundary inside the artifact. The harness venv installs core, service, `buggy_store`, `google_evals`, **and `shopify`** — the benchmark routes lazy-import `google_evals` on every request and the audit routes lazy-import `shopify` when enabled, so omitting a `--package` line fails only in the image (dev machines and CI always hold the whole uv workspace; that is exactly how it broke once). Non-root user. Single uvicorn worker is load-bearing (ADR-0003). |
 | `scripts/docker-entrypoint.sh` | The shell stays **PID 1** and forwards `SIGTERM` to both children. Do not reintroduce `exec` after a `trap` — that destroys the trap and orphans the store. |
 | `render.yaml` | Free tier by documented operator decision; **no disk**, so `/data` is ephemeral and evidence does not survive a redeploy. |
 | `docs/release-checklist.md` | The operator-attested gate before a release. |

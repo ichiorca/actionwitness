@@ -72,7 +72,11 @@ jsdom. Everything above and below it is production code.
 
 **`support/harness.ts`** holds the fixtures: a purged workspace before every
 test (FR-013's own reset path), an `Agent` that behaves like an agent, and a
-`Workspace` page object addressed by role and accessible name.
+`Workspace` page object addressed by role and accessible name. The workspace
+splits a Workflow view from an Administration view behind a left rail, and
+hidden regions leave the accessibility tree — so the page object switches
+views the way a person does (`showWorkflow` / `showAdministration`) before
+touching a panel that lives on the other one.
 
 **Rate limits are respected, never relaxed.** FR-009 allows 120 requests a
 minute per client with a burst of 30, and ten workspace creations an hour. The

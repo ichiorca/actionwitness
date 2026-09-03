@@ -58,6 +58,7 @@ everything else is written against).
 | `evidence/models.py` · `evidence/enums.py` | 191 · 144 | Evidence records | Append-only, hash-linked, verified before trusted (constitution §4). |
 | `reports/models.py` | 588 | Outcome-report composition | |
 | `reports/comparison.py` | 234 | Matched pre-fix/post-fix comparison | |
+| `reports/enums.py` | 142 | Report vocabulary | |
 
 ## Evals and benchmarks
 
@@ -65,6 +66,9 @@ everything else is written against).
 |---|---|---|---|
 | `evals/models.py` | 607 | `RegressionEvalCase` and friends | Cases are self-contained and versioned; a case must replay from its own bytes. |
 | `evals/factory.py` · `evals/minimize.py` · `evals/substitution.py` | 166 · 139 · 91 | Case generation, shrinking, value substitution | |
+| `evals/interaction.py` | 88 | FR-087's deterministic interaction providers (`recorded_approval`, `recorded_denial`, `no_confirmation`) | A replay **never infers consent**: a decision the recording lacks fails closed. |
+| `evals/enums.py` · `evals/schema.py` | 149 · 89 | Eval vocabulary; the published case schema | |
+| `benchmarks/intents.py` | 174 | FR-100 candidate intent variants | Six is a ceiling: an over-sized set is **refused, not truncated** (truncation would silently pick what a human then approves); control characters are refused, not stripped. |
 | `benchmarks/models.py` | 511 | `BenchmarkReport`, `BenchmarkManifest`, `NormalizedTrial` | Report validators refuse a mixed correlation-mode population — the two populations may never be aggregated into one rate (§9.9). |
 | `benchmarks/states.py` | 90 | `require_transition` for suite status | |
 | `benchmarks/enums.py` | 342 | Status, correlation mode, eligibility, exclusion reasons | |

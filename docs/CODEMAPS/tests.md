@@ -20,9 +20,13 @@ asserted with `pytest.warns` or ignored with a stated reason.
 | `tests/browser` | 1 | `browser` | Manual smoke checklists — **never automated in CI** (§26.4). |
 
 The Playwright lane lives separately at
-`apps/actionwitness_service/frontend/e2e/` (14 specs, 78 assertions) and is
+`apps/actionwitness_service/frontend/e2e/` (14 spec files, 78 tests) and is
 deliberately outside every release gate — §26 makes it conditional. It is the
-only layer exercising real WebMCP, so run it by hand before a release.
+only layer exercising real WebMCP, so run it by hand before a release. The
+workspace splits Workflow from Administration behind a left rail, and a hidden
+region leaves the accessibility tree — so specs switch views through the page
+object's `showWorkflow()` / `showAdministration()` before touching a panel on
+the other view.
 
 ## The gates — `tests/architecture`
 
@@ -40,7 +44,7 @@ to catch by eye.
 | `test_readme_commands.py` | Document a command that does not exist. |
 | `test_codemaps.py` | Let these maps name a path that does not exist, or drift out of the routing table. |
 | `test_core_only_install.py` · `test_store_only_install.py` | Claim independent installability without proving it — the paired `scripts/*_isolation.py` build a fresh virtualenv and install exactly one distribution. |
-| `test_release_artifact_hygiene.py` | Ship secrets, local paths, build debris, or lose the single-worker pin. |
+| `test_release_artifact_hygiene.py` | Ship secrets, local paths, build debris, lose the single-worker pin — or ship an image whose harness venv omits an integration the service imports (`google_evals` broke only in the image, once; `shopify` ships too, so enabling the audit module on the artifact is not one env var away from the same 500). |
 | `test_bundle_shape.py` | Ship a bundle needing a CSP directive the policy does not grant. |
 | `test_evaluator_pin.py` | Drift off the pinned evaluator version. |
 | `test_test_lanes.py` | Put a test in a lane whose marker it does not carry. |

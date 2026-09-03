@@ -96,7 +96,7 @@ flowchart LR
 
     subgraph Partial["Deliberately partial"]
         P1["Storefront Witness browser UI<br/>not built"]
-        P2["Real WebMCP Playwright lane<br/>manual, not release-gating"]
+        P2["Real-WebMCP coverage<br/>manual checklist (tests/browser);<br/>the Playwright lane automates the seam<br/>with a registry double, not release-gating"]
     end
 
     subgraph Disabled["Not claimed as capability"]
@@ -129,7 +129,7 @@ flowchart TB
     subgraph browser["Browser — one origin"]
         UI["React workspace"]
         SF["Storefront /demo"]
-        MC["navigator.modelContext"]
+        MC["document.modelContext"]
     end
 
     subgraph p1["Process 1 — actionwitness_service"]
@@ -345,10 +345,12 @@ flowchart TB
         CLEANUP["StrictMode-safe cleanup"]
     end
 
-    SURFACE["surface.ts<br/>getTools + toolchange"]
-    IDENTITY["identity.ts<br/>canonical tool identity"]
-    HARNESS_TOOLS["harnessTools.ts<br/>8 phase-derived harness tools"]
-    TARGET_TOOLS["buggyStore/tools.ts<br/>5 demo target tools"]
+    SURFACE["surface.ts<br/>getTools + toolchange<br/>(sends definitions, never hashes)"]
+    IDENTITY["identity.ts<br/>invocation-time identity hash<br/>(FR-169 — refused by the server on mismatch)"]
+    HARNESS_TOOLS["harnessTools.ts<br/>8 phase-derived harness tools (hook)"]
+    STATUS_TOOL["tools/workspaceStatus.ts<br/>get_workspace_status (native)"]
+    DECLARATIVE["components/ContractForm.tsx<br/>create_outcome_contract (declarative form)"]
+    TARGET_TOOLS["buggyStore/tools.ts<br/>5 demo target tools (hook)"]
     POISONED["poisoned.ts<br/>deliberate look-alike fixture"]
     API["Recorded /api/v1 invocation"]
     AGENT["Agent"]
@@ -356,9 +358,12 @@ flowchart TB
     AGENT --> MODEL
     MODEL --> DISCOVERY
     MODEL --> REGISTER
-    DISCOVERY --> SURFACE --> IDENTITY --> API
+    DISCOVERY --> SURFACE --> API
     HARNESS_TOOLS --> REGISTER
+    STATUS_TOOL --> REGISTER
+    DECLARATIVE --> REGISTER
     TARGET_TOOLS --> REGISTER
+    TARGET_TOOLS --> IDENTITY --> API
     POISONED --> REGISTER
     REGISTER --> NORMALIZE --> API
     REGISTER --> CANCEL
@@ -429,9 +434,9 @@ sequenceDiagram
         API->>Target: execute with original idempotency key
         Target-->>API: result
         API-->>Agent: recorded outcome
-    else Human denies, cancels, or confirmation is stale
-        Human->>UI: deny or cancel
-        UI->>API: decision
+    else Human denies, or the confirmation lapses / is cancelled
+        Human->>UI: deny (the dialog offers Approve once / Deny only)
+        UI->>API: decision — cancellation arrives separately, via DELETE on the confirmation
         API->>DB: close confirmation
         API-->>Agent: stable refusal
     end
@@ -463,9 +468,12 @@ flowchart TB
     class POLL,CURSOR,TIMER,ABORT,STALE async;
 ```
 
-The dialog owns focus placement, keyboard trapping, single-settle cancellation
-and focus restoration; it does not own authorization. An agent cannot create,
-broaden or approve its own consent. Nothing in this workflow requires WebMCP.
+The dialog owns focus placement, keyboard trapping and focus restoration; it
+renders no cancel control, and single-settle semantics live in the confirmation
+registry (`state/confirmations.ts`), which guarantees a pending promise settles
+exactly once whichever of decision, expiry, or cancellation arrives first.
+Neither owns authorization. An agent cannot create, broaden or approve its own
+consent. Nothing in this workflow requires WebMCP.
 
 ---
 
@@ -479,11 +487,11 @@ sequenceDiagram
     participant AW as ActionWitness
     Op->>AW: POST /audits (one origin + assertion)
     AW-->>Op: 201 authorized
+    Op->>AW: GET /audits/packs (no body — a static catalogue, never a query)
+    AW-->>Op: every built-in contract pack
     Op->>Site: enumerate getTools()
     Site-->>Op: current WebMCP surface
-    Op->>AW: submit tool names
-    AW-->>Op: every matching contract pack
-    Note over Op: operator explicitly selects one pack
+    Note over Op: operator explicitly selects one pack<br/>(matching runs client-side; the server re-checks at evidence time)
     loop only tools allowed by the selected pack
         Op->>Site: exercise tool in the same session
         Site-->>Op: self-report
@@ -783,24 +791,21 @@ flowchart TB
 ```mermaid
 flowchart TB
     START["Container starts"]
-    CONFIG{"Production public origin<br/>present, valid and HTTPS?"}
+    CONFIG{"Production public origin<br/>present and a valid exact origin?<br/>(scheme checked for Shopify and audit<br/>origins, not this one)"}
     DB{"Database readable<br/>right now?"}
-    ASSETS{"Frontend assets mounted?"}
-    READY["/healthz 200<br/>ready to serve"]
+    READY["/healthz 200<br/>ready to serve<br/>(assets_mounted reported in the body,<br/>never a status-code gate)"]
     HOLD["/healthz 503<br/>hold deployment"]
 
     START --> CONFIG
     CONFIG -->|no| HOLD
     CONFIG -->|yes| DB
     DB -->|no| HOLD
-    DB -->|yes| ASSETS
-    ASSETS -->|no| HOLD
-    ASSETS -->|yes| READY
+    DB -->|yes| READY
 
     classDef gate fill:#fef3c7,stroke:#b45309,color:#451a03;
     classDef good fill:#dcfce7,stroke:#15803d,color:#052e16;
     classDef bad fill:#fee2e2,stroke:#b91c1c,color:#450a0a;
-    class CONFIG,DB,ASSETS gate;
+    class CONFIG,DB gate;
     class READY good;
     class HOLD bad;
 ```
@@ -826,7 +831,8 @@ flowchart TB
     CLAIMS --> WEBMCP["Browser seam"]
     WEBMCP --> W1["test_webmcp_adapter_isolation.py"]
     WEBMCP --> W2["test_harness_tool_surface.py"]
-    WEBMCP --> W3["manual Playwright lane"]
+    WEBMCP --> W3["Playwright lane (automated,<br/>registry double, not gating)"]
+    WEBMCP --> W4["tests/browser<br/>manual real-WebMCP checklist"]
 
     CLAIMS --> SAFETY["Safety and scope"]
     SAFETY --> S1["test_audit_guardrails.py"]
@@ -837,28 +843,32 @@ flowchart TB
     DELIVERY --> D1["test_bundle_shape.py"]
     DELIVERY --> D2["test_readme_commands.py"]
     DELIVERY --> D3["test_codemaps.py"]
-    DELIVERY --> D4["test_adr_records.py"]
+    DELIVERY --> D4["test_documentation_references.py"]
 
     classDef claim fill:#ede9fe,stroke:#6d28d9,color:#2e1065,stroke-width:2px;
     classDef area fill:#dbeafe,stroke:#1d4ed8,color:#172554;
     classDef gate fill:#dcfce7,stroke:#15803d,color:#052e16;
     class CLAIMS claim;
     class IMPORTS,WEBMCP,SAFETY,DELIVERY area;
-    class I1,I2,I3,W1,W2,W3,S1,S2,S3,D1,D2,D3,D4 gate;
+    class I1,I2,I3,W1,W2,W3,W4,S1,S2,S3,D1,D2,D3,D4 gate;
 ```
 
-Run the executable checks behind the map:
+Run the executable checks behind the map — these are CI's own lanes:
 
 ```bash
 uv run pytest tests/architecture -q            # every gate in this document
-uv run pytest -q                               # full suite
+uv run pytest -q                               # full suite (includes -m evals, the CLI contract)
+uv run ruff format --check . && uv run ruff check .
 uv run python scripts/core_only_isolation.py   # core really does install alone
-cd apps/actionwitness_service/frontend && npm run typecheck && npm test
+cd apps/actionwitness_service/frontend && npm run typecheck && npm run lint && npm test
+docker build -t actionwitness .                # CI's image job, from a clean checkout
 ```
 
 The architecture suite checks boundaries; the full suite checks behavior through
-public entry points. The manual browser lane is the only layer that exercises
-real WebMCP and should be run before release even though it is not a formal gate.
+public entry points. The automated Playwright lane exercises the seam with a
+conformant registry double; the manual `tests/browser/` checklist is the only
+layer that exercises real WebMCP, and should be run before release even though
+neither is a formal gate.
 
 ---
 
@@ -878,7 +888,7 @@ flowchart TB
 
     ROOT --> QUALITY["Quality signals"]
     QUALITY --> Q1["No coverage regression measurement"]
-    QUALITY --> Q2["Real WebMCP Playwright lane<br/>does not run in CI"]
+    QUALITY --> Q2["No automated lane exercises real WebMCP:<br/>the Playwright lane substitutes the registry,<br/>and neither it nor the manual checklist runs in CI"]
 
     ROOT --> SIZE["Module size"]
     SIZE --> S1["invocation_service.py"]
