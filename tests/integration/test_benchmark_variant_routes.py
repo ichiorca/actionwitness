@@ -309,7 +309,9 @@ async def test_a_variant_carrying_credential_material_is_refused(
     leaky = [
         {
             "kind": "paraphrased",
-            "text": "Add a mug for me, api_key=sk-abcdefghijklmnopqrstuvwxyz012345",
+            # A deliberate test placeholder, declared to the secret scanner.
+            "text": "Add a mug for me, "
+            "api_key=sk-abcdefghijklmnopqrstuvwxyz012345",  # not-a-real-credential
         }
     ]
 
@@ -320,7 +322,7 @@ async def test_a_variant_carrying_credential_material_is_refused(
     assert refused.status_code == 422
     assert refused.json()["error"]["code"] == "CONTRACT_VALIDATION_FAILED"
     # The finding names what matched, never the matched value.
-    assert "sk-abcdefghijklmnopqrstuvwxyz012345" not in refused.text
+    assert "sk-abcdefghijklmnopqrstuvwxyz012345" not in refused.text  # not-a-real-credential
 
 
 async def test_an_approval_naming_a_variant_that_does_not_exist_is_refused(

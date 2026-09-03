@@ -7,6 +7,17 @@ and the benchmark's provenance claim quietly stops being true.
 
 Read out of the record rather than duplicated here, so this file cannot become a
 third place the pin is written down.
+
+**The record is operator-held and untracked** — the ADR corpus left version
+control deliberately (commit 8b59084; the README says the records "are kept
+outside this repository at the operator's direction"). So the pin-vs-record
+cross-check runs exactly where it can: in a working tree that carries the
+corpus, which is also the only place the drift it guards against would be
+introduced. In a clone or CI checkout the record does not exist, and those
+assertions skip *with this explanation* rather than failing on a file no
+clone carries — the same accommodation `test_documentation_references` made
+when it replaced the ADR-corpus gates. Everything provable from tracked
+sources alone stays unconditional.
 """
 
 from __future__ import annotations
@@ -30,7 +41,26 @@ RECORD = REPO_ROOT / "docs" / "adr" / "0005-external-evaluator-binding.md"
 
 
 def _record() -> str:
+    """The decision record, or an explained skip where the corpus is absent."""
+    if not RECORD.is_file():
+        pytest.skip(
+            "ADR-0005 is operator-held and untracked (commit 8b59084); the "
+            "pin-vs-record cross-check runs only in a tree carrying the corpus"
+        )
     return RECORD.read_text(encoding="utf-8")
+
+
+@pytest.mark.architecture
+def test_the_tracked_pins_are_internally_consistent() -> None:
+    """The half of the record that lives in tracked code, asserted everywhere.
+
+    The three record-reading tests below skip in a checkout without the
+    operator-held corpus; these two facts must not skip with them, because a
+    clone can and should still prove them.
+    """
+    # Arrange / Act / Assert
+    assert f"{REPORTER_PACKAGE}/{REPORTER_VERSION}" == REPORTER_SCHEMA
+    assert NORMALIZER_VERSION == "1"
 
 
 @pytest.mark.architecture
