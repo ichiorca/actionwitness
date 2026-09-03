@@ -126,6 +126,32 @@ def test_the_spike_page_is_not_shipped() -> None:
     assert "rm -f dist/spike.html" in body, "the image still ships the ADR-0002 spike page"
 
 
+@pytest.mark.architecture
+def test_the_harness_venv_ships_every_integration_its_mounted_routes_import() -> None:
+    """A lazy import on an always-mounted route is a runtime dependency.
+
+    The benchmark routes import `integrations.google_evals` unconditionally —
+    before any source-kind branch — so an image without that distribution turns
+    every `POST /benchmarks` into a 500, in the image and nowhere else: the uv
+    workspace on a developer machine and in CI always has every member
+    installed, which is exactly why this failed first on the deployed instance
+    (2026-09-03, criterion-4 attestation run).
+
+    `integrations/shopify` is deliberately not listed: its only imports sit
+    behind the `EXTERNAL_AUDIT_ENABLED` gate, which refuses with
+    `AUDIT_NOT_AUTHORIZED` before any import runs — verified against the
+    deployed instance in the same attestation run. If an audit import ever
+    moves ahead of that gate, add it here.
+    """
+    body = DOCKERFILE.read_text(encoding="utf-8")
+    for member, package in (
+        ("./integrations/buggy_store", "actionwitness-integration-buggy-store"),
+        ("./integrations/google_evals", "actionwitness-integration-google-evals"),
+    ):
+        assert member in body, f"{member} is not installed into the harness venv"
+        assert f"--package {package}" in body, f"{package}'s pinned deps are not exported"
+
+
 # --- the single-worker rule (§29.1, ADR-0003) --------------------------------
 
 
