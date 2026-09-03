@@ -13,6 +13,53 @@ Buggy Store at [`/demo`](https://actionwitness.onrender.com/demo), health at
 [`/healthz`](https://actionwitness.onrender.com/healthz). No credentials, no
 login; see [Deployment](#deployment).
 
+## The problem: a success response is not a correct outcome
+
+WebMCP gives agents structured tools on real websites — a real improvement over
+screenshot driving, and a guarantee of nothing about the business outcome. An
+agent can select the right tool, pass the right arguments, receive a
+syntactically valid `success`, watch the UI update — and still leave the
+business wrong: a discount that reports success while the total never moves, a
+cart mutation applied twice on a retry, a checkout that skipped its human
+confirmation, a journey that half-commits (spec §2.1).
+
+Existing WebMCP tooling rightly covers registration, schemas, tool selection,
+argument matching, and invocation order. Every pass criterion in that stack
+terminates at the tool's **self-reported response — the channel that can lie.**
+ActionWitness treats that channel as evidence, never proof, and judges the run
+on independently observed business state.
+
+**And the failure mode is already in the field** (spec §2.3). From published
+third-party reports, verified against primary sources on Aug 27, 2026 — full
+citations and evidence tiers in
+[`docs/storefront-witness.md`](docs/storefront-witness.md):
+
+- Shopify's developer changelog (Aug 5, 2026) put WebMCP tools live by default
+  on Liquid storefronts — ten tools including `update_cart` and
+  `proceed_to_checkout`, nothing to install, and no documented Liquid opt-out.
+- An independent tester (Aug 6, 2026) found live storefronts whose catalog
+  reads returned correct structured data while add-to-cart, cart read, and
+  checkout all failed on the same internal error — a read path that looks
+  healthy over a write path that is silently broken.
+- Developer reports (Jul 17, 2026) described the injected loader leaking
+  globals and breaking unrelated storefront scripts, with three loader versions
+  in roughly six weeks and no merchant-facing version pinning, testing surface,
+  or monitoring.
+
+The honest counterweight, in the same breath: WebMCP adoption outside
+demonstrations is still very small, no mainstream agent consumed these tools in
+production at the time of writing, and the injected script registers tools only
+where `document.modelContext` already exists. The exposure is latent, not
+realised — a risk that becomes live the day browser support becomes default.
+No damage is claimed.
+
+What remains either way: a population of site owners now carries an
+agent-facing surface they did not author, cannot test, and cannot observe —
+the audience the [audit feature](#auditing-a-storefront-you-did-not-build)
+serves — and the observed shape is exactly this product's thesis: **the tool
+says success, the authoritative state says otherwise, and nobody downstream
+can tell.**
+
 ## The layered failure, on screen
 
 Captured against the live deployment (§29.2). The workspace: the left rail
@@ -92,6 +139,26 @@ It imports and correlates results from the pinned Google `webmcp-evals` reporter
 into a dual-layer benchmark (spec §9.9). It never reimplements that evaluator and
 is never a replacement for it.
 
+**Where the existing stack stops** (spec §2.2; positioning baseline
+`GoogleChromeLabs/webmcp-tools` at `d39eae4`, Aug 27, 2026):
+
+| Component | What it verifies | Its pass criterion stops at |
+|---|---|---|
+| `webmcp-evals` `local` mode | LLM tool selection, arguments, order vs a static schema | No execution — results are authored `mockOutput` values |
+| `webmcp-evals` `browser` mode | Selection, arguments, order, optional `result` matchers on a live page | The tool's self-reported return value |
+| `webmcp-evals` `smoke` mode | Deterministic execution of authored call lists | Executes without self-reporting failure |
+| `webmcp-studio` | Generated tool code and evaluator cases | Authoring aid — verifies nothing at runtime |
+| Inspector, demos, polyfill | Registration inspection, sample targets | No backend, no state verification |
+
+No component in that stack captures an independent business-state observation,
+evaluates before/after assertions, counts state changes across retried
+requests, correlates consent evidence with protected mutations, classifies a
+success response that contradicts authoritative state, or derives a replayable
+regression case from a failed run. That system — the contract schema with
+policies, independent observation providers, the hashed immutable evidence
+chain, deterministic fixture replay, and the dual-layer correlation protocol —
+is the durable differentiation, not the bare idea of checking state.
+
 Two distinctions worth stating up front (spec §2.2):
 
 - `webmcp-evals` **smoke mode** executes authored calls against a live page and
@@ -144,7 +211,7 @@ flowchart TB
     subgraph browser["Browser (one origin)"]
         UI["React workspace<br/>/"]
         SF["Buggy Store storefront<br/>/demo"]
-        MC["navigator.modelContext<br/>WebMCP tools"]
+        MC["WebMCP tools<br/>document. or navigator.modelContext"]
     end
 
     subgraph service["actionwitness_service (process 1)"]
@@ -210,7 +277,7 @@ rather than intended.
 
 | Style | File | What it does |
 |---|---|---|
-| **Native** (`document.modelContext.registerTool`) | `apps/actionwitness_service/frontend/src/webmcp/adapter.ts` | The **only** file that touches the WebMCP API. Owns registration, StrictMode-safe cleanup, error normalization, and the cancellation-sensitive direct path (ADR-0002 rule 3) — `get_workspace_status` and the toolsets that must observe a cancelled invocation register this way. |
+| **Native** (`registerTool` on the resolved model context) | `apps/actionwitness_service/frontend/src/webmcp/adapter.ts` | The **only** file that touches the WebMCP API, and the only one that knows *where* it lives: `resolveModelContext()` tries `document.modelContext` then `navigator.modelContext`, because ADR-0002's spike saw both and the attested build exposed one. Owns registration, StrictMode-safe cleanup, error normalization, and the cancellation-sensitive direct path (ADR-0002 rule 3) — `get_workspace_status` and the toolsets that must observe a cancelled invocation register this way. |
 | **Hook-based** (`use-webmcp-tool@0.2.0`) | `apps/actionwitness_service/frontend/src/webmcp/adapter.ts` (`useWebMCP`, wrapped) | The pinned lifecycle package registers the standard toolsets, wrapped by the adapter so nothing else learns its API. Not used for cancellation-sensitive tools — no path in the tested build forwards the per-invocation signal. The ADR-0002 selection spike that pinned it is preserved at `src/spike/hookPath.tsx`. |
 | **Declarative** (`toolname` on a `<form>`) | `apps/actionwitness_service/frontend/src/components/ContractForm.tsx`, attributes owned by `useDeclarativeTool` in `adapter.ts` | `create_outcome_contract` (§25.2, FR-021): the browser reads the tool off the form's own markup, so the agent's affordance and the person's are the same DOM node, and both submit through one handler. Flat scalars only — the form cannot author assertions or policies. |
 | Harness tool definitions | `apps/actionwitness_service/frontend/src/tools/harnessTools.ts` | `list_contract_templates`, `get_outcome_contract`, `arm_outcome_contract`, `verify_outcome`, `get_run_findings`, `reset_workspace`, `create_regression_eval`, `run_regression_eval` |
@@ -229,20 +296,32 @@ WebMCP is behind a flag in the tested build.
 
 1. Chrome 151 stable. Open `chrome://flags/#enable-webmcp-testing`, set it to
    **Enabled**, and relaunch.
-2. Open the workspace. The capability bar reports whether
-   `document.modelContext` was found. The 2026-08-31 spike saw the API at both
-   `document.modelContext` and `navigator.modelContext`; in the build used for
-   the 2026-09-03 deployed attestation only `document.modelContext` was present,
-   which is the location the adapter reads.
+2. Open the workspace. The capability bar reports whether WebMCP was found **and
+   where** — "available (via `document.modelContext`)". The adapter resolves the
+   API from `document.modelContext` first and `navigator.modelContext` second,
+   because the 2026-08-31 spike saw it at both while the build used for the
+   2026-09-03 deployed attestation exposed only the first. A browser that keeps
+   it on `navigator` alone is supported and says so; naming the location is what
+   makes "works in Chrome, not in the in-app browser" a report somebody can act
+   on rather than a shrug.
 3. Drive the tools from the ChatGPT in-app browser, or from Chrome DevTools —
    note `executeTool` takes the registered tool *object* and a JSON *string*
-   (verified live against the deployed workspace, 2026-09-03):
+   (verified live against the deployed workspace, 2026-09-03). Use whichever
+   location the capability bar named:
 
    ```js
-   const tools = await document.modelContext.getTools();
+   const mc = document.modelContext ?? navigator.modelContext;
+   const tools = await mc.getTools();
    const status = tools.find((t) => t.name === "get_workspace_status");
-   await document.modelContext.executeTool(status, "{}");
+   await mc.executeTool(status, "{}");
    ```
+
+**Arriving from a link inside ChatGPT mints a fresh workspace.** The workspace
+cookie is `SameSite=Strict` unconditionally (FR-005, §20.1), so it is not sent on
+a cross-site navigation *into* the origin — the first request after following a
+link carries no cookie and is issued a new workspace, and every request after it
+carries the new one. That is the strict-cookie policy working as specified, not a
+bug: open the URL directly, or expect to start a fresh workspace on arrival.
 
 If WebMCP is absent the workspace still works end to end — that is AC-09, and it is
 tested (`panels.test.tsx`, "reports a browser without WebMCP as a fact, not a
