@@ -151,6 +151,12 @@ def test_nothing_binds_a_trial_without_being_told_to() -> None:
         "seal",
         "get",
         "trials",
+        # The listing that made the dual-layer view reachable. It binds
+        # nothing: it returns identity and status for suites this workspace
+        # already owns, so a person can choose one instead of needing to know
+        # its id. Deliberately thinner than `get` — a caller cannot build a
+        # matrix from it, only pick the suite to read.
+        "list_suites",
         # 008-T7. Reads the stored trials and reports FR-092's numbers; it
         # decides no binding and creates none.
         "summarize",
@@ -171,6 +177,15 @@ def test_nothing_binds_a_trial_without_being_told_to() -> None:
         # 010-T6. Seals FR-100's approved variants into the manifest while the
         # suite is still `draft`. It binds no trial: no trial exists yet.
         "freeze_variants",
+        # §26.5's repeated trials. Neither method binds anything, and the
+        # distinction matters here more than anywhere else on this list: a
+        # repetition *copies* its source trial's evaluator verdict, and the
+        # caller names that source explicitly. Nothing pairs a repetition with a
+        # run, a report, or another trial by position, similarity or time —
+        # `plan_repetitions` refuses a source the caller did not name, and
+        # `record_repetition` writes only what the plan already decided.
+        "plan_repetitions",
+        "record_repetition",
     }
 
 

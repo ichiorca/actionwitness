@@ -7,6 +7,7 @@ an over-permissive origin check is a security defect, not a missing feature.
 """
 
 import pytest
+from actionwitness_service.api.app import create_app
 from actionwitness_service.config import ModuleStatus
 
 CONFIGURED = {
@@ -55,19 +56,42 @@ def test_unconfigured_wildcard_and_null_origins_are_all_rejected(
 
 
 @pytest.mark.shopify
-def test_a_correct_configuration_still_does_not_turn_the_module_on(build_settings) -> None:
-    """Store origin, variant, and currency are server-controlled — and inert.
+def test_a_correct_configuration_turns_the_module_on_with_the_locked_values(
+    build_settings,
+) -> None:
+    """Store origin, variant, and currency are server-controlled.
 
-    This asserted the enabled path until the module's own gate caught up with
-    reality: no adapter is registered and no route is mounted, so a complete
-    configuration produces `disabled` with a reason naming the build rather than
-    `enabled` with nothing behind it. The refusal paths above are unchanged and
-    remain the substance of this lane; when the Tier 3 work lands, this test is
-    the one that should go back to asserting the settings object.
+    This asserted `disabled` for the period when the module parsed four
+    variables with no adapter behind them, on its own instruction to "go back to
+    asserting the settings object" once the Tier 3 work landed. It has: the
+    adapter, its `shopify_cart_state` provider, and the registration all exist,
+    so the settings object is the thing to pin.
+
+    What it pins is that the three values reach the settings *exactly as
+    configured*. The adapter compares the origin by equality and normalizes the
+    configured variant to the contract's stable line key, so a value quietly
+    reshaped between the environment and the adapter would produce refusals
+    nobody could explain. The refusal paths above are unchanged and remain the
+    substance of this lane.
     """
     settings = build_settings(CONFIGURED)
     state = settings.module("shopify")
 
-    assert state.status is ModuleStatus.DISABLED
-    assert "no shopify adapter" in state.reason.lower()
-    assert settings.shopify is None
+    assert state.status is ModuleStatus.ENABLED
+    assert settings.shopify is not None
+    assert settings.shopify.store_origin == "https://dev-store.myshopify.com"
+    assert settings.shopify.test_variant_id == "42"
+    assert settings.shopify.expected_currency == "USD"
+
+
+@pytest.mark.shopify
+def test_a_configured_shopify_module_mounts_its_public_pairing_route(tmp_path) -> None:
+    """An enabled module must be reachable through the real composition root."""
+    application = create_app(
+        environ={**CONFIGURED, "BUGGY_STORE_ENABLED": "false"},
+        database_path=tmp_path / "harness.sqlite3",
+    )
+
+    public_paths = application.openapi()["paths"]
+
+    assert "/api/v1/shopify/pairings" in public_paths

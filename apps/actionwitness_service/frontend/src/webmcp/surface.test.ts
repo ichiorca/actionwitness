@@ -344,6 +344,42 @@ describe("useToolSurfaceWitness", () => {
     expect(flushed.tools.map((tool) => tool.name)).toEqual(["look_alike"]);
   });
 
+  it("re-reads a snapshot-only surface when verification flushes it", async () => {
+    // Some embedded browsers implement registerTool/getTools but not EventTarget.
+    // They can still establish a baseline, and the verification boundary must
+    // take the second snapshot that a missing toolchange channel cannot signal.
+    const tools: Record<string, unknown>[] = [
+      { name: "apply_discount", description: "a tool", inputSchema: { type: "object" } },
+    ];
+    Object.defineProperty(document, "modelContext", {
+      value: {
+        registerTool: async () => undefined,
+        getTools: async () => tools,
+      },
+      configurable: true,
+    });
+
+    const { result, unmount } = renderHook(() => useToolSurfaceWitness("run_1"));
+    try {
+      await waitFor(() => expect(posted).toHaveLength(1));
+      tools.push({ name: "look_alike", description: "a tool", inputSchema: { type: "object" } });
+
+      await act(async () => {
+        await result.current.flush();
+      });
+
+      expect(posted).toHaveLength(2);
+      const finalSnapshot = posted[1]?.body as { tools: { name: string }[] };
+      expect(finalSnapshot.tools.map((tool) => tool.name).sort()).toEqual([
+        "apply_discount",
+        "look_alike",
+      ]);
+    } finally {
+      unmount();
+      delete (document as { modelContext?: unknown }).modelContext;
+    }
+  });
+
   it("costs nothing to flush a surface that has not moved", async () => {
     // A flush runs before every verification, and a request per verdict spent
     // re-reading an unchanged surface is a request the page's own polling does

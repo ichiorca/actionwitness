@@ -50,6 +50,14 @@ export interface CapabilityReport {
 export interface WorkspaceStatus {
   readonly workspaceId: string;
   readonly selectedTargetId: string | null;
+  /**
+   * The workspace a self-witnessing run observes (FR-172), or `null`.
+   *
+   * `null` is a statement, not an absence: it says this workspace observed a
+   * target rather than itself, which is the ordinary case and the thing a
+   * reader should be able to tell apart from a self run.
+   */
+  readonly observedWorkspaceId: string | null;
   readonly selectedContractId: string | null;
   readonly scenarioMode: string | null;
   readonly failureProfile: string | null;
@@ -76,6 +84,16 @@ export interface WorkspaceStatus {
   readonly guidance: Guidance;
   readonly nextAction: NextAction;
   readonly capabilities: readonly CapabilityReport[];
+  /**
+   * Every optional module's state, targets and non-targets alike.
+   *
+   * `capabilities` answers "what can this run against?" and so covers only
+   * registered target adapters — which left report import, the live evaluator
+   * and the external-surface audit invisible in the UI, so a reader could not
+   * tell a module that was switched off from one that had never been built.
+   * The server has published this map all along; nothing read it.
+   */
+  readonly modules: readonly CapabilityReport[];
 }
 
 /** FR-121's compact projection, as sent. */
@@ -119,10 +137,12 @@ export function parseGuidance(value: unknown): Guidance {
 export function parseWorkspace(value: unknown): WorkspaceStatus {
   const record = requireRecord(value, "workspace");
   const capabilities = isRecord(record["capabilities"]) ? record["capabilities"] : {};
+  const modules = isRecord(record["modules"]) ? record["modules"] : {};
   const activeRun = record["active_run"];
   return {
     workspaceId: requireString(record["workspace_id"], "workspace_id"),
     selectedTargetId: optionalString(record["selected_target_id"]),
+    observedWorkspaceId: optionalString(record["observed_workspace_id"]),
     selectedContractId: optionalString(record["selected_contract_id"]),
     scenarioMode: optionalString(record["scenario_mode"]),
     failureProfile: optionalString(record["failure_profile"]),
@@ -140,6 +160,11 @@ export function parseWorkspace(value: unknown): WorkspaceStatus {
     guidance: parseGuidance(record["guidance"]),
     nextAction: parseNextAction(record["next_action"]),
     capabilities: Object.entries(capabilities).map(([name, detail]) => ({
+      name,
+      status: isRecord(detail) ? (optionalString(detail["status"]) ?? "unknown") : "unknown",
+      reason: isRecord(detail) ? (optionalString(detail["reason"]) ?? "") : "",
+    })),
+    modules: Object.entries(modules).map(([name, detail]) => ({
       name,
       status: isRecord(detail) ? (optionalString(detail["status"]) ?? "unknown") : "unknown",
       reason: isRecord(detail) ? (optionalString(detail["reason"]) ?? "") : "",
@@ -226,6 +251,64 @@ export function parseEventPage(value: unknown): EventPage {
     }),
     nextAfterSequence: Number(record["next_after_sequence"]),
     hasMore: record["has_more"] === true,
+  };
+}
+
+/** One side of §15.3's matched pre/post pair, as `ComparableRun.summary()` sends it. */
+export interface ComparisonSide {
+  readonly runId: string;
+  readonly scenarioMode: string | null;
+  /** Derived by the adapter, never by the harness (§9.1) — reported, not judged. */
+  readonly faultActive: boolean;
+  readonly overallResult: string | null;
+  readonly criticalClassifications: readonly string[];
+}
+
+/**
+ * A matched comparison, or the structured reason there is not one (FR-019).
+ *
+ * `comparable` decides which half of this view carries meaning, and the two
+ * halves are never both populated by the server: a matched pair sends
+ * `resolved`/`introduced` and no `reason`, a mismatch sends `reason` and
+ * `differingFields` and no classifications. Empty lists here are therefore
+ * "absent", not "none", which is why the tool that renders this emits only the
+ * half `comparable` selects rather than showing an empty `resolved` list beside
+ * a mismatch and inviting a reader to conclude nothing was resolved.
+ */
+export interface RunComparison {
+  readonly comparable: boolean;
+  readonly reason: string;
+  readonly differingFields: readonly string[];
+  readonly source: ComparisonSide;
+  readonly candidate: ComparisonSide;
+  readonly resolvedClassifications: readonly string[];
+  readonly introducedClassifications: readonly string[];
+}
+
+function parseComparisonSide(value: unknown, field: string): ComparisonSide {
+  const record = requireRecord(value, field);
+  return {
+    runId: requireString(record["run_id"], `${field}.run_id`),
+    scenarioMode: optionalString(record["scenario_mode"]),
+    faultActive: record["fault_active"] === true,
+    overallResult: optionalString(record["overall_result"]),
+    criticalClassifications: stringList(record["critical_classifications"]),
+  };
+}
+
+export function parseComparison(value: unknown): RunComparison {
+  const record = requireRecord(value, "comparison");
+  return {
+    // Compared against `true` rather than coerced: a body whose `comparable`
+    // was missing must read as "not a pair", and a truthiness test would let
+    // any non-empty value announce a matched experiment.
+    comparable: record["comparable"] === true,
+    reason: optionalString(record["reason"]) ?? "",
+    differingFields: stringList(record["differing_fields"]),
+    source: parseComparisonSide(record["source"], "comparison.source"),
+    candidate: parseComparisonSide(record["candidate"], "comparison.candidate"),
+    resolvedClassifications: stringList(record["resolved_classifications"]),
+    introducedClassifications: stringList(record["introduced_classifications"]),
   };
 }
 

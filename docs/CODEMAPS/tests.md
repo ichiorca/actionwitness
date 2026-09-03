@@ -9,14 +9,14 @@ asserted with `pytest.warns` or ignored with a stated reason.
 
 | Directory | Files | Marker | What belongs here |
 |---|---|---|---|
-| `tests/unit` | 30 | `unit` | Engine operators, policies, hashing, canonicalization, classification. Pure, fast. |
-| `tests/integration` | 81 | `integration` | Run lifecycle, confirmation, replay — **through the real app** with a temp database. The largest lane and where journeys belong. |
+| `tests/unit` | 34 | `unit` | Engine operators, policies, hashing, canonicalization, classification. Pure, fast. `test_live_variant_client.py` is here rather than in `integration` because it drives the model client over an `httpx.MockTransport` — no app, no database, and no route to Google. |
+| `tests/integration` | 86 | `integration` | Run lifecycle, confirmation, replay — **through the real app** with a temp database. The largest lane and where journeys belong. |
 | `tests/architecture` | 16 | `architecture` | Forbidden-import, layering, and repository-reference gates. See below. |
 | `tests/adapters` | 8 | `adapters` | Adapter protocol conformance, including a non-commerce fake that proves the protocols are not cart-shaped. |
 | `tests/contracts` | 5 | `contracts` | Outcome-contract parsing, validation, limits. |
 | `tests/evals` · `tests/benchmarks` | 1 · 1 | `evals` · `benchmarks` | Guard files only; the real tests live in `integration`/`unit`. |
-| `tests/guidance` | 2 | `guidance` | Human–agent guidance states (§12.13). |
-| `tests/shopify` | 1 | `shopify` | Fail-closed configuration parsing for the unshipped module. |
+| `tests/guidance` | 3 | `guidance` | Human–agent guidance states (§12.13). `test_guidance_derivation.py` checks the pure projection; `test_guidance_reachability.py` checks the server can actually reach each phase, which totality alone does not prove. |
+| `tests/shopify` | 4 | `shopify` | Fail-closed configuration parsing, plus §15.7's bridge driven **over HTTP only** — no test here imports an application module, because what was missing was the door rather than the logic. `test_shopify_bridge_routes.py` holds the trial that works; `test_shopify_bridge_refusals.py` holds every way one is refused, and keeps a *refusal* (nothing captured) apart from a *failed verdict* (real evidence of a wrong cart). `test_shopify_contract_template.py` holds FR-023's generic-path door: the template listed and instantiable when the module is on, absent when off, and the locked variant/currency refused from any request body. `conftest.py` hangs its helpers off one `trial` fixture because `tests/` is not a package. |
 | `tests/browser` | 1 | `browser` | Manual smoke checklists — **never automated in CI** (§26.4). |
 
 The Playwright lane lives separately at
@@ -36,7 +36,7 @@ to catch by eye.
 | File | Refuses to let you |
 |---|---|
 | `test_import_boundaries.py` | Import an app, integration, demo, or commerce module into `actionwitness_core`; or import the assurance stack into the demo target. AST-based, not grep. |
-| `test_webmcp_adapter_isolation.py` | Touch `document.modelContext` outside `apps/actionwitness_service/frontend/src/webmcp/adapter.ts`. |
+| `test_webmcp_adapter_isolation.py` | Touch the browser tool API outside `apps/actionwitness_service/frontend/src/webmcp/adapter.ts` — either host object, since the adapter resolves `document` or `navigator`. Comments are stripped first (the gate is about access, not mentions); the allowlist carries a reason per entry. |
 | `test_audit_guardrails.py` | Give an audit module a network client, or an audit request model a collection of origins. |
 | `test_harness_tool_surface.py` | Change the published harness tool set without noticing. |
 | `test_product_copy_claims.py` | Restate a third-party report as our own finding, drop an attribution or date, or promise more than an audit delivers. |

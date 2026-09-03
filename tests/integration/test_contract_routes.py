@@ -28,6 +28,8 @@ from actionwitness_service.persistence.database import Database
 from fastapi import FastAPI
 
 from integrations.buggy_store import TARGET_ID, TEMPLATES
+from integrations.self_target import TARGET_ID as SELF_TARGET_ID
+from integrations.self_target import TEMPLATES as SELF_TEMPLATES
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
@@ -77,9 +79,14 @@ async def test_the_integrations_templates_are_seeded_at_startup(app: FastAPI) ->
     async with client(app) as visitor:
         templates = await _templates(visitor)
 
-    # Assert — the seeded set is exactly what the integration ships.
-    assert len(templates) == len(TEMPLATES) >= 3
-    assert {t["source_template_id"] for t in templates} == {
+    # Assert — the seeded set is exactly what the integration ships. Scoped to
+    # the store's own target because FR-173 gave the `self` target a pack of its
+    # own, seeded from the same startup hook: the listing is now the union of
+    # every available integration's templates, and what this test is about is
+    # that the store's contribution arrives whole.
+    from_store = [t for t in templates if t["target_id"] == TARGET_ID]
+    assert len(from_store) == len(TEMPLATES) >= 3
+    assert {t["source_template_id"] for t in from_store} == {
         template.template_id for template in TEMPLATES
     }
 
@@ -99,10 +106,13 @@ async def test_seeding_is_idempotent_across_restarts(tmp_path: Path) -> None:
         async with database.reading() as work:
             rows = await work.fetch_all("SELECT id FROM contracts WHERE workspace_id IS NULL")
 
-    # Assert
-    assert seeded_first == len(TEMPLATES)
+    # Assert — every available integration's pack, seeded once. Both are counted
+    # rather than only the store's: FR-173 seeds the `self` pack through the same
+    # hook, and a count that ignored it would stop noticing a self template
+    # written twice.
+    assert seeded_first == len(TEMPLATES) + len(SELF_TEMPLATES)
     assert seeded_second == 0
-    assert len(rows) == len(TEMPLATES)
+    assert len(rows) == len(TEMPLATES) + len(SELF_TEMPLATES)
 
 
 async def test_an_edited_template_is_a_new_row_not_a_rewrite(tmp_path: Path) -> None:
@@ -150,9 +160,14 @@ async def test_no_templates_are_seeded_without_the_integration(
     async with client(app_without_target) as visitor:
         templates = await _templates(visitor)
 
-    # Assert
-    assert app_without_target.state.templates_seeded == 0
-    assert templates == []
+    # Assert — nothing from the absent integration. The listing is no longer
+    # empty because the `self` target is registered whatever the store is doing
+    # and FR-173 gives it a pack, so "the absent one contributes nothing" is now
+    # said by name; asserting an empty list would assert that an integration
+    # that *is* installed contributes nothing either.
+    assert app_without_target.state.templates_seeded == len(SELF_TEMPLATES)
+    assert [t for t in templates if t["target_id"] == TARGET_ID] == []
+    assert {t["target_id"] for t in templates} == {SELF_TARGET_ID}
 
 
 # --- listing and reading ----------------------------------------------------
@@ -177,7 +192,10 @@ async def test_a_template_listing_carries_what_a_chooser_needs(app: FastAPI) -> 
             # form renders exactly the controls it accepts (FR-021).
             "parameters",
         }
-        assert template["target_id"] == TARGET_ID
+        # One of the available integrations' targets, never blank: a listing row
+        # whose target a chooser cannot resolve is a template nobody can arm.
+        # Both are named because FR-173 added the `self` pack beside the store's.
+        assert template["target_id"] in {TARGET_ID, SELF_TARGET_ID}
         assert template["content_hash"].startswith("sha256:")
 
 

@@ -37,6 +37,16 @@ FULL_ENV: dict[str, str] = {
     "EXTERNAL_AUDIT_ALLOWED_ORIGINS": "https://audited.example, https://other.example",
 }
 
+#: Modules with no configuration at all.
+#:
+#: `self` is built in (§12.20, FR-171): it drives and observes this same
+#: deployment through `/api/v1`, so there is nothing an operator could set and no
+#: state in which it could be misconfigured. The two tests below remove a
+#: module's environment and assert what happens; a module with no environment to
+#: remove has no such question, and skipping it is more honest than inventing an
+#: empty key tuple that would make the test look like it had checked something.
+CONFIGURATION_FREE = {"self"}
+
 MODULE_ENV_KEYS: dict[str, tuple[str, ...]] = {
     "buggy_store": ("BUGGY_STORE_ENABLED", "BUGGY_STORE_BASE_URL"),
     "evaluator_import": ("EVALUATOR_IMPORT_ENABLED",),
@@ -98,12 +108,12 @@ def test_credentialed_modules_are_off_by_default(name: str) -> None:
 #: Modules this build configures but does not ship, so they stay off no matter
 #: how completely they are configured.
 #:
-#: `shopify` parses its four variables and then reports `disabled`, because the
-#: adapter and route do not exist (Tier 3, `specs/011-shopify-cart-proof`). It is
-#: named here rather than quietly tolerated: when that work lands and
-#: `_SHOPIFY_ADAPTER_SHIPPED` flips, this set empties and the assertions below
-#: tighten back automatically instead of needing to be remembered.
-UNSHIPPED = frozenset({"shopify"})
+#: Empty since 011 landed the Shopify adapter and its registration. It is kept
+#: rather than deleted because the assertions below read from it: a module that
+#: has to be configured-but-unavailable again (a registration removed, an
+#: integration uninstalled) belongs here, and `_SHOPIFY_ADAPTER_SHIPPED` in
+#: `config.py` is the switch that has to agree with it.
+UNSHIPPED: frozenset[str] = frozenset()
 
 
 @pytest.mark.unit
@@ -114,22 +124,33 @@ def test_fully_configured_environment_enables_everything_that_ships() -> None:
 
 
 @pytest.mark.unit
-def test_an_unshipped_module_says_so_rather_than_claiming_to_be_on() -> None:
-    """Configuration is not capability.
+def test_a_module_reported_enabled_has_an_adapter_behind_it() -> None:
+    """Configuration is not capability, checked in the direction that can lie.
 
-    Four correct environment variables used to produce `enabled` for a module
-    with no adapter behind it, so `modules.shopify` said "enabled" while
+    Four correct environment variables once produced `enabled` for a module with
+    no adapter behind it, so `modules.shopify` said "enabled" while
     `capabilities` listed no shopify target at all — the workspace response
-    contradicted itself about the one module a reviewer is most likely to ask
-    about. The reason has to name the build, not the operator's config, because
-    the operator's config is correct.
-    """
-    settings = ServiceSettings.from_env(FULL_ENV)
-    state = settings.module("shopify")
+    contradicting itself about the one module a reviewer is most likely to ask
+    about. `_SHOPIFY_ADAPTER_SHIPPED` was the answer, and this is the test that
+    keeps the answer true: `modules` and `capabilities` are asserted to agree
+    rather than the flag being trusted.
 
-    assert state.status is ModuleStatus.DISABLED
-    assert "no shopify adapter" in state.reason.lower()
-    assert settings.shopify is None, "a module that is off must expose no settings object"
+    The registry is built with no HTTP clients, which is what makes this a check
+    on the Shopify slot specifically: the two client-taking targets refuse
+    without one, and the Shopify adapter needs none (FR-112 puts the cart read
+    in the operator's browser).
+    """
+    from actionwitness_service.application.adapter_registry import AdapterRegistry
+
+    settings = ServiceSettings.from_env(FULL_ENV)
+    registry = AdapterRegistry(settings)
+
+    assert settings.module("shopify").status is ModuleStatus.ENABLED
+    assert settings.shopify is not None, "an enabled module must expose its settings"
+    assert registry.is_available("shopify"), (
+        "modules reports shopify enabled while capabilities has no shopify target"
+    )
+    assert registry.adapter("shopify").descriptor.target_id == "shopify-development-store"
 
 
 # --- absence disables only its own module -----------------------------------
@@ -138,6 +159,8 @@ def test_an_unshipped_module_says_so_rather_than_claiming_to_be_on() -> None:
 @pytest.mark.unit
 @pytest.mark.parametrize("removed", MODULE_NAMES)
 def test_absent_configuration_disables_only_its_own_module(removed: str) -> None:
+    if removed in CONFIGURATION_FREE:
+        pytest.skip(f"{removed} takes no configuration, so there is none to remove")
     settings = ServiceSettings.from_env(_without(*MODULE_ENV_KEYS[removed]))
 
     others = {
@@ -159,6 +182,8 @@ def test_absent_configuration_disables_only_its_own_module(removed: str) -> None
 @pytest.mark.parametrize("removed", MODULE_NAMES)
 def test_disabled_module_exposes_no_settings_object(removed: str) -> None:
     """A module that is off must be absent, never present-but-empty."""
+    if removed in CONFIGURATION_FREE:
+        pytest.skip(f"{removed} takes no configuration and is never off")
     settings = ServiceSettings.from_env(_without(*MODULE_ENV_KEYS[removed]))
     if not settings.is_enabled(removed):
         assert getattr(settings, removed) is None
@@ -242,17 +267,18 @@ def test_partial_shopify_configuration_is_misconfigured_not_silently_ignored() -
     ],
 )
 def test_store_origin_is_normalized_to_an_exact_origin(raw: str, expected: str) -> None:
-    """Origins are compared by equality for CORS, so normalization is a safety step.
+    """Origins are compared by equality for CORS and by the adapter, so
+    normalization is a safety step.
 
-    Asserted against the normalizer rather than through `settings.shopify`,
-    which is `None` while the module is unshipped (see `UNSHIPPED`). The rule
-    still needs a test now: it is what the adapter will depend on the day it
-    lands, and a normalization that silently stopped working in the meantime
-    would surface as a CORS mismatch nobody could explain.
+    Asserted through `settings.shopify` now that the module ships: the value the
+    adapter compares against is the one this test should pin, and reading it off
+    the private normalizer would have kept passing if the resolver ever stopped
+    calling it.
     """
-    from actionwitness_service.config import _exact_origin
+    settings = ServiceSettings.from_env({**FULL_ENV, "SHOPIFY_STORE_ORIGIN": raw})
 
-    assert _exact_origin(raw, require_https=True) == expected
+    assert settings.shopify is not None
+    assert settings.shopify.store_origin == expected
 
 
 @pytest.mark.unit

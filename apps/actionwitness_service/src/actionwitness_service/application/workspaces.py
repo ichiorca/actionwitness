@@ -185,6 +185,36 @@ class WorkspaceStore:
         await self._create(work, workspace_id, kind=WorkspaceKind.EVAL, owner=owner_workspace_id)
         return workspace_id
 
+    async def create_observed_workspace(self, work: UnitOfWork, recording_workspace_id: str) -> str:
+        """The second workspace a self-witnessing run needs (FR-172).
+
+        Created here rather than named by the caller, and that is the guard
+        rather than a convenience. FR-172 requires a self-witnessing run to
+        observe "a workspace other than the one recording it"; a server-minted
+        identifier is other than the recording one by construction, so the loop
+        the requirement forbids cannot be reached by passing the wrong argument.
+        The explicit refusals elsewhere remain, because a guard that is only
+        structural stops being checked the moment the structure changes.
+
+        Owned by the recording workspace for the same reason an eval workspace is
+        owned by the one that asked for it: constitution §2 makes the workspace
+        the isolation boundary, and an owned child stays inside it — it is
+        cascade-deleted with its owner and never ages out on a clock of its own.
+
+        Both writes are the caller's transaction. The recording workspace must
+        not be left naming a workspace that was never inserted, nor an observed
+        workspace be left orphaned by a failure after its insert.
+        """
+        observed_id = self._id_source()
+        await self._create(
+            work, observed_id, kind=WorkspaceKind.OBSERVED, owner=recording_workspace_id
+        )
+        await work.execute(
+            "UPDATE workspaces SET observed_workspace_id = ? WHERE id = ?",
+            (observed_id, recording_workspace_id),
+        )
+        return observed_id
+
     async def _exists(self, work: UnitOfWork, workspace_id: str) -> bool:
         row = await work.fetch_one(
             "SELECT 1 AS present FROM workspaces WHERE id = ?", (workspace_id,)

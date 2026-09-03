@@ -31,6 +31,46 @@
  *   and `run_service` refuses `mode: "proposal"` by name in this build, so a
  *   tool that derived candidates would have no run to derive them from.
  *
+ * ## Beyond §11.1: the rest of the reachable surface
+ *
+ * §32 makes the agent "a first-class user of ActionWitness, not only its
+ * subject", and §11.1's table is the Tier 1 floor rather than the ceiling. The
+ * second group below publishes the reads an agent needs to finish a job it can
+ * already start — the run timeline, the matched comparison its own
+ * `arm_outcome_contract` can bind, the eval cases it may replay, the audit
+ * catalogue and report, and the benchmark matrix. Every one is read-only, and
+ * that is a finding rather than a convenience: **what remains unpublished is
+ * unpublished because publishing it would hand an agent something §7.5 reserves
+ * to a person, or would let the subject of a check author its own evidence.**
+ *
+ * - **Confirmation decisions** (`POST …/confirmations/{id}/decision`) stay
+ *   human. Constitution §5: an agent cannot create, broaden, or approve its own
+ *   consent, and §32 names confirmation decisions as reserved.
+ * - **Audit authorization** (`POST /audits`) stays human. It is an assertion
+ *   that a person is allowed to audit somebody else's storefront; §32 reserves
+ *   authorization assertion by name, and a tool would let an agent make that
+ *   claim on an operator's behalf.
+ * - **Audit evidence submission** (`POST /audits/current/evidence`) stays
+ *   human, and this is the least obvious exclusion. The transcript *is* the
+ *   independent observation channel — §12.17 puts it in the operator's own
+ *   browser session precisely so it is not the tool's own account of itself. An
+ *   agent that exercised a storefront and then handed in the transcript would be
+ *   the subject of the audit authoring its evidence, which collapses the
+ *   independence the whole feature rests on.
+ * - **Scenario mode and fault profile** stay human (§32, reserved by name).
+ * - **Benchmark curation** — creating a suite, importing an evaluator report,
+ *   freezing variants, replaying and finalizing — stays human. FR-100 forbids an
+ *   agent approving its own material, and the rest is an operator's own file and
+ *   an operator's own seal.
+ * - **The full run report** (`GET /runs/{id}/report`) is not a tool because it
+ *   cannot be one honestly: §11.4 budgets a tool result at 1,500 characters and
+ *   asks for "detailed evidence server-side rather than in tool output". A
+ *   truncated verdict document is worse than a pointer to the whole one, so
+ *   `get_run_findings` carries the pointer and this does not compete with it.
+ *
+ * Every capability published here is also reachable without WebMCP: each has a
+ * panel, and nothing below is the only route to anything.
+ *
  * ## Appendix D is the schema authority, and where this build departs from it
  *
  * Appendix D is normative for names, descriptions, required fields and enum
@@ -60,12 +100,19 @@
 import { useCallback, useState } from "react";
 
 import { request } from "../api/client";
-import { isRecord } from "../api/client";
+import { API_PREFIX, isRecord, optionalString, stringList } from "../api/client";
+import { type AuditOutcome, listAuditPacks, readAuditReport } from "../api/audit";
+import { type BenchmarkView, listBenchmarks, readBenchmark } from "../api/benchmark";
 import { readOutcomeContract } from "../api/contracts";
+import { parseEvalCases } from "../api/evals";
 import {
+  type EventPage,
   type Finding,
   type FindingsPage,
+  type RunComparison,
   type WorkspaceStatus,
+  parseComparison,
+  parseEventPage,
   parseFindings,
   parseRun,
   parseWorkspace,
@@ -105,6 +152,25 @@ const D1_IDENTIFIER = { type: "string", minLength: 8, maxLength: 80 } as const;
  * D.1 — see this module's header for the three-way contradiction.
  */
 const FINDING_LIMIT = { minimum: 1, maximum: 10, default: 3 } as const;
+
+/**
+ * The timeline page `get_run_timeline` asks for when the caller names none.
+ *
+ * Smaller than the service's own default of 50, and deliberately: §11.4 budgets
+ * a tool result at 1,500 characters, fifty events do not fit inside it, and a
+ * page that arrived truncated would read as a timeline that ended. Asking for a
+ * page this tool can actually deliver is the honest version — `next_after_sequence`
+ * is what carries the reader to the rest.
+ *
+ * The *bounds* stay the server's. 1–100 is what `GET /runs/{id}/events` accepts,
+ * it is published unchanged, and a caller's own value is forwarded verbatim so
+ * an out-of-range limit comes back as FastAPI's refusal rather than a silent
+ * correction made here.
+ */
+const TIMELINE_PAGE = { minimum: 1, maximum: 100, default: 10 } as const;
+
+/** §15.6's identifier bounds, which are the route's rather than D.1's. */
+const SUITE_IDENTIFIER = { type: "string", minLength: 1, maxLength: 128 } as const;
 
 /** D.1's `include` values. `failures` is its default, and ours. */
 type FindingsInclude = "failures" | "all";
@@ -244,6 +310,154 @@ function findingsDocument(page: FindingsPage, include: FindingsInclude): Record<
   };
 }
 
+/**
+ * One page of the harness's own record of a run (§15.3).
+ *
+ * The stored event carries more than an agent can be handed: §20.3's
+ * `redacted_payload`, hashes, correlation and request identifiers. `parseEventPage`
+ * already drops those; this names what is left in the keys the API uses, so a
+ * reader can match a line here against `GET /runs/{id}/events`.
+ *
+ * `status` and `reported_status` both travel and are never merged. One is what
+ * the harness recorded about an invocation and the other is what the tool said
+ * about itself, and the distance between them is the entire subject of this
+ * product — a document that carried one of them would be read as the other.
+ */
+function timelineDocument(page: EventPage): Record<string, unknown> {
+  return {
+    run_id: page.runId,
+    run_status: page.runStatus,
+    events: page.events.map((event) => ({
+      sequence_number: event.sequenceNumber,
+      event_type: event.eventType,
+      actor: event.actor,
+      ...(event.toolName === null ? {} : { tool_name: event.toolName }),
+      ...(event.status === null ? {} : { status: event.status }),
+      ...(event.reportedStatus === null ? {} : { reported_status: event.reportedStatus }),
+    })),
+    returned: page.events.length,
+    // The cursor for the next call, so a bounded page is a page rather than a
+    // silently shortened timeline.
+    next_after_sequence: page.nextAfterSequence,
+    has_more: page.hasMore,
+  };
+}
+
+function comparisonSideDocument(side: RunComparison["source"]): Record<string, unknown> {
+  return {
+    run_id: side.runId,
+    scenario_mode: side.scenarioMode,
+    fault_active: side.faultActive,
+    overall_result: side.overallResult,
+    critical_classifications: side.criticalClassifications,
+  };
+}
+
+/**
+ * FR-019's matched pair, or the named reason there is not one.
+ *
+ * Only the half `comparable` selects is emitted. The server populates one half
+ * or the other, so an empty `resolved_classifications` beside a mismatch would
+ * not mean "nothing was resolved" — it would mean the question was never asked,
+ * and a reader has no way to tell those apart from an empty list.
+ */
+function comparisonDocument(runId: string, comparison: RunComparison): Record<string, unknown> {
+  return {
+    run_id: runId,
+    comparable: comparison.comparable,
+    source: comparisonSideDocument(comparison.source),
+    candidate: comparisonSideDocument(comparison.candidate),
+    ...(comparison.comparable
+      ? {
+          resolved_classifications: comparison.resolvedClassifications,
+          introduced_classifications: comparison.introducedClassifications,
+        }
+      : {
+          differing_fields: comparison.differingFields,
+          reason: comparison.reason,
+        }),
+  };
+}
+
+/**
+ * The merchant-facing half of a sealed audit report, bounded (§11.4, FR-163).
+ *
+ * The stored report is composed for a person to read and comfortably exceeds a
+ * tool result's 1,500 characters: every tool carries a sentence of advice, and
+ * the engineer-grade `evidence` section is the whole transcript. So the advice
+ * and the evidence are dropped and `report` points at the endpoint that serves
+ * the sealed bytes — the same shape `get_run_findings` uses, and the same reason:
+ * §11.4 asks for detailed evidence server-side rather than in tool output.
+ *
+ * `content_hash` travels because it is what makes the pointer checkable. A
+ * reader who fetches the full report can confirm they were given the document
+ * this result described rather than one that replaced it.
+ *
+ * Everything read out of `report` is narrowed rather than cast. It arrives as
+ * `unknown` like any other response body, and an unexpected shape must show as
+ * absent — `String()` on an object would render `[object Object]` into a
+ * statement about somebody's storefront.
+ */
+function auditReportDocument(outcome: AuditOutcome): Record<string, unknown> {
+  const summary = isRecord(outcome.report["summary"]) ? outcome.report["summary"] : {};
+  const tools = Array.isArray(summary["tools"]) ? summary["tools"] : [];
+  return {
+    audited_site: optionalString(outcome.report["audited_site"]),
+    checked_using: optionalString(outcome.report["checked_using"]),
+    headline: optionalString(summary["headline"]) ?? "",
+    what_this_means: optionalString(summary["what_this_means"]) ?? "",
+    tools: tools.filter(isRecord).map((entry) => ({
+      tool: optionalString(entry["tool"]) ?? "",
+      says: optionalString(entry["says"]) ?? "",
+    })),
+    not_checked: stringList(summary["not_checked"]),
+    content_hash: outcome.contentHash,
+    report: `${API_PREFIX}/audits/current/report`,
+  };
+}
+
+/**
+ * §15.6's matrix and rates, without the parts that would not fit (§11.4).
+ *
+ * `trials`, `by_scenario`, `by_failure_profile` and the sealed manifest are
+ * dropped rather than truncated: a matrix cut off halfway reads as a smaller
+ * matrix, and the panel and `GET /benchmarks/{id}` already serve the whole
+ * document to anyone who needs it.
+ *
+ * Each rate is emitted as the server's own presentation string, which is `null`
+ * over an empty population. FR-092 is explicit that this is never `0` — a rate
+ * nobody could compute is not a rate of zero, and rendering it as one would
+ * report a suite with no eligible trials as a total failure.
+ */
+function benchmarkDocument(view: BenchmarkView): Record<string, unknown> {
+  return {
+    benchmark_id: view.benchmarkId,
+    status: view.status,
+    // AC-16: the declared source travels with every figure, so a recorded
+    // fixture is never read as a live execution.
+    source_kind: view.sourceKind,
+    correlation_mode: view.correlationMode,
+    manifest_content_hash: view.manifestContentHash,
+    counts: {
+      call_level_pass_outcome_pass: view.counts.callLevelPassOutcomePass,
+      call_level_pass_outcome_fail: view.counts.callLevelPassOutcomeFail,
+      call_level_fail_outcome_pass: view.counts.callLevelFailOutcomePass,
+      call_level_fail_outcome_fail: view.counts.callLevelFailOutcomeFail,
+      eligible_trials: view.counts.eligibleTrials,
+      excluded_trials: view.counts.excludedTrials,
+      error_trials: view.counts.errorTrials,
+      total_trials: view.counts.totalTrials,
+    },
+    metrics: {
+      call_level_pass_rate: view.metrics.callLevelPassRate.value,
+      outcome_pass_rate: view.metrics.outcomePassRate.value,
+      end_to_end_success_rate: view.metrics.endToEndSuccessRate.value,
+      silent_outcome_failure_rate: view.metrics.silentOutcomeFailureRate.value,
+      incremental_outcome_failure_trials: view.metrics.incrementalOutcomeFailureTrials,
+    },
+  };
+}
+
 export interface HarnessToolset {
   readonly states: Readonly<Record<string, RegistrationState>>;
   /** The case `run_regression_eval` will replay, or `null` when there is none. */
@@ -303,7 +517,20 @@ export function useHarnessToolset(
   const loaded = status !== null;
   const phase = status?.guidance.phase ?? "";
   const runId = status?.activeRun?.runId ?? null;
+  // Guidance can advance beyond the source run — `eval_ready` is the clearest
+  // example — while that run remains failed underneath. Tools that read or
+  // repeat a terminal run must follow the run's status, not the overlay phase.
+  const runStatus = status?.activeRun?.status ?? "";
+  const isTerminalRun = isTerminal(runStatus);
   const hasContract = loaded && status.selectedContractId !== null;
+  // A module the deployment reports as unavailable must be unavailable
+  // everywhere (009-T12): a tool that registered and then refused every call is
+  // exactly the half-shipped failure that rule exists to prevent, so the two
+  // audit tools below are not registered at all unless the server says the
+  // module is on. The answer is the server's own module report, read the same
+  // way the audit panel reads it — nothing here decides availability.
+  const auditModule = status?.modules.find((entry) => entry.name === "external_audit") ?? null;
+  const auditAvailable = auditModule?.status === "enabled";
 
   const listTemplates = useHarnessTool({
     name: "list_contract_templates",
@@ -503,7 +730,7 @@ export function useHarnessToolset(
     annotations: { readOnlyHint: true },
     // §11.1: "a run has reached any terminal state, including error and
     // cancelled" — a failed run is exactly when an agent needs to read findings.
-    enabled: loaded && isTerminal(phase) && runId !== null,
+    enabled: loaded && isTerminalRun && runId !== null,
     // §11.4's one normative exception: a finding an agent cannot read is
     // equivalent to a finding that was never produced.
     resultLimit: MAX_FINDINGS_RESULT_CHARS,
@@ -541,7 +768,7 @@ export function useHarnessToolset(
     // instructs an agent to reset and retry, and an instruction an agent has no
     // tool to obey is a defect rather than guidance.
     enabled:
-      loaded && (isTerminal(phase) || phase === "no_contract" || phase === "contract_ready"),
+      loaded && (isTerminalRun || phase === "no_contract" || phase === "contract_ready"),
     execute: async () => {
       const outcome = await request("/workspace/reset", {
         method: "POST",
@@ -578,7 +805,7 @@ export function useHarnessToolset(
     // §11.1: "run is failed or warning-bearing and replay-eligible under
     // FR-080". Eligibility is the server's judgement; this flag only keeps the
     // tool out of the states where it is obviously wrong.
-    enabled: loaded && EVAL_ELIGIBLE_PHASES.includes(phase) && runId !== null,
+    enabled: loaded && EVAL_ELIGIBLE_PHASES.includes(runStatus) && runId !== null,
     execute: async (args: Record<string, unknown>) => {
       const target = stringArgument(args, "run_id") ?? runId;
       if (target === null) {
@@ -644,6 +871,238 @@ export function useHarnessToolset(
     },
   });
 
+  // --- beyond §11.1: the reads that finish a job an agent can already start ---
+
+  const getTimeline = useHarnessTool({
+    name: "get_run_timeline",
+    // Read-only. It reads the harness's own record; it starts nothing and
+    // changes nothing, and the description says what the record is so a reader
+    // does not mistake it for a verdict.
+    description:
+      "Return the harness's own ordered record of one run: the recorded events, what " +
+      "each tool reported about itself, and what the harness observed. Page with " +
+      "after_sequence. This is the record of what happened, not the verdict on it.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        run_id: {
+          ...D1_IDENTIFIER,
+          description: "Run to read the timeline of. Defaults to this workspace's active run.",
+        },
+        after_sequence: {
+          type: "integer",
+          minimum: 0,
+          default: 0,
+          description: "Return events after this sequence number. Use next_after_sequence to page.",
+        },
+        limit: {
+          type: "integer",
+          ...TIMELINE_PAGE,
+          description: "Events per page. Smaller than the service default so one page fits.",
+        },
+      },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true },
+    // A timeline is worth reading while a run is in flight as well as after it
+    // ends — an agent checking whether its last invocation was recorded is
+    // asking mid-run. So this follows the run, not the phase.
+    enabled: loaded && runId !== null,
+    execute: async (args: Record<string, unknown>) => {
+      const target = stringArgument(args, "run_id") ?? runId;
+      if (target === null) {
+        throw new Error("No run to read a timeline for.");
+      }
+      const after = numericArgument(args, "after_sequence");
+      // The caller's limit wins; this tool's smaller page applies only when
+      // nobody named one, and either value is forwarded for the server to judge.
+      const limit = numericArgument(args, "limit") ?? String(TIMELINE_PAGE.default);
+      const query = [
+        ...(after === null ? [] : [`after_sequence=${encodeURIComponent(after)}`]),
+        `limit=${encodeURIComponent(limit)}`,
+      ].join("&");
+      const page = await request(`/runs/${encodeURIComponent(target)}/events?${query}`, {
+        parse: parseEventPage,
+      });
+      return timelineDocument(page);
+    },
+  });
+
+  const getComparison = useHarnessTool({
+    name: "get_run_comparison",
+    // Read-only. `arm_outcome_contract` already lets an agent bind a comparison
+    // source; without this it could bind a pair and never read the result,
+    // which is half a capability rather than a capability.
+    description:
+      "Return the matched pre/post comparison for a run armed against a comparison " +
+      "source: which critical classifications the change resolved and which it " +
+      "introduced, or the named fields that stop the two runs being a comparable pair.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        run_id: {
+          ...D1_IDENTIFIER,
+          description: "Terminal run armed with a comparison source. Defaults to this workspace's.",
+        },
+      },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true },
+    // §23.7 compares "after both runs terminate". A run still in flight has no
+    // outcome to compare, and the service says so; this keeps the tool out of
+    // the states where the answer is knowable in advance.
+    enabled: loaded && isTerminalRun && runId !== null,
+    execute: async (args: Record<string, unknown>) => {
+      const target = stringArgument(args, "run_id") ?? runId;
+      if (target === null) {
+        throw new Error("No run to compare.");
+      }
+      const comparison = await request(`/runs/${encodeURIComponent(target)}/comparison`, {
+        parse: parseComparison,
+      });
+      return comparisonDocument(target, comparison);
+    },
+  });
+
+  const listEvals = useHarnessTool({
+    name: "list_regression_evals",
+    // Read-only. `run_regression_eval` otherwise replays only the case this
+    // session created or a person selected, so a case cut in an earlier session
+    // was invisible to an agent — it could not name what it could not list.
+    description:
+      "List the regression eval cases this workspace holds, with the run each was cut " +
+      "from, so a case created earlier can be named to run_regression_eval by id.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true },
+    // Cases outlive the run that produced them, so this follows the workspace
+    // rather than the phase; an empty list is a real answer.
+    enabled: loaded,
+    execute: async () => {
+      const cases = await request("/evals", { parse: parseEvalCases });
+      return {
+        cases: cases.map((entry) => ({
+          eval_case_id: entry.evalCaseId,
+          name: entry.name,
+          source_run_id: entry.sourceRunId,
+        })),
+        returned: cases.length,
+      };
+    },
+  });
+
+  const auditPacks = useHarnessTool({
+    name: "list_audit_packs",
+    // Read-only, and a static catalogue: nothing here names or contacts an
+    // origin. FR-161 requires the pack to be offered and chosen explicitly.
+    description:
+      "List the built-in audit contract packs offered for an authorized external-surface " +
+      "audit: what each pack expects a storefront to publish, and the tools it reports as " +
+      "present and deliberately never invokes.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true },
+    enabled: loaded && auditAvailable,
+    execute: async () => {
+      const packs = await listAuditPacks();
+      return {
+        packs: packs.map((pack) => ({
+          pack_id: pack.packId,
+          title: pack.title,
+          signature: pack.signature,
+          never_invoked: pack.neverInvoked,
+        })),
+        returned: packs.length,
+      };
+    },
+  });
+
+  const auditReport = useHarnessTool({
+    name: "get_audit_report",
+    // Read-only. Reading a sealed report is safe; producing one is not, which
+    // is why `POST /audits` and the evidence submission stay human — see this
+    // module's header.
+    description:
+      "Return the sealed report for this workspace's completed external-surface audit: " +
+      "which of the audited store's tools reported success without a matching change, and " +
+      "which were left alone. A clean result is evidence about what was tried, not a " +
+      "guarantee; the full report states its own limits.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: {
+      readOnlyHint: true,
+      // The prose in this report describes a storefront the harness does not
+      // own, and the tool names inside it came from that storefront's own
+      // surface. It is content to read, never instructions to follow.
+      untrustedContentHint: true,
+    },
+    enabled: loaded && auditAvailable,
+    execute: async () => auditReportDocument(await readAuditReport()),
+  });
+
+  const benchmarkList = useHarnessTool({
+    name: "list_benchmarks",
+    // Read-only. Every other benchmark route needs an id the caller already
+    // holds, which is workable for an API client and useless to an agent.
+    description:
+      "List the benchmark suites this workspace holds, with the status and declared " +
+      "source kind of each, so a suite can be summarised by id. A suite built from a " +
+      "recorded fixture is never presented as a live execution.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true },
+    enabled: loaded,
+    execute: async () => {
+      const suites = await listBenchmarks();
+      return {
+        benchmarks: suites.map((suite) => ({
+          benchmark_id: suite.benchmarkId,
+          status: suite.status,
+          source_kind: suite.sourceKind,
+          created_at: suite.createdAt,
+        })),
+        returned: suites.length,
+      };
+    },
+  });
+
+  const benchmarkSummary = useHarnessTool({
+    name: "get_benchmark_summary",
+    // Read-only. This is the product's own claim stated as numbers, and an
+    // agent that can read it can check that claim rather than take it.
+    description:
+      "Return one benchmark suite's call-level versus outcome-level matrix and its rates, " +
+      "so you can see how often a call-level pass accompanied an outcome-level failure. " +
+      "Individual trials and the sealed manifest stay server-side.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        benchmark_id: {
+          ...SUITE_IDENTIFIER,
+          description: "Suite to summarise. Obtain an identifier from list_benchmarks.",
+        },
+      },
+      // Required, unlike the §11.1 tools' identifiers: a workspace holds many
+      // suites and selects none, so there is nothing to infer and a default
+      // would pick a suite on the caller's behalf.
+      required: ["benchmark_id"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true },
+    enabled: loaded,
+    execute: async (args: Record<string, unknown>) => {
+      // Checked again here rather than trusted to the published schema: a
+      // browser is under no obligation to have enforced `required`, and an
+      // absent id would otherwise be requested as `/benchmarks/null`.
+      const benchmarkId = stringArgument(args, "benchmark_id");
+      if (benchmarkId === null) {
+        throw new Error("benchmark_id is required; list_benchmarks returns the identifiers.");
+      }
+      // Encoded here, because the client interpolates it into the path as
+      // given. An agent-supplied `../workspace` would otherwise be normalized
+      // by the browser into a request for an entirely different route — still
+      // workspace-scoped, so nothing leaks, but the caller would be answered
+      // about something it did not ask for. Encoding turns that into a 404.
+      return benchmarkDocument(await readBenchmark(encodeURIComponent(benchmarkId)));
+    },
+  });
+
   return {
     evalCaseId,
     states: {
@@ -655,6 +1114,13 @@ export function useHarnessToolset(
       verify_outcome: verifyOutcome,
       get_run_findings: getFindings,
       reset_workspace: resetWorkspace,
+      get_run_timeline: getTimeline,
+      get_run_comparison: getComparison,
+      list_regression_evals: listEvals,
+      list_audit_packs: auditPacks,
+      get_audit_report: auditReport,
+      list_benchmarks: benchmarkList,
+      get_benchmark_summary: benchmarkSummary,
     },
   };
 }

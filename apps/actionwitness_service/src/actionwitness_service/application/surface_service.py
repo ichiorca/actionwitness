@@ -77,6 +77,22 @@ HARNESS_TOOL_NAMES: frozenset[str] = frozenset(
         "reset_workspace",
         "create_regression_eval",
         "run_regression_eval",
+        # Beyond §11.1's table, and here for the same reason as everything above
+        # it: the browser reports every registered tool through `getTools()`
+        # identically, so a harness tool the server does not recognise lands in
+        # the *target* partition and its ordinary lifecycle appearance becomes an
+        # `added` delta that fails the run. A name belongs in this set the moment
+        # the frontend can register it — including the two audit tools, which the
+        # judging deployment never registers because the module is off. Listing
+        # them costs nothing there and is required the moment an operator
+        # switches the module on.
+        "get_run_timeline",
+        "get_run_comparison",
+        "list_regression_evals",
+        "list_audit_packs",
+        "get_audit_report",
+        "list_benchmarks",
+        "get_benchmark_summary",
     }
 )
 

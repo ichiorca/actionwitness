@@ -75,11 +75,118 @@ const UNSUPPORTED: RegistrationState = {
 };
 
 /**
+ * Where a browser exposes WebMCP. Reported so an operator can tell "this browser
+ * has no WebMCP" from "this browser puts it somewhere we did not look".
+ */
+export type ModelContextHost = "document" | "navigator";
+
+export interface ResolvedModelContext {
+  readonly context: WebMCP.ModelContext;
+  readonly host: ModelContextHost;
+}
+
+/**
+ * A host property is not a capability. Embedded browsers can expose a partial
+ * object while they bridge WebMCP into another process, so require the two
+ * callable methods every registration/read path needs before accepting it.
+ */
+function isCallableModelContext(value: unknown): value is WebMCP.ModelContext {
+  if ((typeof value !== "object" && typeof value !== "function") || value === null) {
+    return false;
+  }
+  return (
+    typeof Reflect.get(value, "registerTool") === "function" &&
+    typeof Reflect.get(value, "getTools") === "function"
+  );
+}
+
+const rejectedToolChangeContexts = new WeakSet<WebMCP.ModelContext>();
+
+function hasToolChangeEventTarget(context: WebMCP.ModelContext): boolean {
+  return (
+    !rejectedToolChangeContexts.has(context) &&
+    typeof context.addEventListener === "function" &&
+    typeof context.removeEventListener === "function"
+  );
+}
+
+/**
+ * Find the model context, wherever this browser keeps it.
+ *
+ * **Two host objects, observed in two builds of one browser.** ADR-0002's spike
+ * saw the API at both `document.modelContext` and `navigator.modelContext`; the
+ * build attested later exposed only the `document` one. An adapter that hard-codes
+ * a single location therefore does not report "unsupported" when it is wrong — it
+ * reports it when the browser moved, and the two are indistinguishable to the
+ * person looking at the capability bar. Everything degrades correctly and
+ * silently, which is the worst way to lose the agent path.
+ *
+ * `document` is tried first because it is the location every attested build has
+ * had, and the one the spec's own examples use; `navigator` is the fallback, not
+ * an equal. When both exist they are the same object in every build observed so
+ * far, so the order is about determinism rather than preference — a resolver that
+ * picked either would make the reported host depend on nothing a reader can see.
+ *
+ * Feature detection, never user-agent sniffing: type availability does not prove
+ * browser support (§25.12), and a string match on the UA would be wrong the first
+ * time an embedded browser reported someone else's.
+ */
+export function resolveModelContext(): ResolvedModelContext | undefined {
+  if (typeof document !== "undefined") {
+    const candidate: unknown = document.modelContext;
+    if (isCallableModelContext(candidate)) {
+      return { context: candidate, host: "document" };
+    }
+  }
+  if (typeof navigator !== "undefined") {
+    const candidate: unknown = navigator.modelContext;
+    if (isCallableModelContext(candidate)) {
+      return { context: candidate, host: "navigator" };
+    }
+  }
+  return undefined;
+}
+
+/**
  * Feature detection. Type availability never proves browser support (§25.12),
- * so this asks the document rather than the user agent.
+ * so this asks the browser rather than the user agent.
  */
 export function isWebMcpSupported(): boolean {
-  return typeof document !== "undefined" && document.modelContext !== undefined;
+  return resolveModelContext() !== undefined;
+}
+
+/**
+ * Whether the usable WebMCP surface can notify us when its registry changes.
+ * A false value means snapshot reads still work; callers must re-read at their
+ * own correctness boundary instead of assuming no change occurred.
+ */
+export function canObserveToolChanges(): boolean {
+  const resolved = resolveModelContext();
+  return resolved !== undefined && hasToolChangeEventTarget(resolved.context);
+}
+
+/**
+ * Which host object this browser exposed WebMCP on, or `null` when it has none.
+ *
+ * Surfaced for diagnosis rather than decoration. "It works in Chrome and not in
+ * the ChatGPT in-app browser" is otherwise a report with nothing in it; naming
+ * the host turns it into one an operator can act on.
+ */
+export function webMcpHost(): ModelContextHost | null {
+  return resolveModelContext()?.host ?? null;
+}
+
+/**
+ * The host as a person reads it — `"document.modelContext"` — or `null`.
+ *
+ * Built here rather than in the component that shows it, because the shape of
+ * the browser API is this module's knowledge and nowhere else's. A panel
+ * assembling the string would be a second place that knows what the API is
+ * called, which is the isolation rule this adapter exists to keep.
+ */
+export function webMcpHostLabel(): string | null {
+  const host = webMcpHost();
+  return host === null ? null : `${host}.modelContext`;
 }
 
 /**
@@ -239,11 +346,12 @@ export function useNativeTool(tool: NativeToolDefinition): RegistrationState {
       setState({ phase: "registering", detail: "Not available in this state." });
       return;
     }
-    const modelContext = document.modelContext;
-    if (modelContext === undefined) {
+    const resolved = resolveModelContext();
+    if (resolved === undefined) {
       setState(UNSUPPORTED);
       return;
     }
+    const modelContext = resolved.context;
 
     const controller = new AbortController();
     let live = true;
@@ -360,11 +468,12 @@ export function useRawNativeTool(tool: RawToolDefinition): RegistrationState {
       setState({ phase: "registering", detail: "Not available in this state." });
       return;
     }
-    const modelContext = document.modelContext;
-    if (modelContext === undefined) {
+    const resolved = resolveModelContext();
+    if (resolved === undefined) {
       setState(UNSUPPORTED);
       return;
     }
+    const modelContext = resolved.context;
 
     const controller = new AbortController();
     let live = true;
@@ -619,18 +728,18 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
  * one that showed nothing.
  */
 export async function readSurface(): Promise<readonly CapturedTool[] | null> {
-  const modelContext = document.modelContext;
-  if (modelContext === undefined) {
+  const resolved = resolveModelContext();
+  if (resolved === undefined) {
     return null;
   }
-  const tools = await modelContext.getTools();
+  const tools = await resolved.context.getTools();
   return tools
     .map((tool) => describeTool(tool))
     .filter((tool): tool is CapturedTool => tool !== null);
 }
 
 /**
- * Subscribe to `toolchange`, or `null` when this browser has no WebMCP.
+ * Subscribe to `toolchange`, or `null` when this browser has no usable WebMCP.
  *
  * The caller gets an unsubscribe rather than an event target, so nothing
  * outside this module needs to hold `document.modelContext` to listen. Both
@@ -638,19 +747,35 @@ export async function readSurface(): Promise<readonly CapturedTool[] | null> {
  * server judges — subscribe here, which is what keeps them from watching
  * different objects and disagreeing about when the surface changed.
  *
- * `null` rather than a no-op unsubscribe: "there is no WebMCP" is a case the
- * caller must handle, not one to paper over. The surface witness in particular
- * has to *stop* there, because a run with no baseline is an explicit non-pass
- * at verification (§16.1) rather than a run that quietly captured nothing.
+ * `null` means there is no usable WebMCP surface. A usable snapshot-only
+ * surface gets a no-op unsubscribe instead: `getTools()` can still establish a
+ * baseline, while callers use `canObserveToolChanges()` to perform a final read
+ * at their own correctness boundary.
  */
 export function subscribeToToolChange(onChange: () => void): (() => void) | null {
-  const modelContext = document.modelContext;
-  if (modelContext === undefined) {
+  const resolved = resolveModelContext();
+  if (resolved === undefined) {
     return null;
   }
-  modelContext.addEventListener("toolchange", onChange);
+  const { context } = resolved;
+  if (!hasToolChangeEventTarget(context)) {
+    return () => undefined;
+  }
+  try {
+    context.addEventListener("toolchange", onChange);
+  } catch {
+    // A browser bridge may expose EventTarget-shaped methods before the event
+    // channel is operational. Remember the rejection for this page lifetime so
+    // correctness-boundary callers perform snapshot reads instead.
+    rejectedToolChangeContexts.add(context);
+    return () => undefined;
+  }
   return () => {
-    modelContext.removeEventListener("toolchange", onChange);
+    try {
+      context.removeEventListener("toolchange", onChange);
+    } catch {
+      // The local callback holds no resources once its React effect is gone.
+    }
   };
 }
 
@@ -760,7 +885,9 @@ function reconcile(
  * disagree — a registration can fail after the effect that started it returned,
  * and another script on the origin can register tools this app never mounted —
  * so the comparison is between what this app claims and what the browser
- * reports, re-read on every `toolchange`.
+ * reports, re-read on every `toolchange`. Snapshot-only browser bridges have no
+ * event, so a change in this page's own registration claims is the equivalent
+ * correctness boundary and triggers another browser read.
  *
  * This is diagnosis, not judgement. Nothing here decides whether a surface is
  * acceptable: that is `stable_tool_surface`, evaluated by the server from
@@ -771,6 +898,10 @@ export function useToolReconciliation(
   target: ToolExpectation,
 ): ToolReconciliation {
   const [reported, setReported] = useState<readonly string[] | null>(null);
+  // Stable across ordinary renders, but changes after a registration succeeds
+  // or is withdrawn. In a snapshot-only host this is the only signal that the
+  // browser's registry may have changed since the initial read.
+  const registrationBoundary = JSON.stringify([harness.claimed, target.claimed]);
 
   useEffect(() => {
     let live = true;
@@ -805,7 +936,7 @@ export function useToolReconciliation(
       live = false;
       unsubscribe();
     };
-  }, []);
+  }, [registrationBoundary]);
 
   if (reported === null) {
     return { supported: false, count: 0, harness: NOTHING, target: NOTHING, unexpected: [] };

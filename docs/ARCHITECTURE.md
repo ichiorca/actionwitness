@@ -129,7 +129,7 @@ flowchart TB
     subgraph browser["Browser — one origin"]
         UI["React workspace"]
         SF["Storefront /demo"]
-        MC["document.modelContext"]
+        MC["WebMCP<br/>document. or navigator.modelContext"]
     end
 
     subgraph p1["Process 1 — actionwitness_service"]
@@ -333,9 +333,22 @@ for every workspace (ADR-0003).
 
 ## 6. WebMCP integration
 
+The browser API has been observed in two places. ADR-0002's spike found it at
+both `document.modelContext` and `navigator.modelContext`; the build behind the
+deployed attestation exposed only the first. So the adapter **resolves** rather
+than assumes — `document` first, `navigator` second — and reports which one it
+found. An adapter hard-coded to one location does not report "unsupported" when
+it is wrong; it reports it when the browser moved, and to the person reading the
+capability bar those are the same sentence. The whole agent path would disappear
+correctly and silently, which is the worst way to lose it. Detection is by
+feature, never by user-agent string: an embedded browser routinely reports
+somebody else's.
+
 ```mermaid
 flowchart TB
-    MODEL["document.modelContext"]
+    DOC["document.modelContext<br/><i>tried first</i>"]
+    NAV["navigator.modelContext<br/><i>fallback</i>"]
+    MODEL["resolveModelContext()"]
 
     subgraph Adapter["frontend/src/webmcp/adapter.ts — only allowed access"]
         DISCOVERY["Discover tools"]
@@ -347,7 +360,7 @@ flowchart TB
 
     SURFACE["surface.ts<br/>getTools + toolchange<br/>(sends definitions, never hashes)"]
     IDENTITY["identity.ts<br/>invocation-time identity hash<br/>(FR-169 — refused by the server on mismatch)"]
-    HARNESS_TOOLS["harnessTools.ts<br/>8 phase-derived harness tools (hook)"]
+    HARNESS_TOOLS["harnessTools.ts<br/>15 phase-derived harness tools (hook)"]
     STATUS_TOOL["tools/workspaceStatus.ts<br/>get_workspace_status (native)"]
     DECLARATIVE["components/ContractForm.tsx<br/>create_outcome_contract (declarative form)"]
     TARGET_TOOLS["buggyStore/tools.ts<br/>5 demo target tools (hook)"]
@@ -355,7 +368,10 @@ flowchart TB
     API["Recorded /api/v1 invocation"]
     AGENT["Agent"]
 
-    AGENT --> MODEL
+    AGENT --> DOC
+    AGENT --> NAV
+    DOC --> MODEL
+    NAV --> MODEL
     MODEL --> DISCOVERY
     MODEL --> REGISTER
     DISCOVERY --> SURFACE --> API
@@ -373,7 +389,7 @@ flowchart TB
     classDef seam fill:#e0f2fe,stroke:#0369a1,color:#082f49,stroke-width:2px;
     classDef code fill:#f8fafc,stroke:#64748b,color:#0f172a;
     classDef service fill:#ede9fe,stroke:#6d28d9,color:#2e1065;
-    class MODEL,AGENT browserapi;
+    class DOC,NAV,MODEL,AGENT browserapi;
     class DISCOVERY,REGISTER,NORMALIZE,CANCEL,CLEANUP seam;
     class SURFACE,IDENTITY,HARNESS_TOOLS,TARGET_TOOLS,POISONED code;
     class API service;
@@ -524,7 +540,97 @@ while the operator-facing browser client is not yet built.
 
 ---
 
-## 9. Lifecycles
+## 9. ActionWitness witnessing itself
+
+The harness is also a target. `integrations/self_target` presents ActionWitness's
+own capabilities through the same `ManagedTargetAdapter` an external integration
+implements, and reads ActionWitness's own workspace state through the same
+`ObservationProvider` — so the product's central claim gets tested against the
+product itself.
+
+The dependency list is the argument. That distribution declares
+`actionwitness-core` and `httpx`, and nothing else, so it *cannot* import a
+repository, a service, or the database however convenient that becomes. When it
+needed something the public protocols did not offer — saying which workspace to
+observe, separately from the one being recorded — the fix went into the
+protocol, as `ScopedObservationProvider`, rather than into a private channel.
+
+```mermaid
+flowchart LR
+    REC["Recording workspace<br/>runs the self contract"]
+    OBS["Observed workspace<br/>server-minted, owned by the recorder"]
+    ADAPTER["SelfTargetAdapter<br/>actionwitness-core + httpx only"]
+    API["/api/v1<br/>middleware · cookies · validation · authz"]
+
+    REC -->|"arm mints one, once"| OBS
+    REC --> ADAPTER
+    ADAPTER -->|"drive published tools"| API
+    ADAPTER -->|"read canonical state"| API
+    API --> OBS
+
+    classDef rec fill:#e0f2fe,stroke:#0369a1,color:#082f49;
+    classDef obs fill:#ede9fe,stroke:#6d28d9,color:#2e1065;
+    classDef pub fill:#dcfce7,stroke:#15803d,color:#052e16;
+    class REC rec;
+    class OBS obs;
+    class ADAPTER,API pub;
+```
+
+The client underneath is an ASGI transport bound to this application object, not
+a loopback URL. That is a correctness choice before it is a performance one: a
+URL is configuration, configuration can point at a stale port or another
+deployment, and a self-witnessing run that observed the wrong ActionWitness would
+publish a verdict about somebody else's state. Binding to the object makes "this
+deployment" unforgeable — and is why the `self` module is the one module that
+takes no configuration at all. Requests still traverse the whole public stack, so
+"no privileged access" survives: it is the public door, entered without crossing
+the network.
+
+### Observer isolation
+
+A run that observed the workspace recording it would be reading the state it was
+producing. Four different routes lead there, and each is closed separately.
+
+```mermaid
+flowchart TB
+    MINT["Observed workspace is minted<br/>by the server, never named by a caller"]
+    DEPTH["A workspace that is already observed<br/>may not record a self run"]
+    STORED["A stored identifier equal to its own workspace<br/>is refused at arming"]
+    BIND["The workspace acted on is bound before dispatch,<br/>never read from tool arguments"]
+    LOOP["SELF_OBSERVATION_LOOP"]
+
+    MINT --> LOOP
+    DEPTH --> LOOP
+    STORED --> LOOP
+    BIND --> LOOP
+
+    classDef guard fill:#dcfce7,stroke:#15803d,color:#052e16;
+    classDef denied fill:#fee2e2,stroke:#b91c1c,color:#450a0a;
+    class MINT,DEPTH,STORED,BIND guard;
+    class LOOP denied;
+```
+
+Two of those deserve their reasoning stated.
+
+**The observed workspace is minted, not named.** An operator-supplied identifier
+would make "a workspace other than the one recording it" a validation rule over
+an input, and inputs are what an attacker supplies to defeat validation rules.
+Minting it server-side makes the property true by construction; minting it as an
+*owned child* keeps it inside the isolation boundary, so a self run can never
+reach a workspace belonging to somebody else. It also makes the recursion cap
+structural rather than arithmetical — there is no depth counter, because a
+workspace of the observed kind may not arm a self contract at all.
+
+**The workspace acted on is bound by the server, before dispatch.** The tempting
+design puts it in the tool's arguments. But tool arguments come from the agent,
+and the agent is the thing under test: it could name the workspace recording its
+own run and drive it. So no published tool accepts the field, `additionalProperties`
+is `false` on every one of their schemas, and an adapter that has not been bound
+refuses to act rather than falling back to the only workspace it knows.
+
+---
+
+## 10. Lifecycles
 
 ### Outcome run
 
@@ -619,7 +725,7 @@ immutable at `ready`; changed bindings require a new suite.
 
 ---
 
-## 10. Persistence, isolation and determinism
+## 11. Persistence, isolation and determinism
 
 ### Workspace is the isolation boundary
 
@@ -700,7 +806,7 @@ and a changed intent may never reuse an idempotency key.
 
 ---
 
-## 11. Boundaries and safety rails
+## 12. Boundaries and safety rails
 
 ```mermaid
 flowchart TB
@@ -764,7 +870,7 @@ sites.
 
 ---
 
-## 12. Deployment
+## 13. Deployment
 
 ```mermaid
 flowchart TB
@@ -817,7 +923,7 @@ that operator-approved trade-off.
 
 ---
 
-## 13. Verifying these claims yourself
+## 14. Verifying these claims yourself
 
 ```mermaid
 flowchart TB
@@ -839,6 +945,10 @@ flowchart TB
     SAFETY --> S2["test_product_copy_claims.py"]
     SAFETY --> S3["test_release_artifact_hygiene.py"]
 
+    CLAIMS --> SELF["The harness on itself"]
+    SELF --> F1["test_self_target.py<br/>the whole journey over /api/v1"]
+    SELF --> F2["test_self_contract_pack.py<br/>FR-173's four contracts"]
+
     CLAIMS --> DELIVERY["Build and documentation"]
     DELIVERY --> D1["test_bundle_shape.py"]
     DELIVERY --> D2["test_readme_commands.py"]
@@ -849,8 +959,8 @@ flowchart TB
     classDef area fill:#dbeafe,stroke:#1d4ed8,color:#172554;
     classDef gate fill:#dcfce7,stroke:#15803d,color:#052e16;
     class CLAIMS claim;
-    class IMPORTS,WEBMCP,SAFETY,DELIVERY area;
-    class I1,I2,I3,W1,W2,W3,W4,S1,S2,S3,D1,D2,D3,D4 gate;
+    class IMPORTS,WEBMCP,SAFETY,SELF,DELIVERY area;
+    class I1,I2,I3,W1,W2,W3,W4,S1,S2,S3,F1,F2,D1,D2,D3,D4 gate;
 ```
 
 Run the executable checks behind the map — these are CI's own lanes:
@@ -872,7 +982,22 @@ neither is a formal gate.
 
 ---
 
-## 14. Known limits
+The self-witnessing lane is the one worth running first, because it is the only
+place the product is both the tool and the subject.
+`tests/integration/test_self_target.py::test_actionwitness_verifies_itself_end_to_end`
+selects a built-in `self` contract, arms it, drives two published harness tools,
+and asks for a verdict — every step an HTTP call through `/api/v1` — and the run
+passes.
+
+Point the observation at the recording workspace instead and the same run fails
+with `maximum_mutations`: a harness watching itself sees its own activity as
+unexplained movement in the target. That failure is not a bug in the test. It is
+the product's own mechanism reporting, correctly, that the observation was not
+independent.
+
+---
+
+## 15. Known limits
 
 ```mermaid
 flowchart TB

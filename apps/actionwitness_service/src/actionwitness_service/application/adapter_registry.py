@@ -81,7 +81,11 @@ class AdapterRegistry:
     """Every optional target, each independently available or not."""
 
     def __init__(
-        self, settings: ServiceSettings, *, client: httpx.AsyncClient | None = None
+        self,
+        settings: ServiceSettings,
+        *,
+        client: httpx.AsyncClient | None = None,
+        self_client: httpx.AsyncClient | None = None,
     ) -> None:
         """`client` is injected (ADR-0001), never constructed here.
 
@@ -89,9 +93,16 @@ class AdapterRegistry:
         and to an `ASGITransport` in tests, and the adapter behaves identically
         either way. A registry that built its own client would make the test
         path a different path.
+
+        `self_client` is a *second* client, and the separation is not
+        bookkeeping. The two point at different origins — the first at whatever
+        target is configured, the second at this harness — and one client cannot
+        carry two base URLs. Merging them would mean the self target's calls
+        landing on the demo store the first time somebody configured one.
         """
         self._settings = settings
         self._client = client
+        self._self_client = self_client
         self._slots: dict[str, AdapterSlot] = {}
         self._register_all()
 
@@ -253,7 +264,9 @@ class AdapterRegistry:
         integration cannot skip the rest — which is the whole of §21.1's "one
         failed integration never disables the others".
         """
+        self._register("self", self._build_self_target)
         self._register("buggy_store", self._build_buggy_store)
+        self._register("shopify", self._build_shopify)
 
     def _register(self, name: str, build: Callable[[], Callable[[], Any]]) -> None:
         declared = self._settings.module(name)
@@ -290,6 +303,30 @@ class AdapterRegistry:
         else:
             self._slots[name] = AdapterSlot(name=name, state=declared, factory=factory)
 
+    def _build_self_target(self) -> Callable[[], Any]:
+        """ActionWitness's own adapter (§12.20, FR-171).
+
+        Registered like every other integration and given nothing the others are
+        not: an injected client and no more. FR-171 makes that the requirement
+        rather than the style — the built-in target "shall not receive
+        privileged access unavailable to a third-party adapter" — and it is why
+        this factory reaches for `self._self_client` instead of the database,
+        the repositories, or the application services sitting one import away.
+
+        The client is bound to this application in the composition root, so the
+        calls are in-process but not *inside*: they traverse the middleware,
+        the request models, the workspace cookie, and the same authorization
+        every other client meets. That is the point. A handle that skipped them
+        would make a passing self run evidence about a path nobody uses.
+        """
+        from integrations.self_target import SelfTargetAdapter
+
+        if self._self_client is None:
+            raise RuntimeError("no HTTP client was injected for the self target")
+
+        client = self._self_client
+        return lambda: SelfTargetAdapter(client)
+
     def _build_buggy_store(self) -> Callable[[], Any]:
         """Return a factory, so the adapter itself is built per use.
 
@@ -307,3 +344,30 @@ class AdapterRegistry:
 
         client = self._client
         return lambda: BuggyStoreAdapter(client)
+
+    def _build_shopify(self) -> Callable[[], Any]:
+        """The authorized Shopify development store (§12.12, FR-110).
+
+        Takes **no HTTP client**, and the absence is the point rather than an
+        oversight in the wiring. FR-112 puts the `cart.js` read inside the
+        paired shopper session in the operator's own browser; an adapter holding
+        both an operator-configured origin and a client would be one edit from a
+        crawler, which `tests/architecture/test_audit_guardrails.py` enforces for
+        the sibling audit path and this module has no reason to loosen.
+
+        Everything it does take — origin, variant, currency — comes from
+        `ServiceSettings`, read once in the composition root. The project rules
+        keep all three server-controlled, and the shortest route to breaking
+        that would be a factory that accepted them from a caller.
+        """
+        from integrations.shopify import ShopifyAdapter
+
+        settings = self._settings.shopify
+        if settings is None:  # pragma: no cover - `is_enabled` already implies it
+            raise RuntimeError("shopify is enabled without settings")
+
+        return lambda: ShopifyAdapter(
+            store_origin=settings.store_origin,
+            test_variant_id=settings.test_variant_id,
+            expected_currency=settings.expected_currency,
+        )

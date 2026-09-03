@@ -45,6 +45,8 @@ __all__ = [
     "ManagedTargetAdapter",
     "ObservationProvider",
     "ScenarioReportingAdapter",
+    "ScopedObservationProvider",
+    "ScopedTargetAdapter",
     "SnapshotRepository",
     "TargetAdapter",
     "UnitOfWork",
@@ -63,6 +65,69 @@ class ObservationProvider(Protocol):
 
     async def capture(self, workspace_id: str) -> Observation:
         """Capture authoritative state for one workspace."""
+        ...
+
+
+@runtime_checkable
+class ScopedObservationProvider(Protocol):
+    """A provider whose observations name a subject distinct from the run (FR-172).
+
+    `ObservationProvider.capture` takes one workspace and means both things at
+    once: the workspace being recorded and the workspace being read. For every
+    target so far those are the same, and collapsing them was right.
+
+    They come apart the moment the harness observes *itself*. FR-172 requires a
+    self-witnessing run to "observe a workspace other than the one recording
+    it", so its provider needs to be told both — and FR-171 is explicit that a
+    built-in target gets no privileged channel: "anything it needs is a defect
+    in the public protocol and shall be fixed there". This is that fix.
+
+    Narrow and opt-in, in the shape `ScenarioReportingAdapter` already
+    established: a caller asks with `isinstance` and falls back to `capture`.
+    Widening `ObservationProvider` instead would have made every adapter answer
+    a question only one of them has, and an adapter that echoed its first
+    argument back as the second would be indistinguishable from one that meant
+    it.
+    """
+
+    async def capture_observed(
+        self, recording_workspace_id: str, observed_workspace_id: str
+    ) -> Observation:
+        """Capture `observed_workspace_id`'s state on behalf of the recording run."""
+        ...
+
+
+@runtime_checkable
+class ScopedTargetAdapter(Protocol):
+    """An adapter whose *actions* also name a subject distinct from the run (FR-172).
+
+    The execution-side companion to `ScopedObservationProvider`, and it exists
+    because the obvious alternative is a hole rather than a shortcut.
+
+    A self-witnessing target has to be told which workspace to act on, and the
+    tempting place to put that is the tool's arguments — the adapter reads it
+    out of the payload and calls the right workspace. But tool arguments come
+    from the agent, and the agent is the thing under test. It could name the
+    workspace recording its own run and drive it, which is exactly the loop
+    FR-172 forbids; §11.4's schemas would also have to admit a field with no
+    business meaning, so every published tool would grow an argument whose only
+    purpose was to be validated against something the agent must not control.
+
+    So the subject is bound by the *server*, before dispatch, from what it
+    provisioned — and an adapter that has not been bound refuses rather than
+    guessing. Opt-in and narrow, in the shape `ScenarioReportingAdapter`
+    established: a caller asks with `isinstance` and every other adapter is
+    untouched.
+    """
+
+    def observing(self, observed_workspace_id: str) -> ScopedTargetAdapter:
+        """This adapter, bound to act on one workspace.
+
+        Returns a bound instance rather than mutating: adapters are built per
+        use but the client underneath is shared, and an adapter that remembered
+        the last workspace it was pointed at would let two concurrent runs act
+        on each other's target.
+        """
         ...
 
 

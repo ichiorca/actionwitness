@@ -20,6 +20,8 @@
  * exactly the change a screen-reader user must not have to go looking for.
  */
 
+import registry from "../generated/registry.json";
+
 import type { Guidance } from "../api/workspace";
 
 const ACTOR_LABELS: Readonly<Record<string, string>> = {
@@ -28,6 +30,39 @@ const ACTOR_LABELS: Readonly<Record<string, string>> = {
   human_approver: "You (approver)",
   harness: "The harness",
 };
+
+/**
+ * The server's own sentence for each `GuidanceActionCode`, read from the
+ * generated registry (AC-6) rather than retyped here.
+ *
+ * This is the sentence a person reads when a recovery is offered. Until it was
+ * looked up, the banner rendered the bare code, so the safe way out of a stalled
+ * run was presented to a human being as `reset_workspace` — and §15.1's promise
+ * that "the recovery instruction explains why" was met by a token that explains
+ * nothing.
+ *
+ * Reading the registry is not the frontend inventing copy, which FR-120 forbids:
+ * `GUIDANCE_ACTION_DESCRIPTIONS` in the core is the single source, and
+ * `tests/unit/test_registry.py` fails if this artifact drifts from it. Copy
+ * still lives in exactly one place, and §12.13's rule that the code is stable
+ * while the sentence changes still holds — the code is what crosses the wire and
+ * what history stores.
+ */
+const ACTION_CODE_COPY: Readonly<Record<string, string>> =
+  registry.enums.guidance_action_code.members;
+
+/**
+ * The readable sentence for an action code, falling back to the code itself.
+ *
+ * The fallback is a last resort, not a design: the registry is generated from
+ * the same enum the server serializes and a drift test guards it, so a missing
+ * key means this build shipped a stale artifact. Showing the raw code then is
+ * still better than dropping the recovery, which AC-21 requires the banner to
+ * render.
+ */
+function describeActionCode(code: string): string {
+  return ACTION_CODE_COPY[code] ?? code;
+}
 
 export interface GuidanceBannerProps {
   readonly guidance: Guidance | null;
@@ -137,7 +172,13 @@ export function GuidanceBanner({
       )}
       {guidance.recoveryActionCode === null ? null : (
         <p className="banner__recovery-code">
-          <span className="banner__label">If this stalls:</span> {guidance.recoveryActionCode}
+          {/* The sentence, not the token. The code is still exposed below for
+              the surfaces AC-21 requires to agree on it. */}
+          <span className="banner__label">If this stalls:</span>{" "}
+          {describeActionCode(guidance.recoveryActionCode)}
+          <span hidden data-testid="banner-recovery-action-code">
+            {guidance.recoveryActionCode}
+          </span>
         </p>
       )}
       {/* The action code is what AC-21 requires the banner, the tool result,

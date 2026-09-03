@@ -106,6 +106,18 @@ class WorkspaceService:
             "selected_contract_id": workspace["selected_contract_id"],
             "scenario_mode": workspace["scenario_mode"],
             "failure_profile": workspace["failure_profile"],
+            # FR-172's other workspace, when this one is recording a
+            # self-witnessing run. `None` for every ordinary run, and that is
+            # the useful reading: it says "this run observed a target, not
+            # itself", which is otherwise invisible.
+            #
+            # Safe to publish here and only here. The value is a bearer
+            # identifier, but the workspace it names is this workspace's own
+            # owned child, and the caller has already presented this
+            # workspace's cookie to reach the response — so it reveals nothing
+            # to anyone who could not already reach it, and lets an operator
+            # open the observed workspace to see what the run was watching.
+            "observed_workspace_id": workspace["observed_workspace_id"],
             "active_run": active_run,
             # §15.1 asks for "authoritative guidance, and one safe
             # `next_action`". Both come from the same `GuidanceState`, because
@@ -181,6 +193,7 @@ class WorkspaceService:
         """FR-013. Cancel what is in flight; keep what is finished."""
         confirmations = await self._cancel_unresolved_confirmations()
         runs = await self._cancel_nonterminal_runs()
+        await self._cancel_live_shopify_pairing()
 
         purged_runs = purged_artifacts = 0
         if purge_completed:
@@ -236,6 +249,56 @@ class WorkspaceService:
                 ),
             )
         return len(rows)
+
+    async def _cancel_live_shopify_pairing(self) -> None:
+        """FR-013's "pairings", and §16.5's `cancelled` terminal state.
+
+        Two writes, and the second is the one that matters. Moving the pairing to
+        `cancelled` releases §17.1's one-live-pairing slot so the operator can
+        start another trial. Clearing `bridge_session_token_hash` is what makes
+        the reset *reach the storefront tab that is still open*: a theme holding
+        a live bridge credential would otherwise keep submitting carts against a
+        trial the operator ended, and §20.2 requires the harness to "fail closed
+        when either credential is stale". With no stored digest there is nothing
+        for `secrets.compare_digest` to match, so the next bridge request is
+        refused rather than silently captured into a cancelled pairing.
+
+        The pairing token hash is deliberately left alone: the pairing is
+        terminal, so `_authorized` refuses it on the state before it ever reaches
+        a comparison, and deleting a column FR-111 requires to be *the* record of
+        what was issued would remove evidence to no benefit.
+
+        Imported inside the method because `run_service` imports this module at
+        module scope and `shopify_pairing` imports `run_service` - a top-level
+        import here closes that ring. The states still come from §16.5's one
+        definition rather than from a second list written out below.
+        """
+        from actionwitness_service.application.shopify_pairing import (
+            TERMINAL_PAIRING_STATUSES,
+            PairingStatus,
+        )
+
+        terminal = sorted(str(status.value) for status in TERMINAL_PAIRING_STATUSES)
+        placeholders = ",".join("?" for _ in terminal)
+        await self._work.execute(
+            "UPDATE shopify_pairings SET status = ?, completed_at = ?, "
+            "bridge_session_token_hash = NULL "
+            f"WHERE workspace_id = ? AND status NOT IN ({placeholders})",
+            (
+                str(PairingStatus.CANCELLED.value),
+                self._work.now(),
+                self._workspace_id,
+                *terminal,
+            ),
+        )
+        # The workspace's pointer goes with it, exactly as `active_run_id` does
+        # below: a workspace still naming a cancelled pairing as its active one
+        # is the same disagreement between a pointer and the row it points at
+        # that FR-013 removes for runs.
+        await self._work.execute(
+            "UPDATE workspaces SET active_shopify_pairing_id = NULL WHERE id = ?",
+            (self._workspace_id,),
+        )
 
     async def _cancel_unresolved_confirmations(self) -> int:
         """Cancel pending consent, and record the cancellation on its run.

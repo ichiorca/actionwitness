@@ -53,6 +53,24 @@ MODULE_ROUTE_PREFIXES = {
     "external_audit": "/api/v1/audit",
 }
 
+#: External audit deliberately keeps a read-only status route and mutation
+#: refusals mounted while no audit is authorized. Dedicated route tests assert
+#: those writes fail with `AUDIT_NOT_AUTHORIZED` rather than disappearing.
+VISIBLE_DISABLED_ROUTE_MODULES = frozenset({"external_audit"})
+
+#: Only these two files may name Shopify when the module is disabled. They are
+#: the typed API boundary and the panel that renders the server's disabled state;
+#: the browser E2E suite asserts that state exposes no pairing action.
+DISABLED_MODULE_FRONTEND_BOUNDARIES = frozenset(
+    {
+        ("apps/actionwitness_service/frontend/src/api/shopify.ts", "shopify"),
+        (
+            "apps/actionwitness_service/frontend/src/components/ShopifyPairingPanel.tsx",
+            "shopify",
+        ),
+    }
+)
+
 #: Claims a README acquires while a feature is still expected to land, and that
 #: nobody re-reads once it does not (constitution §8: no claim of unverified
 #: adoption, harm, or protection).
@@ -116,20 +134,25 @@ def test_every_disabled_module_says_why_rather_than_going_quiet() -> None:
         assert state.reason.strip(), f"module {name} is off and says nothing about why"
 
 
-async def test_no_disabled_module_leaves_a_route_mounted(judged: FastAPI) -> None:
-    """A mounted route for an absent module is the "half-shipped" failure itself.
+async def test_disabled_module_routes_follow_their_declared_visibility_policy(
+    judged: FastAPI,
+) -> None:
+    """Disabled modules are absent unless their contract is an explicit refusal surface.
 
-    The Shopify router exists in the tree as an unmounted scaffold. That is the
-    correct state for a feature that has not landed, and this is what keeps it
-    from being mounted "just to see it" and then forgotten.
+    Inspect the public OpenAPI contract rather than FastAPI's internal route
+    container: recent FastAPI versions keep included routers nested, so reading
+    ``judged.routes`` can silently miss an endpoint that is actually served.
     """
-    mounted = {getattr(route, "path", "") for route in judged.routes}
+    mounted = set(judged.openapi()["paths"])
     for name in _disabled_modules():
         prefix = MODULE_ROUTE_PREFIXES.get(name)
         if prefix is None:
             continue
-        offending = sorted(path for path in mounted if path.startswith(prefix))
-        assert offending == [], f"module {name} is disabled but still serves {offending}"
+        matching = sorted(path for path in mounted if path.startswith(prefix))
+        if name in VISIBLE_DISABLED_ROUTE_MODULES:
+            assert matching, f"module {name} declares a visible refusal surface but has none"
+        else:
+            assert matching == [], f"module {name} is disabled but still serves {matching}"
 
 
 async def test_the_capability_surface_reports_every_module(judged: FastAPI) -> None:
@@ -192,6 +215,15 @@ def test_no_frontend_control_registers_a_tool_for_a_disabled_module() -> None:
     mention every module — the registry is the shared vocabulary of error codes and
     exists precisely so names cannot fork — and scanning them would flag the
     vocabulary as the violation.
+
+    **A line that reads the module's own reported state is exempt, and that is
+    the rule rather than a hole in it.** §21.1 asks a cut feature to be "removed
+    or *visibly disabled*", and `test_the_capability_surface_reports_every_module`
+    below exists because this project chose visible. The UI cannot render "this
+    module is off, and here is why" without naming the module it is reporting on,
+    so a mention alongside `modules` — the map the server publishes for exactly
+    this purpose — is the mechanism working. A mention anywhere else is still a
+    control for something that is not there, which is what this test is for.
     """
     shipped = [
         path
@@ -201,17 +233,28 @@ def test_no_frontend_control_registers_a_tool_for_a_disabled_module() -> None:
         and "test" not in path.relative_to(FRONTEND_SRC).parts
     ]
     assert shipped, "the source scan found no files, so it proves nothing"
+    for relative_path, _module in DISABLED_MODULE_FRONTEND_BOUNDARIES:
+        assert (REPO_ROOT / relative_path).is_file(), f"stale frontend exception: {relative_path}"
 
     offenders: list[str] = []
     for name in _disabled_modules():
         for path in shipped:
+            relative_path = path.relative_to(REPO_ROOT).as_posix()
+            if (relative_path, name) in DISABLED_MODULE_FRONTEND_BOUNDARIES:
+                continue
             text = path.read_text(encoding="utf-8")
             # A comment explaining the module's absence is not a control.
             code = "\n".join(
-                line for line in text.splitlines() if not line.strip().startswith(("*", "//", "/*"))
+                line
+                for line in text.splitlines()
+                if not line.strip().startswith(("*", "//", "/*"))
+                # Reading the published module report is how the UI says a
+                # feature is off. A name on such a line is a status lookup, not
+                # an affordance; a name on any other line still fails below.
+                and "modules" not in line
             )
             if re.search(rf"\b{re.escape(name)}\b", code):
-                offenders.append(f"{path.relative_to(REPO_ROOT).as_posix()} -> {name}")
+                offenders.append(f"{relative_path} -> {name}")
 
     assert offenders == [], f"shipped UI code references disabled modules: {offenders}"
 

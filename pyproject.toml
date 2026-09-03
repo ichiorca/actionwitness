@@ -15,6 +15,7 @@ actionwitness-core = { workspace = true }
 actionwitness-service = { workspace = true }
 actionwitness-integration-buggy-store = { workspace = true }
 actionwitness-integration-google-evals = { workspace = true }
+actionwitness-integration-self-target = { workspace = true }
 actionwitness-integration-shopify = { workspace = true }
 buggy-store = { workspace = true }
 
@@ -24,6 +25,7 @@ members = [
     "apps/actionwitness_service",
     "integrations/buggy_store",
     "integrations/google_evals",
+    "integrations/self_target",
     "integrations/shopify",
     "examples/buggy_store",
 ]
@@ -39,6 +41,7 @@ dev = [
     "actionwitness-service",
     "actionwitness-integration-buggy-store",
     "actionwitness-integration-google-evals",
+    "actionwitness-integration-self-target",
     "actionwitness-integration-shopify",
     "buggy-store",
     "pytest>=8.3",

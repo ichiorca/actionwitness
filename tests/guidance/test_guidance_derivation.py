@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import pytest
 from actionwitness_core.journeys.enums import (
+    GUIDANCE_ACTION_DESCRIPTIONS,
     GuidanceActionCode,
     GuidanceActor,
     RunState,
@@ -85,14 +86,72 @@ def test_a_live_run_state_wins_over_the_contract_selection() -> None:
     assert phase_for(has_contract=True, run_state=RunState.RUNNING) is WorkspacePhase.RUNNING
 
 
-@pytest.mark.parametrize("run_state", [RunState.ERROR, RunState.CANCELLED])
-def test_an_errored_or_cancelled_run_returns_the_workspace_to_ready(
-    run_state: RunState,
+@pytest.mark.parametrize(
+    ("run_state", "expected"),
+    [
+        (RunState.ERROR, WorkspacePhase.ERROR),
+        (RunState.CANCELLED, WorkspacePhase.CANCELLED),
+    ],
+)
+def test_a_run_that_ended_without_a_verdict_keeps_its_own_phase(
+    run_state: RunState, expected: WorkspacePhase
 ) -> None:
-    """Reset retains the selected contract (FR-013), so there is nothing to
-    choose again — the workspace is ready to arm, not back at the start."""
+    """**This test's premise was changed deliberately.**
+
+    It used to assert that both states project onto `contract_ready`, on the
+    reasoning that reset retains the selected contract (FR-013) so there is
+    nothing left to choose. The *next action* part of that reasoning is still
+    right — and both new phases still ask for a run to be armed or for the
+    report to be read, not for a contract.
+
+    What was wrong was treating "the next action is the same" as "the state is
+    the same". A run the harness abandoned mid-verification produced a banner
+    reading "Arm the run.", with no headline, reason, or consequence
+    acknowledging that anything had gone wrong. §22 requires an observation
+    failure to produce "an explicit non-pass result" that "never degrades to
+    success", and the surface a person actually reads was quietly degrading it
+    to a fresh start. Collapsing the two states also made them indistinguishable
+    from each other, so "the harness broke" and "you cancelled this" were shown
+    the same words.
+
+    §11.5 supports the split: its diagram omits both nodes for readability but
+    states outright that they exist — "Reset remains available from every state
+    under FR-013 and Section 16, including `error` and `cancelled`."
+    """
     # Arrange / Act / Assert
-    assert phase_for(has_contract=True, run_state=run_state) is WorkspacePhase.CONTRACT_READY
+    assert phase_for(has_contract=True, run_state=run_state) is expected
+
+
+@pytest.mark.parametrize("phase", [WorkspacePhase.ERROR, WorkspacePhase.CANCELLED])
+def test_a_run_that_ended_without_a_verdict_says_so_in_words(
+    phase: WorkspacePhase,
+) -> None:
+    """The point of the split is the copy, so the copy is what is asserted.
+
+    A headline that could be reused for a healthy workspace would leave the
+    split doing nothing a reader can see.
+    """
+    # Arrange / Act
+    guidance = derive_guidance(phase)
+
+    # Assert — the sentences name the non-outcome rather than the next chore.
+    assert guidance.headline != derive_guidance(WorkspacePhase.CONTRACT_READY).headline
+    text = f"{guidance.headline} {guidance.reason}".lower()
+    assert "verdict" in text
+    # And a way out is named: both phases are recoverable by reset (FR-013).
+    assert guidance.recovery_action_code is GuidanceActionCode.RESET_WORKSPACE
+
+
+def test_an_errored_run_is_never_described_as_a_pass() -> None:
+    """§22: an observation failure "produces an explicit non-pass result; it
+    never degrades to success"."""
+    # Arrange / Act
+    guidance = derive_guidance(WorkspacePhase.ERROR)
+
+    # Assert
+    text = f"{guidance.headline} {guidance.instruction} {guidance.expected_consequence}".lower()
+    assert "passed" not in text
+    assert "nothing here is a pass" in guidance.reason.lower()
 
 
 # --- one derivation, three surfaces -----------------------------------------
@@ -250,3 +309,225 @@ def test_a_correlation_id_is_carried_when_one_is_given() -> None:
     # Assert
     assert guidance.correlation_id == "run_42"
     assert isinstance(guidance, GuidanceState)
+
+
+# --- cancellation (AC-21's "safe recovery", §14.9) --------------------------
+
+
+def test_cancelling_is_offered_where_a_pending_confirmation_exists() -> None:
+    """AC-21 asks every blocking transition to name a safe recovery, and the
+    blocking transition is `awaiting_confirmation`: a person is being asked for
+    a decision they may be unable to make.
+
+    §14.9 makes cancelling a distinct outcome from denial — "nobody refused the
+    action, the request simply stopped being answerable" — so it is the recovery
+    rather than a second primary action.
+    """
+    # Arrange / Act
+    guidance = derive_guidance(WorkspacePhase.AWAITING_CONFIRMATION)
+
+    # Assert
+    assert guidance.action_code is GuidanceActionCode.DECIDE_CONFIRMATION
+    assert guidance.recovery_action_code is GuidanceActionCode.CANCEL_CONFIRMATION
+
+
+def test_cancelling_is_offered_nowhere_a_pending_confirmation_cannot_exist() -> None:
+    """Guidance may not name a capability the API does not have.
+
+    `DELETE /runs/{run_id}/confirmations/{confirmation_id}` is the only endpoint
+    that cancels, it routes to `Decision.CANCEL`, and `DecisionService._pending`
+    refuses any request whose status is not `pending`. There is no run-level
+    cancel endpoint at all — so `running` and `verifying`, where an operator
+    might most want one, get a reset instead, which is a thing the server can
+    actually do.
+    """
+    # Arrange
+    offering = {
+        phase
+        for phase in WorkspacePhase
+        if GuidanceActionCode.CANCEL_CONFIRMATION
+        in {derive_guidance(phase).action_code, derive_guidance(phase).recovery_action_code}
+    }
+
+    # Act / Assert
+    assert offering == {WorkspacePhase.AWAITING_CONFIRMATION}
+
+
+def test_cancelling_is_never_the_primary_action() -> None:
+    """FR-122: copy must not imply that abandoning the request is what is being
+    asked for. The decision is the ask; cancelling is the way out of it."""
+    # Arrange / Act / Assert
+    for phase in WorkspacePhase:
+        assert derive_guidance(phase).action_code is not GuidanceActionCode.CANCEL_CONFIRMATION
+
+
+# --- recovery coverage (FR-120's "optional recovery action") ----------------
+
+
+#: The phases where something is genuinely in flight or blocked, so "if this
+#: stalls" describes a real situation a person can be in. Written as a literal
+#: set rather than derived, because deriving it from the same table it checks
+#: would make the test agree with any answer.
+_RECOVERABLE_PHASES = {
+    WorkspacePhase.PROPOSING,
+    WorkspacePhase.CANDIDATES,
+    WorkspacePhase.ARMED,
+    WorkspacePhase.RUNNING,
+    WorkspacePhase.AWAITING_CONFIRMATION,
+    WorkspacePhase.VERIFYING,
+    WorkspacePhase.ERROR,
+    WorkspacePhase.CANCELLED,
+    WorkspacePhase.EVAL_READY,
+    WorkspacePhase.EVAL_RUNNING,
+}
+
+
+@pytest.mark.parametrize("phase", sorted(_RECOVERABLE_PHASES))
+def test_every_stallable_phase_names_a_way_out(phase: WorkspacePhase) -> None:
+    """Recovery used to be set on three phases out of thirteen, which meant a
+    verification that hung, a curation nobody wanted to finish, and a replay
+    whose process died all presented a person with no named exit."""
+    # Arrange / Act / Assert
+    assert derive_guidance(phase).recovery_action_code is not None
+
+
+@pytest.mark.parametrize(
+    "phase",
+    sorted(set(WorkspacePhase) - _RECOVERABLE_PHASES),
+)
+def test_a_phase_with_nothing_stuck_invents_no_recovery(phase: WorkspacePhase) -> None:
+    """The null is deliberate, not an omission.
+
+    A reached verdict did not stall, and a workspace with no run has nothing to
+    release. Reset is legal in both (FR-013 makes it legal everywhere) and would
+    change nothing a person could observe — so offering it under "if this
+    stalls" would teach a reader that the label means nothing.
+    """
+    # Arrange / Act / Assert
+    assert derive_guidance(phase).recovery_action_code is None
+
+
+def test_a_recovery_is_never_the_action_it_recovers_from() -> None:
+    """A recovery identical to the primary action is not a way out of anything."""
+    # Arrange / Act / Assert
+    for phase in WorkspacePhase:
+        guidance = derive_guidance(phase)
+        if guidance.recovery_action_code is None:
+            continue
+        assert guidance.recovery_action_code is not guidance.action_code
+
+
+@pytest.mark.parametrize("phase", list(WorkspacePhase))
+def test_every_recovery_code_has_copy_a_person_can_read(phase: WorkspacePhase) -> None:
+    """The banner renders the recovery as a sentence, and the sentence comes
+    from `GUIDANCE_ACTION_DESCRIPTIONS`. A code with no description would put a
+    raw enum token back in front of a human being."""
+    # Arrange
+    code = derive_guidance(phase).recovery_action_code
+
+    # Act / Assert
+    if code is not None:
+        assert GUIDANCE_ACTION_DESCRIPTIONS[code].strip()
+
+
+# --- the regression-eval phases §11.5 draws ---------------------------------
+
+
+def test_a_verdict_alone_does_not_reach_the_eval_phases() -> None:
+    """§11.5's edge is `Failed --> EvalReady: eval created`, not `Failed -->
+    EvalReady`. Until a case exists there is nothing to replay."""
+    # Arrange / Act / Assert
+    assert phase_for(has_contract=True, run_state=RunState.FAILED) is WorkspacePhase.FAILED
+    assert (
+        phase_for(has_contract=True, run_state=RunState.PASSED_WITH_WARNINGS)
+        is WorkspacePhase.PASSED_WITH_WARNINGS
+    )
+
+
+@pytest.mark.parametrize("run_state", [RunState.FAILED, RunState.PASSED_WITH_WARNINGS])
+def test_a_generated_case_moves_a_verdict_to_eval_ready(run_state: RunState) -> None:
+    """The `eval created` edge. Before this projection existed, `eval_ready` had
+    guidance no reader could ever be shown and the server could not emit
+    `run_regression_eval` however many cases a workspace held."""
+    # Arrange / Act
+    phase = phase_for(has_contract=True, run_state=run_state, regression_case_ready=True)
+
+    # Assert
+    assert phase is WorkspacePhase.EVAL_READY
+    assert derive_guidance(phase).action_code is GuidanceActionCode.RUN_REGRESSION_EVAL
+
+
+@pytest.mark.parametrize("run_state", [RunState.FAILED, RunState.PASSED_WITH_WARNINGS])
+def test_an_open_replay_moves_eval_ready_to_eval_running(run_state: RunState) -> None:
+    """The `replay started` edge, and it outranks `eval_ready`: a replay in
+    flight is what the reader is waiting on."""
+    # Arrange / Act
+    phase = phase_for(
+        has_contract=True,
+        run_state=run_state,
+        regression_case_ready=True,
+        regression_replay_open=True,
+    )
+
+    # Assert
+    assert phase is WorkspacePhase.EVAL_RUNNING
+    assert derive_guidance(phase).action_code is GuidanceActionCode.WAIT
+
+
+def test_a_passed_run_is_never_offered_a_replay() -> None:
+    """§15.4 generates a case "from a failed or warning-bearing run", so a case
+    cannot exist for a clean pass. Offering the replay anyway would name an
+    artifact the API refuses to create."""
+    # Arrange / Act / Assert
+    assert (
+        phase_for(
+            has_contract=True,
+            run_state=RunState.PASSED,
+            regression_case_ready=True,
+            regression_replay_open=True,
+        )
+        is WorkspacePhase.PASSED
+    )
+
+
+def test_the_eval_flags_do_not_reopen_a_run_that_is_still_in_flight() -> None:
+    """A workspace can hold a case from an earlier run while a new one is
+    running. The live run wins: §11.5 draws the eval edges out of terminal
+    verdicts only."""
+    # Arrange / Act / Assert
+    assert (
+        phase_for(
+            has_contract=True,
+            run_state=RunState.RUNNING,
+            regression_case_ready=True,
+            regression_replay_open=True,
+        )
+        is WorkspacePhase.RUNNING
+    )
+
+
+def test_every_phase_the_projection_can_reach_has_guidance() -> None:
+    """The converse of the totality test, and the one that catches a dead entry.
+
+    `derive_guidance` being total over `WorkspacePhase` says every entry renders;
+    it says nothing about whether anyone can get there. `eval_ready` and
+    `eval_running` passed that test for as long as they were unreachable.
+    """
+    # Arrange — every phase `phase_for` can produce, across its whole input space.
+    reachable = {
+        phase_for(has_contract=has_contract, run_state=None) for has_contract in (True, False)
+    }
+    for run_state in RunState:
+        for case_ready in (False, True):
+            for replay_open in (False, True):
+                reachable.add(
+                    phase_for(
+                        has_contract=True,
+                        run_state=run_state,
+                        regression_case_ready=case_ready,
+                        regression_replay_open=replay_open,
+                    )
+                )
+
+    # Act / Assert — no phase is registered that nothing can produce.
+    assert reachable == set(WorkspacePhase)

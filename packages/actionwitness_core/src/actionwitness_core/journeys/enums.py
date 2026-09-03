@@ -326,6 +326,16 @@ class WorkspacePhase(StrEnum):
     `RunState` describes one run, and this describes what the whole workspace is
     doing — including the states before any run exists, which is where FR-120's
     "every nonterminal workspace state shall produce one `GuidanceState`" starts.
+
+    `ERROR` and `CANCELLED` have no node in the diagram, and §11.5 says why:
+    "Reset remains available from every state under FR-013 and Section 16,
+    including `error` and `cancelled`, even where a node is omitted for
+    readability." They are omitted from a *drawing*, not from the lifecycle, and
+    §16 gives both a run state. Folding them onto `contract_ready` — which is
+    what this enum used to force — made a run that stopped without a verdict
+    indistinguishable from one that never started, so the workspace greeted the
+    operator with "Arm the run." and never mentioned that anything had gone
+    wrong.
     """
 
     NO_CONTRACT = "no_contract"
@@ -339,6 +349,8 @@ class WorkspacePhase(StrEnum):
     PASSED = "passed"
     PASSED_WITH_WARNINGS = "passed_with_warnings"
     FAILED = "failed"
+    ERROR = "error"
+    CANCELLED = "cancelled"
     EVAL_READY = "eval_ready"
     EVAL_RUNNING = "eval_running"
 
@@ -357,6 +369,11 @@ WORKSPACE_PHASE_DESCRIPTIONS: Mapping[WorkspacePhase, str] = {
     WorkspacePhase.PASSED: "Verification passed with no failing check.",
     WorkspacePhase.PASSED_WITH_WARNINGS: "Verification passed with at least one warning.",
     WorkspacePhase.FAILED: "Verification failed at least one critical check.",
+    WorkspacePhase.ERROR: (
+        "The harness could not complete the run, so no verdict was reached. "
+        "Not a flavour of pass (§22)."
+    ),
+    WorkspacePhase.CANCELLED: "The run was cancelled before verification completed.",
     WorkspacePhase.EVAL_READY: "A regression eval exists and can be replayed.",
     WorkspacePhase.EVAL_RUNNING: "A regression replay is in progress.",
 }
@@ -380,6 +397,17 @@ class GuidanceActionCode(StrEnum):
     ARM_RUN = "arm_run"
     INVOKE_TARGET_TOOL = "invoke_target_tool"
     DECIDE_CONFIRMATION = "decide_confirmation"
+    #: Withdraw a pending confirmation instead of deciding it. §14.9 keeps this
+    #: distinct from a denial: nobody refused the action, the request simply
+    #: stopped being answerable.
+    #:
+    #: Named only where `DELETE /runs/{run_id}/confirmations/{confirmation_id}`
+    #: can act on it. That endpoint routes to `Decision.CANCEL`, which refuses a
+    #: request that is not `pending`, so the code belongs to
+    #: `awaiting_confirmation` and to nothing else — there is no run-level cancel
+    #: endpoint, and offering this anywhere a pending request cannot exist would
+    #: be guidance naming a capability the API does not have.
+    CANCEL_CONFIRMATION = "cancel_confirmation"
     VERIFY_OUTCOME = "verify_outcome"
     REVIEW_FINDINGS = "review_findings"
     CURATE_CANDIDATES = "curate_candidates"
@@ -397,6 +425,10 @@ GUIDANCE_ACTION_DESCRIPTIONS: Mapping[GuidanceActionCode, str] = {
     GuidanceActionCode.ARM_RUN: "Arm the selected contract and capture the initial observation.",
     GuidanceActionCode.INVOKE_TARGET_TOOL: "Exercise one allowlisted target tool.",
     GuidanceActionCode.DECIDE_CONFIRMATION: "Approve once or deny the pending protected action.",
+    GuidanceActionCode.CANCEL_CONFIRMATION: (
+        "Withdraw the pending request instead of deciding it. The protected "
+        "action does not run and nothing is changed."
+    ),
     GuidanceActionCode.VERIFY_OUTCOME: "Capture final state and evaluate the contract.",
     GuidanceActionCode.REVIEW_FINDINGS: "Read the report and its findings.",
     GuidanceActionCode.CURATE_CANDIDATES: "Accept or reject each proposed assertion candidate.",
@@ -424,6 +456,7 @@ class WorkspaceKind(StrEnum):
 
     INTERACTIVE = "interactive"
     EVAL = "eval"
+    OBSERVED = "observed"
 
 
 WORKSPACE_KIND_DESCRIPTIONS: Mapping[WorkspaceKind, str] = {
@@ -431,6 +464,23 @@ WORKSPACE_KIND_DESCRIPTIONS: Mapping[WorkspaceKind, str] = {
     WorkspaceKind.EVAL: (
         "A server-created isolated workspace for replay; its mutable state is "
         "removed after its report is persisted."
+    ),
+    # FR-172: "a self-witnessing run shall observe a workspace other than the
+    # one recording it." That other workspace is this kind. It is created by the
+    # server and owned by the recording workspace rather than named by an
+    # operator, for two reasons worth stating.
+    #
+    # Constitution §2 makes the workspace the isolation boundary, so letting a
+    # run point at any workspace whose identifier somebody held would be the
+    # harness crossing the boundary it enforces everywhere else. An owned child
+    # crosses nothing: it belongs to the run that made it and dies with it.
+    #
+    # And it makes FR-172's recursion cap structural instead of arithmetical.
+    # There is no depth counter to maintain; a workspace of this kind may not
+    # itself arm a self contract, so the chain is one link by construction.
+    WorkspaceKind.OBSERVED: (
+        "A server-created workspace that a self-witnessing run observes, owned "
+        "by the workspace recording that run."
     ),
 }
 

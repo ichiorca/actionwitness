@@ -104,5 +104,32 @@ refusal.
 Each departure from the spec, anchored to the section it departs from, with what
 was taken and why.
 
-_No entries: implementation has not begun, and may not begin until the entry
-condition above is met._
+_Preamble: implementation began ahead of the entry condition by explicit
+operator decision. AC-17 remains unproven and the store configuration stays
+locked to the one authorized development store; nothing in `tasks.md` is
+ticked until AC-17 actually passes (`test_gate_6_shopify_work_has_not_started`
+enforces exactly that)._
+
+- **D1 — §13.5, `target.cart.totals_consistent`.** §9.4's eight operators
+  compare a path to a literal and cannot compare a path to a *sum* of other
+  paths, so "internal arithmetic consistency" is computed in exact `Decimal`
+  during normalization and published as one boolean the contract asserts.
+  Safe: the arithmetic runs over the same independently observed `/cart.js`
+  payload, nothing from a self-report. It is a finding, not a refusal — an
+  internally inconsistent cart fails the contract rather than being rejected
+  as malformed input.
+- **D2 — §9.1/§10.2, `ShopifyAdapter.tool_specs()` returns `()`.** Stronger
+  than FR-114 asks. §10.2 then refuses any contract for this target that names
+  a tool at all, so no `forbidden_tool` / idempotency / confirmation policy can
+  ever be attached — including via a caller-supplied `contract_id`. A
+  `forbidden_tool: proceed_to_checkout` would report *satisfied* on the
+  strength of having observed nothing. Checkout is refused instead by the
+  witnessed `page.checkout_navigation_observed` assertion and FR-114's
+  missing-final-observation rule.
+- **D3 — §13.5 with FR-021/FR-110, "parameterized" means server expansion,
+  not form parameters.** `ContractTemplate.parameters` is correctly empty;
+  `variant_id` and `expected_currency` are *required* arguments to
+  `templates.expand`, supplied from `ShopifyAdapter.contract_parameters()` by
+  the composition root (spread last, so nothing arriving from a request can
+  survive the merge). A template that published them as form parameters would
+  render the deployment's locked configuration as fields a caller fills in.

@@ -143,15 +143,49 @@ def test_the_harness_venv_ships_every_integration_its_mounted_routes_import() ->
     protects the *disabled* deployment, but an operator who enables the module
     on the shipped image is one environment variable away from the same
     image-only 500, so the distribution ships.
+
+    `integrations/self_target` is the same class of dependency and was very
+    nearly the same bug. `AdapterRegistry._register_all` registers `self`
+    unconditionally — it is a built-in target with no configuration to switch it
+    off — so an image missing that distribution reports the harness's own
+    dogfooding target as "not installed" on every workspace response. The
+    `ImportError` guard makes that a bounded state rather than a 500, which is
+    worse for catching it: the image would look healthy and quietly lack the one
+    capability §12.20 exists to demonstrate.
     """
     body = DOCKERFILE.read_text(encoding="utf-8")
+    # Scoped to the install command, not to the whole file. `member in body` was
+    # satisfied by the `COPY integrations/x/src ./integrations/x/src` line above
+    # it, so the check passed for a distribution that was copied into the build
+    # context and then never installed — which is precisely the shape of the bug
+    # this test was written for. Found by deleting a member from the install
+    # list and watching the gate stay green.
+    install = _install_command(body)
     for member, package in (
         ("./integrations/buggy_store", "actionwitness-integration-buggy-store"),
         ("./integrations/google_evals", "actionwitness-integration-google-evals"),
+        ("./integrations/self_target", "actionwitness-integration-self-target"),
         ("./integrations/shopify", "actionwitness-integration-shopify"),
     ):
-        assert member in body, f"{member} is not installed into the harness venv"
+        assert member in install, f"{member} is not installed into the harness venv"
         assert f"--package {package}" in body, f"{package}'s pinned deps are not exported"
+
+
+def _install_command(body: str) -> str:
+    """The `uv pip install --no-deps` invocation that builds the harness venv.
+
+    A backslash-continued shell command, so it is read from its start to the
+    first line that does not continue. Returning the whole file would restore
+    the vacuous match this exists to remove.
+    """
+    marker = "uv pip install --no-deps"
+    start = body.index(marker)
+    lines: list[str] = []
+    for line in body[start:].splitlines():
+        lines.append(line)
+        if not line.rstrip().endswith("\\"):
+            break
+    return "\n".join(lines)
 
 
 # --- the single-worker rule (§29.1, ADR-0003) --------------------------------

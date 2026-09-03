@@ -737,6 +737,96 @@ label {
   padding: 0;
 }
 
+/* A wide correlation matrix scrolls inside itself rather than pushing the page
+   sideways. A class rather than a `style=` attribute because `style-src 'self'`
+   carries no `'unsafe-inline'`, and the fix for that is a stylesheet. */
+.benchmark__scroll {
+  overflow-x: auto;
+}
+
+/* ---- Shopify pairing --------------------------------------------------- */
+
+/* The tint is a second channel and never the first: the panel writes the
+   pairing state, the acting party, the next action, and the recovery
+   instruction out in words, so a reader who sees no colour at all loses
+   nothing (§8.4). Terminal states are tinted only so a glance can find them in
+   a long page — never so a glance can *decide* anything. */
+.pairing__live {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface-muted);
+}
+
+.pairing__live[data-status="armed"] {
+  border-left-color: var(--accent);
+}
+
+.pairing__live[data-status="verifying"],
+.pairing__live[data-status="paired"] {
+  border-left-color: var(--wait);
+}
+
+.pairing__live[data-status="passed"] {
+  border-left-color: var(--ok);
+}
+
+.pairing__live[data-status="passed_with_warnings"],
+.pairing__live[data-status="expired"],
+.pairing__live[data-status="cancelled"] {
+  border-left-color: var(--warn);
+}
+
+.pairing__live[data-status="failed"],
+.pairing__live[data-status="error"] {
+  border-left-color: var(--bad);
+}
+
+.pairing__live p {
+  margin: 0;
+}
+
+/* The launch URL block. Set apart because it is the one part of this panel
+   that carries a credential — redacted before it is rendered — and a reader
+   should be able to see where that boundary is. */
+.pairing__launch {
+  margin-top: 0.5rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px dashed var(--border-strong);
+  border-radius: 6px;
+}
+
+.pairing__launch code {
+  word-break: break-all;
+}
+
+.pairing__evidence {
+  width: 100%;
+  margin-top: 0.6rem;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.pairing__evidence caption {
+  text-align: left;
+  padding-bottom: 0.3rem;
+  color: var(--text-muted);
+}
+
+.pairing__evidence th,
+.pairing__evidence td {
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border);
+  text-align: left;
+}
+
+.pairing__evidence thead th {
+  background: var(--surface-muted);
+}
+
 /* ---- Confirmation dialog ---------------------------------------------- */
 
 /* Fixed and centred with a scrim, because this is the one moment the whole

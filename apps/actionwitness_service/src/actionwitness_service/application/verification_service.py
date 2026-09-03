@@ -48,7 +48,7 @@ the timeline does not hold would produce a verdict a replay could not reach.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Final
@@ -89,6 +89,7 @@ from actionwitness_core.ports.models import Observation
 from actionwitness_core.reports.enums import LayerResult, RunMode
 from actionwitness_core.reports.models import (
     ContractReference,
+    ExternalTargetReference,
     GuidanceReference,
     OutcomeReport,
     ScenarioReference,
@@ -109,6 +110,7 @@ from actionwitness_service.application.comparison_service import (
     comparable_run,
 )
 from actionwitness_service.application.guidance_service import GuidanceRecorder
+from actionwitness_service.application.self_witness import capture_scoped
 from actionwitness_service.application.verification_gate import VerificationGate
 from actionwitness_service.persistence.database import Database, UnitOfWork
 from actionwitness_service.persistence.locks import WorkspaceLocks
@@ -212,7 +214,12 @@ class VerificationService:
     def __init__(
         self,
         database: Database,
-        registry: AdapterRegistry,
+        # `None` is a real caller: the Shopify path passes it because an
+        # `external_webmcp` run has no adapter to capture through (§9.1), and
+        # `verify` skips every registry lookup when `external_observation` is
+        # given. The runtime already accepted it; only this annotation was
+        # narrower than the behaviour, which made every honest caller a type error.
+        registry: AdapterRegistry | None,
         locks: WorkspaceLocks,
         artifacts: ArtifactStore,
         *,
@@ -224,8 +231,40 @@ class VerificationService:
         self._artifacts = artifacts
         self._clock = clock or (lambda: datetime.now(UTC))
 
-    async def verify(self, workspace_id: str, run_id: str) -> VerificationOutcome:
-        """FR-038's gate, FR-041's capture, FR-053's verdict, in that order."""
+    async def verify(
+        self,
+        workspace_id: str,
+        run_id: str,
+        *,
+        external_observation: Observation | None = None,
+        external_target: ExternalTargetReference | None = None,
+        on_seal: Callable[[UnitOfWork, LayerResult], Awaitable[None]] | None = None,
+    ) -> VerificationOutcome:
+        """FR-038's gate, FR-041's capture, FR-053's verdict, in that order.
+
+        **`external_observation` is §16's `external_webmcp` exception, and only
+        that.** A Shopify trial's final state is read inside the shopper's own
+        browser session and arrives in the request body; there is no adapter for
+        this service to capture through, because §9.1 forbids the harness from
+        impersonating an external target's tools "through a second
+        implementation". So the capture step is skipped rather than faked — and
+        it is skipped *with a value already in hand*, which is the difference
+        between an observation that came from somewhere and one that was not
+        taken. Everything after it — the core's evaluation, the report, the seal
+        — is identical, because the verdict must not depend on how the evidence
+        reached the server.
+
+        **`on_seal` runs inside the sealing transaction.** §16.5 requires a
+        pairing's terminal state and its run's to "commit together, or neither",
+        and a caller that updated its own row after this method returned would
+        satisfy the words while leaving exactly the mismatch the clause forbids
+        if the process died in between.
+        """
+        if (external_observation is None) is not (external_target is None):
+            raise ValueError(
+                "external observation and external target provenance must be provided together"
+            )
+
         # 1 — win the race, or lose it before anything is observed.
         async with self._locks.hold(workspace_id), self._database.transaction() as work:
             run = await VerificationGate(work, workspace_id).begin(run_id)
@@ -241,17 +280,25 @@ class VerificationService:
         # discards the run's evidence to recover from the harness's own failure.
         # Constitution §5 asks for the opposite — an observation failure is "an
         # explicit non-pass result", and a state nobody can leave is not explicit.
-        try:
-            adapter = self._registry.adapter(str(run["target_adapter_id"]))
-            final = await self._capture(adapter, workspace_id, policy)
-        except _OBSERVATION_FAILURES as failure:
-            await self._abandon_unobservable(workspace_id, run_id)
-            raise ApiError(
-                ApiErrorCode.TARGET_UNAVAILABLE,
-                "The target could not be observed, so this run has no verdict. It is "
-                "recorded as `error` with an `observation_unavailable` finding; reset "
-                "the workspace and arm again once the target answers.",
-            ) from failure
+        #
+        # The external branch does no I/O and cannot fail this way: its
+        # observation was validated and redacted before the gate was even
+        # claimed, so there is nothing here to catch.
+        adapter: Any = None
+        if external_observation is not None:
+            final = external_observation
+        else:
+            try:
+                adapter = self._registry.adapter(str(run["target_adapter_id"]))
+                final = await self._capture(adapter, workspace_id, policy)
+            except _OBSERVATION_FAILURES as failure:
+                await self._abandon_unobservable(workspace_id, run_id)
+                raise ApiError(
+                    ApiErrorCode.TARGET_UNAVAILABLE,
+                    "The target could not be observed, so this run has no verdict. It is "
+                    "recorded as `error` with an `observation_unavailable` finding; reset "
+                    "the workspace and arm again once the target answers.",
+                ) from failure
 
         # 3 — the core decides. Pure, and given only recorded evidence.
         evaluation = _evaluate(contract, adapter, events, initial=initial, final=final.as_context())
@@ -266,7 +313,15 @@ class VerificationService:
         # before the seal so the artifact and the verdict describe the same
         # moment, and written to disk here because file I/O must not happen
         # inside the transaction (ADR-0003).
-        report = _compose(run_id, run, contract, evaluation, events, guidance)
+        report = _compose(
+            run_id,
+            run,
+            contract,
+            evaluation,
+            events,
+            guidance,
+            external_target=external_target,
+        )
         written = self._artifacts.write(
             workspace_id,
             run_id,
@@ -285,6 +340,11 @@ class VerificationService:
                 written,
                 metadata={"overall_result": str(result.value)},
             )
+            # §16.5's other terminal state, in the same transaction as this run's
+            # and the artifact row that is the report reference. Last, so it
+            # cannot commit over a seal that was itself refused.
+            if on_seal is not None:
+                await on_seal(work, result)
 
         return VerificationOutcome(
             run_id=run_id,
@@ -349,7 +409,7 @@ class VerificationService:
         self, adapter: Any, workspace_id: str, policy: RedactionPolicy
     ) -> Observation:
         """FR-041's final observation, redacted before it is hashed or stored."""
-        observation = await adapter.observation_provider().capture(workspace_id)
+        observation = await capture_scoped(self._database, adapter, workspace_id)
         return redacted_observation(observation, policy)
 
     # -- writing an explicit non-pass ----------------------------------------
@@ -769,7 +829,16 @@ def _evaluate(
 
 
 def _effect_map(adapter: Any) -> Mapping[str, tuple[ObservationPath, ...]]:
-    """§13.4's declared prefixes, parsed into the core's path type."""
+    """§13.4's declared prefixes, parsed into the core's path type.
+
+    Empty for an external target, which is passed as `None`: §9.1 says an
+    `external_webmcp` target "runs its own tools", so the harness declares no
+    effect map for tools it never dispatches. Empty is the honest value —
+    `classify_assertion_failures` reads it to attribute a failure to a call, and
+    there are no calls here to attribute one to.
+    """
+    if adapter is None:
+        return {}
     return {
         tool: tuple(ObservationPath.parse(str(path)) for path in paths)
         for tool, paths in adapter.effect_map().items()
@@ -871,6 +940,8 @@ def _compose(
     evaluation: Evaluation,
     events: Sequence[RunEvent],
     guidance: GuidanceState,
+    *,
+    external_target: ExternalTargetReference | None = None,
 ) -> OutcomeReport:
     """§23.1's layered report, from evidence the core has already judged.
 
@@ -890,6 +961,7 @@ def _compose(
             # until scenario selection reaches the target through the adapter.
             fault_active=bool(run["fault_active"]),
         ),
+        external_target=external_target,
         contract=ContractReference(
             id=str(run["contract_id"]),
             schema_version=contract.schema_version,

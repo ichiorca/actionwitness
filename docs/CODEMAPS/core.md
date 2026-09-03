@@ -50,9 +50,9 @@ everything else is written against).
 
 | File | Lines | Owns | Watch for |
 |---|---|---|---|
-| `journeys/enums.py` | 520 | `RunState` (12 states), `OutcomeEventType`, `EventActor`, `WorkspaceKind` | The event-type vocabulary is closed. A new event type is a schema change, not a string. |
+| `journeys/enums.py` | 552 | `RunState` (12 states), `WorkspacePhase` (15), `GuidanceActionCode` (11), `OutcomeEventType`, `EventActor`, `WorkspaceKind` | The event-type vocabulary is closed. A new event type is a schema change, not a string. `GUIDANCE_ACTION_DESCRIPTIONS` is the *only* copy for an action code — the banner reads it through the generated registry rather than holding its own. |
 | `journeys/transitions.py` | 220 | `validate_run_transition` | Every state change goes through here. An invalid transition is a refusal, never a row. |
-| `journeys/guidance.py` | 325 | Phase → guidance ("who acts next") | Server-owned, so the human and the agent read the same answer. |
+| `journeys/guidance.py` | 454 | Phase → guidance ("who acts next"), and `phase_for`'s projection | Server-owned, so the human and the agent read the same answer. `phase_for` needs the two regression-eval flags to reach `eval_ready`/`eval_running`: §11.5 draws those edges out of a case being created and a replay starting, neither of which changes the source run's state. A `_GUIDANCE` entry no `phase_for` input can produce is dead copy — `test_every_phase_the_projection_can_reach_has_guidance` is the gate. |
 | `evidence/surface.py` | 364 | Tool-surface capture, hashing, and diffing (`getTools()` evidence) | Where an undeclared tool-surface change becomes `tool_surface_mutation`. |
 | `evidence/effects.py` | 241 | Effect/consequence modelling | |
 | `evidence/models.py` · `evidence/enums.py` | 191 · 144 | Evidence records | Append-only, hash-linked, verified before trusted (constitution §4). |

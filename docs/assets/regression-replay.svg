@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="810" viewBox="0 0 1440 810" role="img" aria-labelledby="title desc">
+  <title id="title">A silent failure becomes a replayable regression</title>
+  <desc id="desc">The original mismatch is captured as a portable case, replayed from a restored fixture, and used to prove the fixed behavior.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#101722"/><stop offset="1" stop-color="#16233b"/></linearGradient>
+    <filter id="shadow"><feDropShadow dx="0" dy="14" stdDeviation="20" flood-color="#000" flood-opacity="0.34"/></filter>
+  </defs>
+  <rect width="1440" height="810" fill="url(#bg)"/>
+  <text x="720" y="92" text-anchor="middle" fill="#fff" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="46" font-weight="760">Today’s silent bug becomes tomorrow’s test.</text>
+  <text x="720" y="138" text-anchor="middle" fill="#99a3b1" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="22">Self-contained fixture · source classification preserved · deterministic replay</text>
+  <g font-family="Inter, Segoe UI, Arial, sans-serif" filter="url(#shadow)">
+    <rect x="70" y="226" width="352" height="356" rx="24" fill="#251b1c" stroke="#ec7f77" stroke-width="2"/>
+    <circle cx="246" cy="302" r="46" fill="#3a1a18" stroke="#ec7f77" stroke-width="3"/>
+    <path d="M229 285l34 34m0-34-34 34" stroke="#ffaaa4" stroke-width="7" stroke-linecap="round"/>
+    <text x="246" y="385" text-anchor="middle" fill="#ffaaa4" font-size="16" font-weight="800" letter-spacing="1">SOURCE FAILURE</text>
+    <text x="246" y="428" text-anchor="middle" fill="#fff" font-size="25" font-weight="750">$20 expected</text>
+    <text x="246" y="465" text-anchor="middle" fill="#fff" font-size="25" font-weight="750">$25 observed</text>
+    <text x="246" y="524" text-anchor="middle" fill="#c2a4a2" font-size="16">false success captured</text>
+
+    <rect x="544" y="190" width="352" height="428" rx="24" fill="#17223e" stroke="#8ca0f0" stroke-width="3"/>
+    <path d="M663 252h160l34 34v124H663z" fill="#232c4a" stroke="#8ca0f0" stroke-width="3"/>
+    <path d="M823 252v34h34" fill="none" stroke="#8ca0f0" stroke-width="3"/>
+    <path d="M695 319h126M695 350h98" stroke="#8ca0f0" stroke-width="5" stroke-linecap="round"/>
+    <text x="720" y="463" text-anchor="middle" fill="#b9c5ff" font-size="16" font-weight="800" letter-spacing="1">PORTABLE REGRESSION</text>
+    <text x="720" y="508" text-anchor="middle" fill="#fff" font-size="25" font-weight="750">Restore fixture</text>
+    <text x="720" y="545" text-anchor="middle" fill="#fff" font-size="25" font-weight="750">Replay journey</text>
+    <text x="720" y="584" text-anchor="middle" fill="#a9b6cd" font-size="16">verify the same classification</text>
+
+    <rect x="1018" y="226" width="352" height="356" rx="24" fill="#16271d" stroke="#55c283" stroke-width="2"/>
+    <circle cx="1194" cy="302" r="46" fill="#17301f" stroke="#55c283" stroke-width="3"/>
+    <path d="m1172 302 15 16 31-38" fill="none" stroke="#9be7b9" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="1194" y="385" text-anchor="middle" fill="#9be7b9" font-size="16" font-weight="800" letter-spacing="1">FIX VERIFIED</text>
+    <text x="1194" y="428" text-anchor="middle" fill="#fff" font-size="25" font-weight="750">$20 expected</text>
+    <text x="1194" y="465" text-anchor="middle" fill="#fff" font-size="25" font-weight="750">$20 observed</text>
+    <text x="1194" y="524" text-anchor="middle" fill="#9cc8aa" font-size="16">current behavior passes</text>
+  </g>
+  <g fill="none" stroke="#8ca0f0" stroke-width="6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M438 404h82"/><path d="m505 389 15 15-15 15"/>
+    <path d="M920 404h74"/><path d="m979 389 15 15-15 15"/>
+  </g>
+  <rect x="420" y="690" width="600" height="54" rx="27" fill="#15253a" stroke="#3652c4"/>
+  <text x="720" y="725" text-anchor="middle" fill="#b9c5ff" font-family="ui-monospace, Cascadia Code, Consolas, monospace" font-size="19">one failure → one durable, replayable proof</text>
+</svg>

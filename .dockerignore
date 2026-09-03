@@ -85,6 +85,13 @@ memory/
 .github/
 render.yaml
 
+# The Tier 3 Shopify theme bridge. It is installed on an authorized development
+# store by an operator — uploaded as a theme asset, read before it is pasted —
+# and the harness never serves it. Shipping it would put a script the image has
+# no way to execute inside the image, and would suggest the deployment is where
+# it belongs. `tests/architecture/test_shopify_bridge_artifact.py` holds this.
+shopify_bridge/
+
 # The Tier 3 automated browser lane. It drives the composed deployment from
 # outside, so nothing in it belongs in the image — and `.e2e/` is a working
 # directory holding two SQLite databases and an assembled copy of both bundles.

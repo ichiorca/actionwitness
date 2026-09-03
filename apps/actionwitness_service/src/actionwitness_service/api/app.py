@@ -15,8 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Iterable, Mapping
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime
 from pathlib import Path
@@ -44,6 +43,7 @@ from actionwitness_service.api.routes import benchmarks as benchmark_routes
 from actionwitness_service.api.routes import contracts as contract_routes
 from actionwitness_service.api.routes import evals as eval_routes
 from actionwitness_service.api.routes import runs as run_routes
+from actionwitness_service.api.routes import shopify as shopify_routes
 from actionwitness_service.api.routes import workspace as workspace_routes
 from actionwitness_service.api.security_headers import SecurityHeadersMiddleware
 from actionwitness_service.application.adapter_registry import AdapterRegistry
@@ -59,6 +59,7 @@ from actionwitness_service.application.template_catalogue import (
 )
 from actionwitness_service.application.workspaces import WorkspaceStore
 from actionwitness_service.config import DeploymentEnvironment, ServiceSettings
+from actionwitness_service.env_file import compose_environment
 from actionwitness_service.persistence.database import Database
 from actionwitness_service.persistence.locks import WorkspaceLocks
 from actionwitness_service.telemetry import RequestLoggingMiddleware, configure_logging
@@ -99,7 +100,14 @@ def create_app(
     # build an application do not each install another handler.
     configure_logging()
 
-    settings = ServiceSettings.from_env(os.environ if environ is None else environ)
+    # `.env` underneath the process environment, and *only* on the path that
+    # reads the process environment. A test that injects a mapping gets exactly
+    # that mapping: letting a developer's `.env` leak into the suite would make
+    # the tests pass or fail differently on each machine, which is the one thing
+    # a configuration test must never do.
+    settings = ServiceSettings.from_env(
+        compose_environment() if environ is None else environ,
+    )
     database = Database(database_path or settings.harness.database_path, clock=clock)
     workspaces = WorkspaceStore(database)
     limiter = RateLimiter(clock=clock)
@@ -134,7 +142,61 @@ def create_app(
             # is a run that never reaches a verdict.
             timeout=httpx.Timeout(TARGET_TIMEOUT_SECONDS),
         )
-        app.state.adapters = AdapterRegistry(settings, client=client)
+        # §12.20's second client, pointed at this application. An ASGI transport
+        # rather than a socket back to our own port, and the reason is not
+        # performance: a loopback URL is configuration, and configuration can be
+        # wrong — pointed at another deployment, at a stale port, at a host that
+        # resolves somewhere else — and a self-witnessing run that observed the
+        # wrong ActionWitness would report a verdict about somebody else's
+        # state. Binding to the object makes "this deployment" unforgeable, and
+        # is why the `self` module takes no settings at all.
+        #
+        # Every request still traverses the full stack — middleware, cookies,
+        # validation, authorization — so FR-171's "no privileged access" holds:
+        # this is the public door, entered without crossing the network.
+        #
+        # Re-entrancy is safe because ADR-0003 already forbids a database
+        # transaction from spanning I/O. The outer request is holding no write
+        # lock while the adapter's call runs, so the inner request can take
+        # SQLite's single writer without waiting on the request that provoked it.
+        self_client = httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            # Not a real authority: the transport never resolves it. It exists
+            # because httpx requires an absolute URL, and it is deliberately not
+            # `localhost` so nothing here can be misread as reaching a port.
+            base_url="http://harness.internal",
+            timeout=httpx.Timeout(TARGET_TIMEOUT_SECONDS),
+        )
+        # ADR-0001's third client: the live model, owned here rather than built
+        # per request. The variant route already prefers a supplied client and
+        # closes only what it built itself, so this is ownership moving to the
+        # scope that owns every other client's lifetime — not a behaviour change
+        # at the call site.
+        #
+        # It holds no credential and never has. The key is read per request and
+        # lives inside the `LiveVariantClient` wrapper, which is still built and
+        # discarded per request; what is long-lived here is a connection pool,
+        # which is exactly what ADR-0001 says a client is for. The reasoning for
+        # keeping it request-scoped rested on "this is the only client that has
+        # held a credential", and that is not so — closing this object disposes
+        # of nothing sensitive, because nothing sensitive was ever in it.
+        #
+        # Built only when the module is configured, so a deployment without a
+        # model opens no pool it will never use.
+        live_variant_client = (
+            httpx.AsyncClient(
+                # The model call passes its own, longer timeout per request;
+                # this is the floor for anything else that ever uses the pool,
+                # stated rather than inherited like the target client above.
+                timeout=httpx.Timeout(TARGET_TIMEOUT_SECONDS),
+            )
+            if settings.live_evaluator is not None
+            else None
+        )
+        if live_variant_client is not None:
+            app.state.live_variant_client = live_variant_client
+
+        app.state.adapters = AdapterRegistry(settings, client=client, self_client=self_client)
         # The `/demo/api/v1` proxy (§29.1) reaches the store over the same client
         # the adapter uses, so a test that injects an `ASGITransport` gets the
         # proxy pointed at its store too — the composed path is exercised rather
@@ -174,6 +236,11 @@ def create_app(
                 sweeper.cancel()
                 with suppress(asyncio.CancelledError):
                     await sweeper
+            # Unconditional, unlike the target client above: this scope built it,
+            # so this scope closes it. Nobody else can have supplied one.
+            await self_client.aclose()
+            if live_variant_client is not None:
+                await live_variant_client.aclose()
             if owned_client:
                 await client.aclose()
 
@@ -200,7 +267,23 @@ def create_app(
         store=workspaces,
         secure=settings.harness.secure_cookies,
     )
-    app.add_middleware(OriginMiddleware, policy=OriginPolicy(settings.harness.public_origin))
+    app.add_middleware(
+        OriginMiddleware,
+        policy=OriginPolicy(
+            settings.harness.public_origin,
+            # §20.1's one exception, scoped to one corridor: the Shopify bridge
+            # routes are called from the configured storefront, which cannot
+            # present the harness origin. The mapping pairs the path prefix with
+            # the origin so the allowance cannot be spent anywhere else, and it
+            # exists only when the module does - an entry for an unconfigured
+            # store would be an allowlist row for nobody.
+            scoped_origins=(
+                {}
+                if settings.shopify is None
+                else {f"{API_PREFIX}/shopify": settings.shopify.store_origin}
+            ),
+        ),
+    )
     app.add_middleware(
         RateLimitMiddleware,
         limiter=limiter,
@@ -364,6 +447,14 @@ def create_app(
     # reads as a wrong URL; the module state is what gates it, not the route.
     app.include_router(audit_routes.router, prefix=API_PREFIX)
     app.include_router(benchmark_routes.router, prefix=API_PREFIX)
+    # §15.7's Tier 3 bridge, mounted only when a development store is configured.
+    # Unlike the audit surface above, this router is *absent* rather than present
+    # and refusing: 009-T12's cut-hygiene gate reads the mounted paths and treats
+    # a route for a module the deployment reports as off as the half-shipped
+    # failure itself. `settings.shopify is not None` is the same condition
+    # `modules.shopify` reports, so the two cannot disagree.
+    if settings.shopify is not None:
+        app.include_router(shopify_routes.router, prefix=API_PREFIX)
 
     # §29.1's one-origin composition, registered after the harness API so that
     # `/api/v1` can never be shadowed by an asset mount. ADR-0006 records why the
@@ -391,29 +482,94 @@ def _build_template_catalogue(registry: AdapterRegistry) -> TemplateCatalogue:
     integration contributes nothing and is not an error (§21.1) — the catalogue
     is simply smaller, and a request naming one of its templates is refused by
     name rather than by a crash.
+
+    Each pack is composed independently, so a deployment running the demo store
+    without the self target — or the self target without the demo store, which
+    is §21.1's credential-free path — gets the templates it can actually
+    instantiate rather than none.
     """
+    return TemplateCatalogue(
+        [
+            *_buggy_store_expansions(registry),
+            *_self_target_expansions(registry),
+            *_shopify_expansions(registry),
+        ]
+    )
+
+
+def _buggy_store_expansions(registry: AdapterRegistry) -> list[TemplateExpansion]:
+    """FR-020's demo-store pack, or nothing when the integration is absent."""
     if not registry.is_available("buggy_store"):
-        return TemplateCatalogue()
+        return []
     from integrations.buggy_store.templates import TEMPLATES, TemplateExpansionError
     from integrations.buggy_store.templates import expand as expand_buggy_store
+
+    return _expansions(TEMPLATES, expand_buggy_store, TemplateExpansionError)
+
+
+def _self_target_expansions(registry: AdapterRegistry) -> list[TemplateExpansion]:
+    """FR-173's self pack, or nothing when the integration is absent."""
+    if not registry.is_available("self"):
+        return []
+    from integrations.self_target.templates import TEMPLATES, TemplateExpansionError
+    from integrations.self_target.templates import expand as expand_self_target
+
+    return _expansions(TEMPLATES, expand_self_target, TemplateExpansionError)
+
+
+def _shopify_expansions(registry: AdapterRegistry) -> list[TemplateExpansion]:
+    """FR-023's Shopify pack, or nothing when the module is off (§21.1)."""
+    if not registry.is_available("shopify"):
+        return []
+    from integrations.shopify.templates import TEMPLATES, TemplateExpansionError
+    from integrations.shopify.templates import expand as expand_shopify
+
+    def expand_from_configuration(
+        template_id: str, parameters: Mapping[str, Any]
+    ) -> Mapping[str, Any]:
+        # Server configuration is spread LAST, so a variant_id or
+        # expected_currency arriving from anywhere else is overwritten rather
+        # than merged. The route model forbids those keys already; this is the
+        # layer that does not depend on it, because "which variant counted as
+        # correct" must be a deployment decision by construction (FR-110).
+        return expand_shopify(
+            template_id,
+            {**parameters, **registry.adapter("shopify").contract_parameters()},
+        )
+
+    return _expansions(TEMPLATES, expand_from_configuration, TemplateExpansionError)
+
+
+def _expansions(
+    templates: Iterable[Any],
+    expand_one: Callable[[str, Mapping[str, Any]], Mapping[str, Any]],
+    rejection: Any,
+) -> list[TemplateExpansion]:
+    """Bind one integration's expander to each of its templates.
+
+    `rejection` is the integration's own error type, passed in rather than
+    imported here: each pack raises its own carrying the same `(field, message)`
+    details, and the composition root is where both become the single
+    `ExpansionRejected` the boundary catches.
+    """
 
     def _expander(template_id: str) -> Callable[[Mapping[str, Any]], Mapping[str, Any]]:
         def expand(parameters: Mapping[str, Any]) -> Mapping[str, Any]:
             try:
-                return expand_buggy_store(template_id, parameters)
-            except TemplateExpansionError as rejected:
+                return expand_one(template_id, parameters)
+            except rejection as rejected:
                 raise ExpansionRejected(rejected.details) from rejected
 
         return expand
 
-    return TemplateCatalogue(
+    return [
         TemplateExpansion(
             template_id=template.template_id,
             parameters=tuple(template.parameters),
             expand=_expander(template.template_id),
         )
-        for template in TEMPLATES
-    )
+        for template in templates
+    ]
 
 
 async def _seed_builtin_templates(database: Database, registry: AdapterRegistry) -> int:
@@ -422,10 +578,29 @@ async def _seed_builtin_templates(database: Database, registry: AdapterRegistry)
     An integration that is absent contributes nothing and is not an error
     (§21.1). The seeding runs in one transaction so a partial set is never
     visible, and it is idempotent so a restart writes nothing.
+
+    Every pack is collected before the transaction opens, and each is guarded
+    by its own availability check: §21.1's "one failed integration never
+    disables the others" applies to seeding as much as to registration, and an
+    early return on the first absent pack would have silently dropped the
+    rest.
     """
-    if not registry.is_available("buggy_store"):
+    templates: list[Any] = []
+    if registry.is_available("buggy_store"):
+        from integrations.buggy_store import TEMPLATES as buggy_store_templates
+
+        templates.extend(buggy_store_templates)
+    if registry.is_available("self"):
+        from integrations.self_target import TEMPLATES as self_target_templates
+
+        templates.extend(self_target_templates)
+    if registry.is_available("shopify"):
+        from integrations.shopify import TEMPLATES as shopify_templates
+
+        templates.extend(shopify_templates)
+
+    if not templates:
         return 0
-    from integrations.buggy_store import TEMPLATES
 
     async with database.transaction() as work:
-        return await seed_templates(work, TEMPLATES)
+        return await seed_templates(work, templates)

@@ -16,34 +16,84 @@ Bridges core protocols to the storefront's versioned HTTP API.
 | `tools.py` | 217 | Tool specs the adapter publishes | |
 | `environments.py` | 64 | Environment/profile selection | |
 
+## `integrations/self_target` — ActionWitness as its own target (§12.20)
+
+The dogfooding adapter. Drives and observes the harness itself, over `/api/v1`,
+holding nothing but an injected HTTP client.
+
+**The dependency list is the safety property.** This distribution declares
+`actionwitness-core` and `httpx` and nothing else, so it cannot import a
+repository, a service, or the database — FR-171's "no privileged access", made
+structural. `tests/architecture/test_import_boundaries.py` gates both the
+imports and the manifest. If you find yourself wanting one more dependency here,
+that is the signal to fix the public protocol instead.
+
+| File | Lines | Owns | Watch for |
+|---|---|---|---|
+| `adapter.py` | ~270 | `SelfTargetAdapter`, `DESCRIPTOR`, the tool→route map, `observing()` | `observing()` returns a **new bound instance**; the client is shared, so mutating in place would let two concurrent self runs act on each other's target. An unbound adapter refuses rather than defaulting to the recording workspace. |
+| `observation.py` | ~255 | `SelfObservationProvider`, the state projection, `workspace_header` | The projection is a small fixed set of facts, not a dump of the workspace response — otherwise the first cosmetic field added to `GET /workspace` starts failing self runs. `capture()` **refuses**: one workspace identifier is not enough (FR-172). |
+| `templates.py` | ~430 | FR-173's built-in self contract pack | Every assertion path must resolve inside `observation.py`'s projection, and every `expected_tools` entry must be a published tool — contract validation checks the second, and only a test checks the first. |
+| `tools.py` | ~120 | The six published tool specs and the effect map | `verify_outcome` is **deliberately absent**: a self run that could tell its observed workspace to verify would be driving the machinery recording it. Every schema sets `additionalProperties: false` and none accepts a workspace identifier — see the binding note below. |
+
+The workspace a self run acts on and observes is chosen by the **server**, never
+by the agent and never by a tool argument. See
+`apps/actionwitness_service/src/actionwitness_service/application/self_witness.py`
+for the guards; `docs/ARCHITECTURE.md` section 9 for why.
+
 ## `integrations/google_evals` — external evaluator import (Tier 2)
 
 | File | Lines | Owns | Watch for |
 |---|---|---|---|
 | `reader.py` | 366 | `read_report`, `ImportLimits`, `ReportRejected` | Size is checked **before** parsing (`_check_size`) — the precedent every import path follows. |
 | `normalize.py` | 297 | Report → `NormalizedTrial` | Never guesses a binding from position, similarity, or timestamps (FR-091). |
-| `live.py` | 249 | Live-evaluator screening | `screen_for_credential_material` refuses an import carrying credentials rather than redacting it — a secret in a persisted artifact is an incident, not a validation failure. |
+| `live.py` | 249 | Live-evaluator screening and run description | `screen_for_credential_material` refuses an import carrying credentials rather than redacting it — a secret in a persisted artifact is an incident, not a validation failure. This module still calls nothing: it describes a run. |
+| `generation.py` | ~430 | `LiveVariantClient` — the only code in the repo that calls a model. FR-100's *generate* step over Google's Gemini REST API | **The one object that ever holds the credential.** It goes in the `x-goog-api-key` header, never the URL, and no failure path forwards `str(exc)` or a vendor response body. The client is injected (ADR-0001), the answer is size-capped before parsing, and the *authored* payload is screened for credential keys **before** its shape is checked — a closed model would otherwise report an incident as a typo. Nothing here approves or freezes; the return type is deliberately not `IntentVariant`. |
 | `pins.py` | 63 | The pinned evaluator version | `tests/architecture/test_evaluator_pin.py` guards it; see ADR-0005 and the drafted upstream issue that accompanies it. |
 
-## `integrations/shopify` — split status, read carefully
+## `integrations/shopify` — two targets, read carefully
 
-**Half of this package is live and half is a stub.** The distinction matters.
+**One distribution, two features, and they are not the same target.**
 
-| File | Lines | Status | Notes |
+* `adapter.py` + `observation.py` + `templates.py` — the **cart proof**
+  (`shopify-development-store`, §12.12): one *configured* development store the
+  project is authorized on, observed through the paired theme bridge.
+* `audit.py` + `pack.py` — the **external-surface audit** (`external-audit`,
+  §12.17): an origin the operator asserts authorization for, with a different
+  consent story.
+
+They share `audit.py`'s `cart.js` normalizer and its exact-origin rule, on
+purpose: two ideas of what a cart is worth is how the two paths would drift.
+
+| File | Lines | Owns | Watch for |
 |---|---|---|---|
-| `audit.py` | 253 | **Live** | `ExternalAuditAdapter` (`ExternalTargetAdapter`: `normalize` + `validate_origin`, and no `execute` — the absence is the interface), `normalize_cart`, `MAX_CART_PAYLOAD_BYTES`, `PROVENANCE`. Imported by `apps/actionwitness_service/src/actionwitness_service/application/audit_workflow.py`. `normalize` **checks** provenance rather than recording it: a caller that could label its own payload could label a tool result a session read. |
-| `pack.py` | 222 | **Live** | The ten-tool contract packs, `match_pack`, `NEVER_INVOKED_TOOLS`. `match_pack` returns every match and picks none — FR-161 makes selection the operator's. |
-| `adapter.py` | 4 | **Stub** | Docstring only. The dev-store target is not built. |
-| `observation.py` | 5 | **Stub** | Docstring only. |
+| `audit.py` | ~275 | `ExternalAuditAdapter` (`ExternalTargetAdapter`: `normalize` + `validate_origin`, and no `execute` — the absence is the interface), plus the **shared** `normalize_cart`, `cart_amount`, `require_exact_origin`, `MAX_CART_PAYLOAD_BYTES`, `PROVENANCE` | Imported by `apps/actionwitness_service/src/actionwitness_service/application/audit_workflow.py` *and* by the cart-proof modules. `normalize` **checks** provenance rather than recording it: a caller that could label its own payload could label a tool result a session read. |
+| `pack.py` | 222 | The ten-tool audit contract packs, `match_pack`, `NEVER_INVOKED_TOOLS` | `match_pack` returns every match and picks none — FR-161 makes selection the operator's. |
+| `adapter.py` | ~180 | `ShopifyAdapter`, `TARGET_ID`, `TARGET_TYPE`, `DESCRIPTOR` | **`tool_specs()` is empty on purpose.** FR-114/AC-18 keep trajectory `not_evaluated`, and §10.2 then refuses any contract for this target that names a tool at all — so a `forbidden_tool: proceed_to_checkout` cannot be added "to be safe". No `execute`, no HTTP client, no Shopify credential (FR-118). |
+| `observation.py` | ~310 | `ShopifyCartObservationProvider` (`shopify_cart_state`), `project_cart`, `require_within_payload_bound` | Calls `normalize_cart`; never copies it. `capture()` **refuses** — FR-112 puts the read in the shopper's browser session. `page.checkout_navigation_observed` is **required**: defaulting it to `false` would make "the bridge did not look" indistinguishable from "nothing navigated". There is no `order` key, because order state needs the Admin credential FR-118 forbids. |
+| `templates.py` | ~290 | `shopify_exact_cart` (§13.5, FR-108), `expand`, `TEMPLATES` | Omits `expected_tools` (FR-114). `expand` takes `variant_id` and `expected_currency` from **server** configuration via `ShopifyAdapter.contract_parameters()`, spread last by the composition root — never from a request body; they are deliberately not template `parameters`, so the generic §25.2 form works with the template while a *caller* supplying either is refused by name (`extra="forbid"` at the route, required-from-configuration here). |
 
-`apps/actionwitness_service/src/actionwitness_service/api/routes/shopify.py` is an
-empty, unmounted router, and every task in
-`specs/011-shopify-cart-proof/tasks.md` is unticked — a state
-`tests/integration/test_010_exit_gate.py` actively enforces. Configuring
-`SHOPIFY_*` reports `disabled` with a reason naming the build; it does not turn a
-feature on.
+Configuring all four `SHOPIFY_*` variables now turns the module on:
+`apps/actionwitness_service/src/actionwitness_service/application/adapter_registry.py`
+registers the target from those settings, and `_SHOPIFY_ADAPTER_SHIPPED` in
+`apps/actionwitness_service/src/actionwitness_service/config.py` is the switch that keeps `modules` and
+`capabilities` from contradicting each other — flip it back if the registration
+is ever removed. Every task in `specs/011-shopify-cart-proof/tasks.md` remains
+unticked while AC-17 is unproven, a state
+`tests/integration/test_010_exit_gate.py` actively enforces; that gate is about
+the *live* proof against a real store, not about this code.
 
-`shopify_bridge/` at the repo root is a README-only placeholder.
+`shopify_bridge/` at the repo root is **no longer a placeholder**: it holds the
+checked-in theme bridge (`shopify_bridge/actionwitness-bridge.js`), its theme
+snippet, and hand-written types. It is plain, unbuilt JavaScript that runs at
+the *storefront's* origin, so it is the one documented place outside
+`apps/actionwitness_service/frontend/src/webmcp/adapter.ts` that touches
+`modelContext` — a different document, in a
+different browsing context, that the React rule has no reach into. It is
+excluded from the release image (it is installed on a store, not served by the
+harness), its logic is exercised by the frontend's
+`apps/actionwitness_service/frontend/src/shopifyBridge.test.ts`, and
+`tests/architecture/test_shopify_bridge_artifact.py` holds the properties that
+must be true of the file itself: no storage, no checkout, no navigation.
 
 ## `examples/buggy_store` — the demo storefront
 

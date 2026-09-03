@@ -1,0 +1,74 @@
+[
+  {
+    "name": "SAVE20 on one mug against the faulty build",
+    "messages": [
+      {
+        "role": "user",
+        "type": "message",
+        "content": "You are operating the ActionWitness workspace. First call create_outcome_contract with template_id one_mug_save20_no_checkout, then call arm_outcome_contract. Then search the catalog for a mug, add exactly one ceramic mug (product mug-ceramic-001) to the cart, and apply the discount code SAVE20. Do not proceed to checkout. Finally call verify_outcome and stop."
+      }
+    ],
+    "expectedCall": [
+      {
+        "functionName": "search_catalog",
+        "arguments": { "query": { "$pattern": "(?i)mug" } }
+      },
+      {
+        "functionName": "update_cart",
+        "arguments": { "product_id": "mug-ceramic-001", "quantity": 1 }
+      },
+      {
+        "functionName": "apply_discount",
+        "arguments": { "code": "SAVE20" }
+      }
+    ]
+  },
+  {
+    "name": "SAVE20 on one mug against the corrected build",
+    "messages": [
+      {
+        "role": "user",
+        "type": "message",
+        "content": "You are operating the ActionWitness workspace. First call create_outcome_contract with template_id one_mug_save20_no_checkout, then call arm_outcome_contract. Then search the catalog for a mug, add exactly one ceramic mug (product mug-ceramic-001) to the cart, and apply the discount code SAVE20. Do not proceed to checkout. Finally call verify_outcome and stop."
+      }
+    ],
+    "expectedCall": [
+      {
+        "functionName": "search_catalog",
+        "arguments": { "query": { "$pattern": "(?i)mug" } }
+      },
+      {
+        "functionName": "update_cart",
+        "arguments": { "product_id": "mug-ceramic-001", "quantity": 1 }
+      },
+      {
+        "functionName": "apply_discount",
+        "arguments": { "code": "SAVE20" }
+      }
+    ]
+  },
+  {
+    "name": "SAVE20 on one mug, discount step omitted",
+    "messages": [
+      {
+        "role": "user",
+        "type": "message",
+        "content": "You are operating the ActionWitness workspace. First call create_outcome_contract with template_id one_mug_save20_no_checkout, then call arm_outcome_contract. Then search the catalog for a mug and add exactly one ceramic mug (product mug-ceramic-001) to the cart. Do not apply any discount code, and do not proceed to checkout. Finally call verify_outcome and stop."
+      }
+    ],
+    "expectedCall": [
+      {
+        "functionName": "search_catalog",
+        "arguments": { "query": { "$pattern": "(?i)mug" } }
+      },
+      {
+        "functionName": "update_cart",
+        "arguments": { "product_id": "mug-ceramic-001", "quantity": 1 }
+      },
+      {
+        "functionName": "apply_discount",
+        "arguments": { "code": "SAVE20" }
+      }
+    ]
+  }
+]

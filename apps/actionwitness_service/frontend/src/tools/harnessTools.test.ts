@@ -117,11 +117,26 @@ function textOf(outcome: unknown): string {
   return (outcome as { content?: { text?: string }[] }).content?.[0]?.text ?? "";
 }
 
+/**
+ * A workspace whose module report says the external audit is switched on.
+ *
+ * The judging deployment ships it off, so the audit tools are unregistered
+ * there by design (009-T12). Their behaviour still has to be tested, and the
+ * only honest way to turn them on in a test is the same way the server turns
+ * them on in production: by changing what the module report says.
+ */
+const AUDIT_ENABLED = {
+  modules: { external_audit: { status: "enabled", reason: "" } },
+} as const;
+
 async function toolsetFor(
   phase: string,
   options: HarnessToolsetOptions = {},
+  overrides: Record<string, unknown> = {},
 ): Promise<{ invoke: (name: string, args?: Record<string, unknown>) => Promise<unknown> }> {
-  const { result } = renderHook(() => useHarnessToolset(workspace(phase), noop, options));
+  const { result } = renderHook(() =>
+    useHarnessToolset(workspace(phase, overrides), noop, options),
+  );
   await waitFor(() =>
     expect(result.current.states["list_contract_templates"]?.phase).toBe("registered"),
   );
@@ -137,8 +152,11 @@ async function registeredTool(
   name: string,
   phase: string,
   options: HarnessToolsetOptions = {},
+  overrides: Record<string, unknown> = {},
 ): Promise<WebMCP.RegisteredTool | null> {
-  const { result, unmount } = renderHook(() => useHarnessToolset(workspace(phase), noop, options));
+  const { result, unmount } = renderHook(() =>
+    useHarnessToolset(workspace(phase, overrides), noop, options),
+  );
   await waitFor(() => expect(result.current.states[name]?.phase).toBe("registered"));
   const tools = await (installed?.modelContext.getTools() ?? Promise.resolve([]));
   const found = tools.find((tool) => tool.name === name) ?? null;
@@ -149,8 +167,14 @@ async function registeredTool(
   return found;
 }
 
-async function toolsFor(phase: string, options: HarnessToolsetOptions = {}): Promise<string[]> {
-  const { result, unmount } = renderHook(() => useHarnessToolset(workspace(phase), noop, options));
+async function toolsFor(
+  phase: string,
+  options: HarnessToolsetOptions = {},
+  overrides: Record<string, unknown> = {},
+): Promise<string[]> {
+  const { result, unmount } = renderHook(() =>
+    useHarnessToolset(workspace(phase, overrides), noop, options),
+  );
   await waitFor(() =>
     expect(result.current.states["list_contract_templates"]?.phase).toBe("registered"),
   );
@@ -209,6 +233,44 @@ describe("state-dependent registration (§11.5)", () => {
 
   it("withdraws reset while a run is in flight", async () => {
     expect(await toolsFor("running")).not.toContain("reset_workspace");
+  });
+
+  it("keeps idempotent case creation available after guidance advances to eval ready", async () => {
+    const published = await toolsFor(
+      "eval_ready",
+      { evalCaseId: "eval_1" },
+      {
+        active_run: {
+          id: "run_1",
+          status: "failed",
+          target_id: "buggy-store",
+          contract_id: "con_1",
+          completed_at: "2026-01-01T00:00:00Z",
+        },
+      },
+    );
+
+    expect(published).toContain("create_regression_eval");
+  });
+
+  it("keeps terminal-run recovery and readers available while an eval is ready", async () => {
+    const published = await toolsFor(
+      "eval_ready",
+      { evalCaseId: "eval_1" },
+      {
+        active_run: {
+          id: "run_1",
+          status: "failed",
+          target_id: "buggy-store",
+          contract_id: "con_1",
+          completed_at: "2026-01-01T00:00:00Z",
+        },
+      },
+    );
+
+    expect(published).toEqual(
+      expect.arrayContaining(["get_run_findings", "get_run_comparison", "reset_workspace"]),
+    );
   });
 });
 
@@ -375,6 +437,8 @@ interface AppendixDProperty {
 interface AppendixDSchema {
   readonly type: "object";
   readonly properties: Readonly<Record<string, AppendixDProperty>>;
+  /** Absent for every D.1 tool; see the `required` test below for why. */
+  readonly required?: readonly string[];
   readonly additionalProperties: false;
 }
 
@@ -383,6 +447,8 @@ interface AppendixDTool {
   /** A phase in which §11.5 publishes this tool, so it can be read back. */
   readonly phase: string;
   readonly options?: HarnessToolsetOptions;
+  /** Workspace fields a tool's enablement depends on, such as a module report. */
+  readonly overrides?: Record<string, unknown>;
   readonly description: string;
   readonly inputSchema: AppendixDSchema;
 }
@@ -548,6 +614,137 @@ const APPENDIX_D: readonly AppendixDTool[] = [
   },
 ];
 
+/**
+ * The tools published beyond §11.1's table, pinned the same way.
+ *
+ * §32 makes the agent a first-class user rather than only a subject, and the
+ * §11.1 table is the Tier 1 floor. These are the reads that finish a job an
+ * agent can already start — and each is pinned here for the same reason D.1's
+ * are: a schema nothing asserts is a schema that drifts.
+ *
+ * They are a separate table rather than extra rows in `APPENDIX_D` because the
+ * two are checked against different authorities. D.1 is a normative document,
+ * and the three departures from it above are pinned as *departures*; these have
+ * no D.1 entry to depart from, and `get_benchmark_summary` genuinely requires
+ * its argument — which the D.1 table asserts none of its tools do.
+ */
+const BEYOND_APPENDIX_D: readonly AppendixDTool[] = [
+  {
+    name: "get_run_timeline",
+    phase: "running",
+    description:
+      "Return the harness's own ordered record of one run: the recorded events, what " +
+      "each tool reported about itself, and what the harness observed. Page with " +
+      "after_sequence. This is the record of what happened, not the verdict on it.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        run_id: {
+          ...ID,
+          description: "Run to read the timeline of. Defaults to this workspace's active run.",
+        },
+        after_sequence: {
+          type: "integer",
+          minimum: 0,
+          default: 0,
+          description: "Return events after this sequence number. Use next_after_sequence to page.",
+        },
+        limit: {
+          type: "integer",
+          // The service's bounds; only the *default* is this tool's, because
+          // fifty events do not fit inside §11.4's 1,500-character budget.
+          minimum: 1,
+          maximum: 100,
+          default: 10,
+          description: "Events per page. Smaller than the service default so one page fits.",
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "get_run_comparison",
+    phase: "failed",
+    description:
+      "Return the matched pre/post comparison for a run armed against a comparison " +
+      "source: which critical classifications the change resolved and which it " +
+      "introduced, or the named fields that stop the two runs being a comparable pair.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        run_id: {
+          ...ID,
+          description: "Terminal run armed with a comparison source. Defaults to this workspace's.",
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "list_regression_evals",
+    phase: "contract_ready",
+    description:
+      "List the regression eval cases this workspace holds, with the run each was cut " +
+      "from, so a case created earlier can be named to run_regression_eval by id.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "list_audit_packs",
+    phase: "contract_ready",
+    overrides: AUDIT_ENABLED,
+    description:
+      "List the built-in audit contract packs offered for an authorized external-surface " +
+      "audit: what each pack expects a storefront to publish, and the tools it reports as " +
+      "present and deliberately never invokes.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "get_audit_report",
+    phase: "contract_ready",
+    overrides: AUDIT_ENABLED,
+    description:
+      "Return the sealed report for this workspace's completed external-surface audit: " +
+      "which of the audited store's tools reported success without a matching change, and " +
+      "which were left alone. A clean result is evidence about what was tried, not a " +
+      "guarantee; the full report states its own limits.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "list_benchmarks",
+    phase: "contract_ready",
+    description:
+      "List the benchmark suites this workspace holds, with the status and declared " +
+      "source kind of each, so a suite can be summarised by id. A suite built from a " +
+      "recorded fixture is never presented as a live execution.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "get_benchmark_summary",
+    phase: "contract_ready",
+    description:
+      "Return one benchmark suite's call-level versus outcome-level matrix and its rates, " +
+      "so you can see how often a call-level pass accompanied an outcome-level failure. " +
+      "Individual trials and the sealed manifest stay server-side.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        benchmark_id: {
+          type: "string",
+          minLength: 1,
+          maxLength: 128,
+          description: "Suite to summarise. Obtain an identifier from list_benchmarks.",
+        },
+      },
+      // Genuinely required: a workspace holds many suites and selects none, so
+      // there is nothing to infer and a default would pick one for the caller.
+      required: ["benchmark_id"],
+      additionalProperties: false,
+    },
+  },
+];
+
+const PUBLISHED: readonly AppendixDTool[] = [...APPENDIX_D, ...BEYOND_APPENDIX_D];
+
 describe("the published surface matches Appendix D (D.1)", () => {
   for (const expected of APPENDIX_D) {
     it(`publishes ${expected.name} with D.1's description and input schema`, async () => {
@@ -563,19 +760,23 @@ describe("the published surface matches Appendix D (D.1)", () => {
     });
   }
 
-  it("registers every tool §11.1 assigns to this hook, and no others", async () => {
+  it("registers every tool this hook publishes, and no others", async () => {
     // Arrange — the phases that between them publish the whole set. The failed
     // phase carries a selected case, because §11.1 gates `run_regression_eval`
-    // on one existing rather than on the run's phase alone.
+    // on one existing rather than on the run's phase alone; the last workspace
+    // has the audit module switched on, because a module the deployment reports
+    // as off must register nothing at all (009-T12) and the default fixture
+    // therefore cannot see those two.
     const published = new Set<string>([
       ...(await toolsFor("contract_ready")),
       ...(await toolsFor("running")),
       ...(await toolsFor("failed", { evalCaseId: "eval_selected" })),
+      ...(await toolsFor("contract_ready", {}, AUDIT_ENABLED)),
     ]);
 
-    // Assert — a tool added here without an Appendix D entry is drift in the
-    // other direction, and just as unreviewed.
-    expect([...published].sort()).toEqual(APPENDIX_D.map((tool) => tool.name).sort());
+    // Assert — a tool added here without a table entry is drift in the other
+    // direction, and just as unreviewed.
+    expect([...published].sort()).toEqual(PUBLISHED.map((tool) => tool.name).sort());
   });
 
   it("accepts Appendix D's identifiers without requiring them", async () => {
@@ -592,7 +793,9 @@ describe("the published surface matches Appendix D (D.1)", () => {
     // §11.4: tool and parameter names at most 30 characters, tool descriptions
     // at most 500, parameter descriptions at most 150. A schema that drifted
     // past one would be refused by a browser rather than by a reviewer.
-    for (const expected of APPENDIX_D) {
+    // Applies to everything published, not only to D.1's rows — the budget is a
+    // property of the surface, not of the document that happened to specify it.
+    for (const expected of PUBLISHED) {
       expect(expected.name.length).toBeLessThanOrEqual(30);
       expect(expected.description.length).toBeLessThanOrEqual(500);
       for (const [parameter, schema] of Object.entries(expected.inputSchema.properties)) {
@@ -1015,5 +1218,641 @@ describe("a generated case is replayable by the agent that generated it", () => 
     );
 
     expect(result.current.evalCaseId).toBe("eval_selected");
+  });
+});
+
+/**
+ * The second group: the reads that let an agent finish a job it can start.
+ *
+ * Each is checked the way D.1's tools are — the arguments it accepts, what it
+ * refuses, and what it returns *after* invocation. Asserting that a tool merely
+ * exists would pass against a handler that requested the wrong endpoint, which
+ * is exactly how `get_outcome_contract` once shipped calling a route the
+ * service does not implement.
+ */
+describe("beyond Appendix D: the published schemas are pinned too (§32)", () => {
+  for (const expected of BEYOND_APPENDIX_D) {
+    it(`publishes ${expected.name} with its pinned description and input schema`, async () => {
+      // Arrange / Act — read back from the browser's registry, so what is
+      // asserted is what a discovering agent would actually be handed.
+      const tool = await registeredTool(
+        expected.name,
+        expected.phase,
+        expected.options ?? {},
+        expected.overrides ?? {},
+      );
+
+      // Assert
+      expect(tool).not.toBeNull();
+      expect(tool?.description).toBe(expected.description);
+      expect(tool?.inputSchema).toEqual(expected.inputSchema);
+    });
+  }
+
+  it("declares every one of them read-only", async () => {
+    // The whole group is reads. The mutating capabilities that remain
+    // unpublished are unpublished because §7.5 reserves them to a person, or
+    // because publishing one would let the subject of a check author its own
+    // evidence — see the module header. A `readOnlyHint: false` appearing here
+    // means that reasoning was bypassed rather than revisited.
+    for (const expected of BEYOND_APPENDIX_D) {
+      const tool = await registeredTool(
+        expected.name,
+        expected.phase,
+        expected.options ?? {},
+        expected.overrides ?? {},
+      );
+
+      expect(tool?.annotations?.readOnlyHint).toBe(true);
+    }
+  });
+});
+
+describe("get_run_timeline reports the record, not a verdict", () => {
+  const TIMELINE = {
+    run_id: "run_1",
+    run_status: "running",
+    events: [
+      {
+        id: "ev_4",
+        sequence_number: 4,
+        event_type: "tool_invocation_completed",
+        actor: "agent",
+        tool_name: "update_cart",
+        status: "recorded",
+        reported_status: "success",
+        created_at: "2026-01-01T00:00:00Z",
+      },
+    ],
+    next_after_sequence: 4,
+    has_more: false,
+  };
+
+  it("keeps what the tool said apart from what the harness recorded", async () => {
+    // The distance between the two is the entire subject of this product; a
+    // result that merged them would delete the finding before it was made.
+    // Arrange
+    recordFetch(TIMELINE);
+    const toolset = await toolsetFor("running");
+
+    // Act
+    const document = JSON.parse(textOf(await toolset.invoke("get_run_timeline"))) as Record<
+      string,
+      unknown
+    >;
+
+    // Assert
+    expect(document).toMatchObject({ run_id: "run_1", run_status: "running", returned: 1 });
+    expect(document["events"]).toEqual([
+      {
+        sequence_number: 4,
+        event_type: "tool_invocation_completed",
+        actor: "agent",
+        tool_name: "update_cart",
+        status: "recorded",
+        reported_status: "success",
+      },
+    ]);
+    // The cursor travels, so a bounded page reads as a page rather than as the
+    // end of the timeline.
+    expect(document).toMatchObject({ next_after_sequence: 4, has_more: false });
+  });
+
+  it("asks for a page small enough to return, and pages on the caller's terms", async () => {
+    // §11.4 budgets this result at 1,500 characters; the service's own default
+    // of fifty events does not fit, and a truncated page would look like a
+    // timeline that ended.
+    // Arrange
+    const defaulted = recordFetch(TIMELINE);
+    const auto = await toolsetFor("running");
+
+    // Act
+    await auto.invoke("get_run_timeline");
+
+    // Assert
+    expect(defaulted.map((call) => call.url)).toEqual(["/api/v1/runs/run_1/events?limit=10"]);
+
+    // Arrange / Act — a caller that named its own paging gets exactly that, so
+    // the service stays the authority on the bounds.
+    const supplied = recordFetch(TIMELINE);
+    const paged = await toolsetFor("running");
+    await paged.invoke("get_run_timeline", { after_sequence: 4, limit: 25 });
+
+    // Assert
+    expect(supplied.map((call) => call.url)).toEqual([
+      "/api/v1/runs/run_1/events?after_sequence=4&limit=25",
+    ]);
+  });
+
+  it("reads the named run rather than the active one", async () => {
+    // Arrange
+    const calls = recordFetch({ ...TIMELINE, run_id: "run_named" });
+    const toolset = await toolsetFor("running");
+
+    // Act
+    await toolset.invoke("get_run_timeline", { run_id: "run_named" });
+
+    // Assert
+    expect(calls[0]?.url).toBe("/api/v1/runs/run_named/events?limit=10");
+  });
+
+  it("refuses a limit with no query representation before requesting anything", async () => {
+    // Arguments arrive as `unknown` whatever the schema says; stringifying an
+    // object would send `?limit=[object Object]`.
+    // Arrange
+    const calls = recordFetch(TIMELINE);
+    const toolset = await toolsetFor("running");
+
+    // Act
+    const outcome = await toolset.invoke("get_run_timeline", { limit: { most: 3 } });
+
+    // Assert
+    expect(outcome).toMatchObject({ isError: true });
+    expect(textOf(outcome)).toContain("limit must be an integer");
+    expect(calls).toEqual([]);
+  });
+
+  it("is published while a run exists and withheld when none does", async () => {
+    expect(await toolsFor("running")).toContain("get_run_timeline");
+    // A timeline is worth reading mid-run, so this follows the run rather than
+    // waiting for a terminal phase.
+    expect(await toolsFor("failed")).toContain("get_run_timeline");
+    expect(await toolsFor("contract_ready")).not.toContain("get_run_timeline");
+  });
+});
+
+describe("get_run_comparison answers FR-019 either way", () => {
+  function side(runId: string, mode: string): Record<string, unknown> {
+    return {
+      run_id: runId,
+      status: "passed",
+      scenario_mode: mode,
+      fault_active: mode === "pre_fix",
+      implementation_version: "1.0",
+      build_commit: null,
+      overall_result: "failed",
+      critical_classifications: ["false_success_or_state_mismatch"],
+      comparison_key_hash: "sha256:key",
+    };
+  }
+
+  it("reports what a matched pair resolved and introduced", async () => {
+    // Arrange
+    const calls = recordFetch({
+      comparable: true,
+      source: side("run_source", "pre_fix"),
+      candidate: side("run_1", "post_fix"),
+      resolved_classifications: ["false_success_or_state_mismatch"],
+      introduced_classifications: [],
+    });
+    const toolset = await toolsetFor("failed");
+
+    // Act
+    const document = JSON.parse(textOf(await toolset.invoke("get_run_comparison"))) as Record<
+      string,
+      unknown
+    >;
+
+    // Assert
+    expect(calls[0]?.url).toBe("/api/v1/runs/run_1/comparison");
+    expect(document).toMatchObject({
+      run_id: "run_1",
+      comparable: true,
+      resolved_classifications: ["false_success_or_state_mismatch"],
+      introduced_classifications: [],
+    });
+    expect(document["source"]).toEqual({
+      run_id: "run_source",
+      scenario_mode: "pre_fix",
+      fault_active: true,
+      overall_result: "failed",
+      critical_classifications: ["false_success_or_state_mismatch"],
+    });
+    // The mismatch half is absent rather than empty: a `reason: ""` beside a
+    // matched pair would read as a pair with an unstated problem.
+    expect(document).not.toHaveProperty("reason");
+    expect(document).not.toHaveProperty("differing_fields");
+  });
+
+  it("names the differing fields instead of failing on a mismatch", async () => {
+    // §23.7: the rerun "remains an ordinary rerun". Reporting a mismatch as an
+    // error would push somebody to make the pair match by weakening the test.
+    // Arrange
+    recordFetch({
+      comparable: false,
+      source: side("run_source", "pre_fix"),
+      candidate: side("run_1", "pre_fix"),
+      differing_fields: ["scenario_mode"],
+      reason: "both runs used scenario mode 'pre_fix', so nothing was varied",
+    });
+    const toolset = await toolsetFor("failed");
+
+    // Act
+    const outcome = await toolset.invoke("get_run_comparison");
+    const document = JSON.parse(textOf(outcome)) as Record<string, unknown>;
+
+    // Assert
+    expect(outcome).not.toMatchObject({ isError: true });
+    expect(document).toMatchObject({
+      comparable: false,
+      differing_fields: ["scenario_mode"],
+      reason: "both runs used scenario mode 'pre_fix', so nothing was varied",
+    });
+    // Not emitted as empty lists: the question was never asked of this pair,
+    // and "nothing was resolved" is a different statement.
+    expect(document).not.toHaveProperty("resolved_classifications");
+    expect(document).not.toHaveProperty("introduced_classifications");
+  });
+
+  it("passes on the server's refusal when the run was armed without a source", async () => {
+    // Arrange
+    recordFetch(
+      {
+        error: {
+          code: "PRECONDITION_FAILED",
+          message: "This run was not armed against a comparison source.",
+          retryable: false,
+        },
+      },
+      409,
+    );
+    const toolset = await toolsetFor("failed");
+
+    // Act
+    const outcome = await toolset.invoke("get_run_comparison");
+
+    // Assert
+    expect(outcome).toMatchObject({ isError: true });
+    expect(textOf(outcome)).toContain("not armed against a comparison source");
+  });
+
+  it("is withheld until both runs could have terminated", async () => {
+    expect(await toolsFor("running")).not.toContain("get_run_comparison");
+    expect(await toolsFor("failed")).toContain("get_run_comparison");
+  });
+});
+
+describe("list_regression_evals makes an earlier case reachable", () => {
+  it("returns the cases keyed the way the API names them", async () => {
+    // Without this an agent could replay only the case it cut this session: a
+    // case created earlier was invisible, and it cannot name what it cannot
+    // list.
+    // Arrange
+    const calls = recordFetch({
+      cases: [
+        {
+          eval_case_id: "eval_1",
+          name: "SAVE20 total mismatch",
+          source_run_id: "run_0",
+          content_hash: "sha256:abc",
+          schema_version: "1.0",
+          created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+    });
+    const toolset = await toolsetFor("contract_ready");
+
+    // Act
+    const document = JSON.parse(textOf(await toolset.invoke("list_regression_evals"))) as Record<
+      string,
+      unknown
+    >;
+
+    // Assert
+    expect(calls[0]?.url).toBe("/api/v1/evals");
+    expect(document).toEqual({
+      cases: [{ eval_case_id: "eval_1", name: "SAVE20 total mismatch", source_run_id: "run_0" }],
+      returned: 1,
+    });
+  });
+
+  it("refuses a listing that does not match its contract", async () => {
+    // A response body is untrusted input even from our own server.
+    // Arrange
+    recordFetch({ cases: [{ eval_case_id: "eval_1", content_hash: "sha256:abc" }] });
+    const toolset = await toolsetFor("contract_ready");
+
+    // Act
+    const outcome = await toolset.invoke("list_regression_evals");
+
+    // Assert
+    expect(outcome).toMatchObject({ isError: true });
+    expect(textOf(outcome)).toContain("name");
+  });
+});
+
+describe("the audit tools follow the module, not a local guess", () => {
+  const REPORT = {
+    report_artifact_id: "art_1",
+    content_hash: "sha256:report",
+    report: {
+      schema_version: "1.0",
+      audited_site: "https://shop.example",
+      checked_using: "Cart journey",
+      summary: {
+        headline: "1 of your store's agent tools said it worked when it had not: add_to_cart.",
+        what_this_means: "An agent shopping on your store can be told an item was added.",
+        tools: [
+          {
+            tool: "add_to_cart",
+            says: "reported that it worked, but your store did not change.",
+            what_to_do: "Fix this first.",
+          },
+        ],
+        not_checked: ["proceed_to_checkout"],
+        limits: ["This checked one journey through your store."],
+      },
+      evidence: [{ tool_name: "add_to_cart", reported: { ok: true }, observed: { items: [] } }],
+    },
+  };
+
+  it("registers nothing at all while the deployment reports the module off", async () => {
+    // 009-T12: a module the deployment reports as unavailable must be
+    // unavailable everywhere. A tool that registered and then refused every
+    // call is the half-shipped failure that rule exists to prevent.
+    const published = await toolsFor("contract_ready");
+
+    expect(published).not.toContain("list_audit_packs");
+    expect(published).not.toContain("get_audit_report");
+  });
+
+  it("registers both once the server says the module is on", async () => {
+    const published = await toolsFor("contract_ready", {}, AUDIT_ENABLED);
+
+    expect(published).toContain("list_audit_packs");
+    expect(published).toContain("get_audit_report");
+  });
+
+  it("offers the packs rather than choosing one (FR-161)", async () => {
+    // Arrange
+    const calls = recordFetch({
+      packs: [
+        {
+          pack_id: "cart_journey_v1",
+          title: "Cart journey",
+          signature: ["add_to_cart", "get_cart"],
+          never_invoked: ["proceed_to_checkout"],
+        },
+      ],
+    });
+    const toolset = await toolsetFor("contract_ready", {}, AUDIT_ENABLED);
+
+    // Act
+    const document = JSON.parse(textOf(await toolset.invoke("list_audit_packs"))) as Record<
+      string,
+      unknown
+    >;
+
+    // Assert — the tools a pack reports as present and never invokes travel
+    // with it, because that is the half FR-162 exists to make visible.
+    expect(calls[0]?.url).toBe("/api/v1/audits/packs");
+    expect(document).toEqual({
+      packs: [
+        {
+          pack_id: "cart_journey_v1",
+          title: "Cart journey",
+          signature: ["add_to_cart", "get_cart"],
+          never_invoked: ["proceed_to_checkout"],
+        },
+      ],
+      returned: 1,
+    });
+  });
+
+  it("bounds the sealed report and points at the document it summarises", async () => {
+    // §11.4: detailed evidence stays server-side. The advice column and the
+    // engineer-grade transcript are dropped, and the hash is what lets a reader
+    // check that the full report they fetch is the one described here.
+    // Arrange
+    const calls = recordFetch(REPORT);
+    const toolset = await toolsetFor("contract_ready", {}, AUDIT_ENABLED);
+
+    // Act
+    const text = textOf(await toolset.invoke("get_audit_report"));
+    const document = JSON.parse(text) as Record<string, unknown>;
+
+    // Assert
+    expect(calls[0]?.url).toBe("/api/v1/audits/current/report");
+    expect(document).toMatchObject({
+      audited_site: "https://shop.example",
+      checked_using: "Cart journey",
+      content_hash: "sha256:report",
+      not_checked: ["proceed_to_checkout"],
+      report: "/api/v1/audits/current/report",
+    });
+    expect(document["tools"]).toEqual([
+      { tool: "add_to_cart", says: "reported that it worked, but your store did not change." },
+    ]);
+    expect(text).not.toContain("what_to_do");
+    expect(text).not.toContain("Fix this first");
+    // Inside §11.4's ordinary budget, so nothing a merchant reads arrives cut
+    // in half.
+    expect(text.length).toBeLessThanOrEqual(1_500);
+    expect(text).not.toContain("truncated");
+  });
+
+  it("marks the report as untrusted content", async () => {
+    // The prose describes a storefront the harness does not own and names tools
+    // that storefront published. It is content to read, never instructions.
+    const tool = await registeredTool("get_audit_report", "contract_ready", {}, AUDIT_ENABLED);
+
+    expect(tool?.annotations?.untrustedContentHint).toBe(true);
+  });
+
+  it("reports a missing audit as a refusal rather than an empty report", async () => {
+    // Arrange
+    recordFetch(
+      {
+        error: {
+          code: "RESOURCE_NOT_FOUND",
+          message: "This workspace has not completed an audit.",
+          retryable: false,
+        },
+      },
+      404,
+    );
+    const toolset = await toolsetFor("contract_ready", {}, AUDIT_ENABLED);
+
+    // Act
+    const outcome = await toolset.invoke("get_audit_report");
+
+    // Assert
+    expect(outcome).toMatchObject({ isError: true });
+    expect(textOf(outcome)).toContain("has not completed an audit");
+  });
+});
+
+describe("the benchmark reads state the product's own claim as numbers", () => {
+  function rate(value: string | null): Record<string, unknown> {
+    return { numerator: 1, denominator: 4, value };
+  }
+
+  const SUITE = {
+    benchmark_id: "bm_1",
+    status: "finalized",
+    source_kind: "recorded_fixture",
+    correlation_mode: "trial_id",
+    normalized_adapter_version: "1.0",
+    result_artifact_id: "art_9",
+    manifest_content_hash: "sha256:manifest",
+    manifest: { source_kind: "recorded_fixture", correlation_mode: "trial_id" },
+    counts: {
+      call_level_pass_outcome_pass: 1,
+      call_level_pass_outcome_fail: 2,
+      call_level_fail_outcome_pass: 0,
+      call_level_fail_outcome_fail: 1,
+      eligible_trials: 4,
+      excluded_trials: 0,
+      error_trials: 0,
+      total_trials: 4,
+    },
+    metrics: {
+      call_level_pass_rate: rate("0.7500"),
+      outcome_pass_rate: rate("0.2500"),
+      end_to_end_success_rate: rate("0.2500"),
+      silent_outcome_failure_rate: rate("0.5000"),
+      incremental_outcome_failure_trials: 2,
+    },
+    by_scenario: [],
+    by_failure_profile: [],
+    trials: [
+      {
+        external_trial_id: "t_1",
+        scenario_id: "s_1",
+        call_level_result: "pass",
+        outcome_result: "fail",
+        eligibility: "eligible",
+        exclusion_reason: null,
+        addressable: true,
+      },
+    ],
+  };
+
+  it("lists the suites so a summary can be asked for by id", async () => {
+    // Arrange
+    const calls = recordFetch({
+      benchmarks: [
+        {
+          benchmark_id: "bm_1",
+          status: "finalized",
+          source_kind: "recorded_fixture",
+          correlation_mode: "trial_id",
+          result_artifact_id: "art_9",
+          created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+    });
+    const toolset = await toolsetFor("contract_ready");
+
+    // Act
+    const document = JSON.parse(textOf(await toolset.invoke("list_benchmarks"))) as Record<
+      string,
+      unknown
+    >;
+
+    // Assert — AC-16: the declared source kind travels with every row, so a
+    // recorded fixture is never read as a live execution.
+    expect(calls[0]?.url).toBe("/api/v1/benchmarks");
+    expect(document).toEqual({
+      benchmarks: [
+        {
+          benchmark_id: "bm_1",
+          status: "finalized",
+          source_kind: "recorded_fixture",
+          created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+      returned: 1,
+    });
+  });
+
+  it("returns the matrix and rates while the trials stay server-side", async () => {
+    // Arrange
+    const calls = recordFetch(SUITE);
+    const toolset = await toolsetFor("contract_ready");
+
+    // Act
+    const text = textOf(await toolset.invoke("get_benchmark_summary", { benchmark_id: "bm_1" }));
+    const document = JSON.parse(text) as Record<string, unknown>;
+
+    // Assert
+    expect(calls[0]?.url).toBe("/api/v1/benchmarks/bm_1");
+    expect(document).toMatchObject({
+      benchmark_id: "bm_1",
+      status: "finalized",
+      source_kind: "recorded_fixture",
+      manifest_content_hash: "sha256:manifest",
+    });
+    expect(document["counts"]).toMatchObject({
+      call_level_pass_outcome_fail: 2,
+      total_trials: 4,
+    });
+    expect(document["metrics"]).toEqual({
+      call_level_pass_rate: "0.7500",
+      outcome_pass_rate: "0.2500",
+      end_to_end_success_rate: "0.2500",
+      silent_outcome_failure_rate: "0.5000",
+      incremental_outcome_failure_trials: 2,
+    });
+    // Dropped rather than truncated: a matrix cut off halfway reads as a
+    // smaller matrix, and §11.4 keeps detailed evidence server-side.
+    expect(document).not.toHaveProperty("trials");
+    expect(document).not.toHaveProperty("manifest");
+    expect(text.length).toBeLessThanOrEqual(1_500);
+  });
+
+  it("keeps a rate over an empty population as null rather than zero", async () => {
+    // FR-092: a rate nobody could compute is not a rate of zero, and rendering
+    // it as one would report a suite with no eligible trials as a total failure.
+    // Arrange
+    recordFetch({
+      ...SUITE,
+      metrics: {
+        ...SUITE.metrics,
+        outcome_pass_rate: { numerator: 0, denominator: 0, value: null },
+      },
+    });
+    const toolset = await toolsetFor("contract_ready");
+
+    // Act
+    const document = JSON.parse(
+      textOf(await toolset.invoke("get_benchmark_summary", { benchmark_id: "bm_1" })),
+    ) as Record<string, unknown>;
+
+    // Assert
+    expect((document["metrics"] as Record<string, unknown>)["outcome_pass_rate"]).toBeNull();
+  });
+
+  it("encodes a suite identifier rather than letting it address another route", async () => {
+    // An agent-supplied `../workspace` interpolated raw would be normalized by
+    // the browser into a request for a different endpoint — still
+    // workspace-scoped, so nothing leaks, but the caller would be answered
+    // about something it never asked for.
+    // Arrange
+    const calls = recordFetch(SUITE);
+    const toolset = await toolsetFor("contract_ready");
+
+    // Act
+    await toolset.invoke("get_benchmark_summary", { benchmark_id: "../workspace" });
+
+    // Assert
+    expect(calls[0]?.url).toBe("/api/v1/benchmarks/..%2Fworkspace");
+  });
+
+  it("refuses a summary with no suite named, before requesting anything", async () => {
+    // The schema marks it required, and the browser is under no obligation to
+    // have enforced that — an absent id would otherwise be requested as
+    // `/benchmarks/null`, and a workspace holds many suites and selects none.
+    // Arrange
+    const calls = recordFetch(SUITE);
+    const toolset = await toolsetFor("contract_ready");
+
+    // Act
+    const outcome = await toolset.invoke("get_benchmark_summary");
+
+    // Assert
+    expect(outcome).toMatchObject({ isError: true });
+    expect(textOf(outcome)).toContain("benchmark_id is required");
+    expect(calls).toEqual([]);
   });
 });

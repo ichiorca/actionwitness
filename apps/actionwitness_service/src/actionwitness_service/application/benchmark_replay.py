@@ -55,6 +55,12 @@ from actionwitness_core.evals.models import TrajectoryStep
 from actionwitness_core.ports.models import ScenarioSelection
 
 from actionwitness_service.api.errors import ApiError
+
+# One-way by design: the repetition runner reaches into the suite service to
+# record each trial, and nothing in that service reaches back here. The
+# trajectory reader below is deliberately duplicated in narrower form there
+# rather than imported, so the dependency cannot become a cycle.
+from actionwitness_service.application.benchmark_service import BenchmarkService, RepetitionPlan
 from actionwitness_service.application.eval_runner import (
     TrajectoryReplayer,
     prepare_eval_workspace,
@@ -62,7 +68,13 @@ from actionwitness_service.application.eval_runner import (
 from actionwitness_service.persistence.database import Database
 from actionwitness_service.persistence.repositories import new_id
 
-__all__ = ["BenchmarkReplayService", "ReplayedTrial", "TrialReplayInput"]
+__all__ = [
+    "BenchmarkReplayService",
+    "RepeatedTrial",
+    "RepeatedTrialService",
+    "ReplayedTrial",
+    "TrialReplayInput",
+]
 
 
 class _NoConsent:
@@ -297,6 +309,142 @@ class BenchmarkReplayService:
                     result.value,
                     TrialEligibility.ELIGIBLE.value,
                     trial.trial_row_id,
+                ),
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class RepeatedTrial:
+    """One repetition, as it was recorded and then judged."""
+
+    external_trial_id: str
+    repetition_index: int
+    outcome_result: OutcomeTrialResult
+    eligibility: TrialEligibility
+    exclusion_reason: ExclusionReason | None
+    evaluation_run_id: str | None
+    detail: str = ""
+
+
+class RepeatedTrialService:
+    """Run one bound variant N times, each repetition on its own (§26.5).
+
+    §26.5's Tier 3 showcase is "six intent variants with five repeated trials
+    each", and a single sample cannot characterise a non-deterministic agent: it
+    can only report what happened once. Repetition is what turns "the observed
+    state disagreed with the evaluator" into a rate somebody can act on.
+
+    **Every repetition is a whole trial.** Its own row, its own eval workspace,
+    its own restored fixture, its own evaluation run. A batch that reused one
+    workspace would be measuring how a target behaves after four previous
+    journeys, and reporting it as five independent observations.
+
+    **The row exists before the replay does.** `record_repetition` commits first,
+    so a batch that is cancelled or that dies halfway leaves the repetitions it
+    started visible as `excluded` / `not_reached` rather than absent — the
+    constitution requires a partially completed operation to stay visible rather
+    than be silently retried, and nothing in this class retries anything.
+
+    **No transaction spans a replay.** ADR-0003: the write that records a
+    repetition and the write that closes it are separate short transactions
+    around I/O that holds neither. The workspace lock is not held either, for the
+    same reason `/replay` does not hold it.
+    """
+
+    def __init__(
+        self,
+        database: Database,
+        registry: Any,
+        workspaces: Any,
+        *,
+        replays: Any | None = None,
+    ) -> None:
+        self._database = database
+        # Injectable so a test can make one repetition of a batch fail or be
+        # cancelled deterministically. Defaulted rather than required, so the
+        # route cannot accidentally be handed a replayer that is not the real one.
+        self._replays = replays or BenchmarkReplayService(database, registry, workspaces)
+
+    async def run(
+        self,
+        plan: RepetitionPlan,
+        *,
+        workspace_id: str,
+        contract: OutcomeContract,
+        adapter_id: str,
+    ) -> list[RepeatedTrial]:
+        """Record and replay each repetition in the plan, in order.
+
+        Sequential rather than concurrent, deliberately. Each repetition drives
+        the same target through its adapter, and running them at once would let
+        one repetition observe state another one produced — the isolation FR-083
+        buys with a fresh workspace is per-workspace, not per-target-process.
+        Sequential also means a cancellation lands between two repetitions rather
+        than in the middle of several.
+        """
+        completed: list[RepeatedTrial] = []
+        for repetition_index in plan.repetition_ids():
+            async with self._database.transaction() as work:
+                trial_row_id = await BenchmarkService(work, workspace_id).record_repetition(
+                    plan, repetition_index
+                )
+            external_trial_id = plan.external_trial_id(repetition_index)
+            # `CancelledError` is a `BaseException` and passes straight through
+            # this call, out of this loop, and out of the request — which is what
+            # cancellation propagating means. The repetitions already recorded
+            # stay committed and stay excluded, and none of them is retried.
+            replayed = await self._replays.replay(
+                TrialReplayInput(
+                    trial_row_id=trial_row_id,
+                    external_trial_id=external_trial_id,
+                    trajectory=stored_trajectory(plan.metadata_json),
+                    contract=contract,
+                    scenario=ScenarioSelection(
+                        scenario_mode=plan.scenario_mode or "post_fix",
+                        fault_profile=plan.failure_profile,
+                    ),
+                ),
+                owner_workspace_id=workspace_id,
+                adapter_id=adapter_id,
+            )
+            if replayed.eligibility is TrialEligibility.EXCLUDED:
+                await self._record_exclusion(trial_row_id, replayed)
+            completed.append(
+                RepeatedTrial(
+                    external_trial_id=external_trial_id,
+                    repetition_index=repetition_index,
+                    outcome_result=replayed.outcome_result,
+                    eligibility=replayed.eligibility,
+                    exclusion_reason=replayed.exclusion_reason,
+                    evaluation_run_id=replayed.evaluation_run_id,
+                    detail=replayed.detail,
+                )
+            )
+        return completed
+
+    async def _record_exclusion(self, trial_row_id: str, replayed: ReplayedTrial) -> None:
+        """Say *why* a repetition produced no verdict.
+
+        The replay writes the row back only when it succeeds; an exclusion is
+        returned rather than stored, because `BenchmarkReplayService` is also used
+        where the caller decides what an exclusion means. Here it means the same
+        thing it means everywhere in FR-092 — coverage, not a business failure —
+        and the reason is written so a reader can tell a harness that broke from a
+        target that never reached a verdict. Left unwritten, every failed
+        repetition would read as the generic `outcome_not_reached` the row was
+        created with.
+        """
+        if replayed.exclusion_reason is None:  # pragma: no cover - excluded implies a reason
+            return
+        async with self._database.transaction() as work:
+            await work.execute(
+                "UPDATE benchmark_trials SET outcome_result = ?, eligibility = ?, "
+                "exclusion_reason = ? WHERE id = ?",
+                (
+                    replayed.outcome_result.value,
+                    TrialEligibility.EXCLUDED.value,
+                    replayed.exclusion_reason.value,
+                    trial_row_id,
                 ),
             )
 

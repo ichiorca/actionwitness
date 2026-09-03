@@ -123,7 +123,8 @@
       "spec_ref": "spec §17.1",
       "members": {
         "interactive": "An anonymous human-facing workspace.",
-        "eval": "A server-created isolated workspace for replay; its mutable state is removed after its report is persisted."
+        "eval": "A server-created isolated workspace for replay; its mutable state is removed after its report is persisted.",
+        "observed": "A server-created workspace that a self-witnessing run observes, owned by the workspace recording that run."
       }
     },
     "confirmation_status": {
@@ -151,6 +152,8 @@
         "passed": "Verification passed with no failing check.",
         "passed_with_warnings": "Verification passed with at least one warning.",
         "failed": "Verification failed at least one critical check.",
+        "error": "The harness could not complete the run, so no verdict was reached. Not a flavour of pass (§22).",
+        "cancelled": "The run was cancelled before verification completed.",
         "eval_ready": "A regression eval exists and can be replayed.",
         "eval_running": "A regression replay is in progress."
       }
@@ -162,6 +165,7 @@
         "arm_run": "Arm the selected contract and capture the initial observation.",
         "invoke_target_tool": "Exercise one allowlisted target tool.",
         "decide_confirmation": "Approve once or deny the pending protected action.",
+        "cancel_confirmation": "Withdraw the pending request instead of deciding it. The protected action does not run and nothing is changed.",
         "verify_outcome": "Capture final state and evaluate the contract.",
         "review_findings": "Read the report and its findings.",
         "curate_candidates": "Accept or reject each proposed assertion candidate.",
@@ -514,6 +518,13 @@
       "retryable": false,
       "description": "A request ID was reused with a different payload. Fails closed: a key identifies one intent, and retrying under a new key could duplicate the mutation.",
       "spec_ref": "Appendix D.2",
+      "provenance": "spec"
+    },
+    "OBSERVATION_ALREADY_CAPTURED": {
+      "http_status": 409,
+      "retryable": false,
+      "description": "A second, differing observation was submitted for a phase that already has one. §15.7 makes capture idempotent by `(pairing_id, phase, content_hash)`: a repeat carrying the same hash returns the existing result and never reaches this. Not retryable — the phase is captured, and a bridge that saw a different cart is describing a different moment than the one this trial recorded.",
+      "spec_ref": "§15.7",
       "provenance": "spec"
     },
     "ORIGIN_NOT_ALLOWED": {

@@ -70,6 +70,7 @@ async def current_guidance(work: UnitOfWork, workspace_id: str) -> GuidanceState
 
     run_state: RunState | None = None
     correlation: str | None = None
+    case_ready = replay_open = False
     if row["active_run_id"]:
         run = await work.fetch_one(
             "SELECT id, status FROM runs WHERE id = ? AND workspace_id = ?",
@@ -78,11 +79,56 @@ async def current_guidance(work: UnitOfWork, workspace_id: str) -> GuidanceState
         if run is not None:
             run_state = RunState(run["status"])
             correlation = str(run["id"])
+            case_ready, replay_open = await _regression_progress(work, workspace_id, str(run["id"]))
 
     return derive_guidance(
-        phase_for(has_contract=bool(row["selected_contract_id"]), run_state=run_state),
+        phase_for(
+            has_contract=bool(row["selected_contract_id"]),
+            run_state=run_state,
+            regression_case_ready=case_ready,
+            regression_replay_open=replay_open,
+        ),
         correlation_id=correlation,
     )
+
+
+async def _regression_progress(
+    work: UnitOfWork, workspace_id: str, run_id: str
+) -> tuple[bool, bool]:
+    """Whether this run has a regression case, and whether one is replaying.
+
+    §11.5's `eval created` and `replay started` edges leave the source run's
+    state untouched, so these two facts are the only way the projection can
+    reach `eval_ready` and `eval_running`. Without them the workspace stopped at
+    the verdict, the operator was never told a replay was available, and the
+    server could not emit `run_regression_eval` at all.
+
+    Both reads are scoped to *this* run's case. A workspace can hold cases cut
+    from several runs and benchmark trials replaying on their own schedule
+    (`evaluation_runs` carries either an `evaluation_case_id` or a
+    `benchmark_trial_id`), and either would otherwise redirect the banner to a
+    replay that has nothing to do with the run in front of the reader.
+
+    "Replaying" is an *open* row rather than a status, because `EvalRunService`
+    opens one as `error` with no `completed_at` so a crash mid-replay cannot
+    look like a pass. `completed_at IS NULL` therefore means exactly "this
+    replay has not reported an outcome" — which covers the crash too, and is why
+    `eval_running` carries a reset as its recovery.
+    """
+    case = await work.fetch_one(
+        "SELECT id FROM evaluation_cases WHERE workspace_id = ? AND source_run_id = ? LIMIT 1",
+        (workspace_id, run_id),
+    )
+    if case is None:
+        return False, False
+
+    open_replay = await work.fetch_one(
+        "SELECT id FROM evaluation_runs "
+        "WHERE owner_workspace_id = ? AND evaluation_case_id = ? AND completed_at IS NULL "
+        "LIMIT 1",
+        (workspace_id, str(case["id"])),
+    )
+    return True, open_replay is not None
 
 
 class GuidanceRecorder:

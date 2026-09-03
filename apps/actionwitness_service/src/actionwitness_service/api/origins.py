@@ -27,10 +27,26 @@ only inconveniences honest clients.
 
 **Reads are not checked.** §20.1 says "mutating API requests", and a GET that
 changed state would be the bug to fix rather than a reason to widen this.
+
+**One family of paths is served to a second origin, and only one.** §20.1's
+Shopify clause: the bridge routes "allow CORS only from the single configured
+development-store origin ... require the pairing bearer credential instead of the
+harness cookie, omit credentialed-cookie CORS". A theme running on the store's
+origin cannot present the harness origin, so a policy with one global allowlist
+would refuse every bridge request — and the temptations then are to widen the
+allowlist for everybody or to skip the check on those paths, both of which give
+away the property this module exists to keep.
+
+So the allowance is *scoped*: one extra origin, bound to one path prefix,
+matched on segment boundaries. It widens nothing anywhere else, and the routes it
+covers carry no ambient authority at all — they authorize by a bearer credential
+the harness minted, never by the workspace cookie, so an origin allowance here
+cannot be spent on somebody's session.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Final
 
 from starlette.requests import Request
@@ -47,15 +63,30 @@ MUTATING_METHODS: Final = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 class OriginPolicy:
     """Decides whether a mutating request's `Origin` is acceptable."""
 
-    def __init__(self, configured_origin: str | None = None) -> None:
+    def __init__(
+        self,
+        configured_origin: str | None = None,
+        *,
+        scoped_origins: Mapping[str, str] | None = None,
+    ) -> None:
         """`configured_origin` is the operator's `HARNESS_PUBLIC_ORIGIN`.
 
         When it is absent — the documented local-development case — the request's
         own origin is used instead. That is not a weaker rule than it looks: the
         harness is served same-origin (§20.1), so a legitimate page's `Origin`
         equals the URL it is posting to, and a cross-site page's does not.
+
+        `scoped_origins` maps a path prefix to the **one** additional origin
+        permitted beneath it — §20.1's Shopify bridge clause, and nothing else.
+        A mapping rather than a set because the pairing between path and origin is
+        the whole safety property: an origin allowed everywhere would be an
+        allowlist entry, and this is a door on one corridor.
         """
         self._configured = configured_origin
+        self._scoped = {
+            prefix.rstrip("/"): _normalize(origin)
+            for prefix, origin in (scoped_origins or {}).items()
+        }
 
     def check(self, request: Request) -> None:
         """Raise `ORIGIN_NOT_ALLOWED` if this mutation came from elsewhere."""
@@ -72,10 +103,36 @@ class OriginPolicy:
                 "This request did not come from an allowed origin.",
             )
 
+    def scoped_origin_for(self, path: str) -> str | None:
+        """The extra origin this path may be called from, if it has one.
+
+        Exposed so a route can echo the same value in its CORS headers rather
+        than deriving a second answer from the settings. Two derivations of one
+        allowance is how a policy and the header advertising it come to disagree.
+        """
+        return next(
+            (origin for prefix, origin in self._scoped.items() if _under(path, prefix)),
+            None,
+        )
+
     def _allowed(self, request: Request) -> frozenset[str]:
-        if self._configured is not None:
-            return frozenset({_normalize(self._configured)})
-        return frozenset({_normalize(f"{request.url.scheme}://{request.url.netloc}")})
+        base = (
+            _normalize(self._configured)
+            if self._configured is not None
+            else _normalize(f"{request.url.scheme}://{request.url.netloc}")
+        )
+        scoped = self.scoped_origin_for(request.url.path)
+        return frozenset({base} if scoped is None else {base, scoped})
+
+
+def _under(path: str, prefix: str) -> bool:
+    """Segment-boundary containment, never a bare `startswith`.
+
+    The same trap `middleware._under` documents: a character-wise prefix test
+    makes `/api/v1/shopifyX` and `/api/v1/shopify-admin` inherit an allowance
+    nobody granted them.
+    """
+    return path == prefix or path.startswith(f"{prefix}/")
 
 
 def _normalize(origin: str) -> str:

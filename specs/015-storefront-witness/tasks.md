@@ -30,7 +30,17 @@ Cite the T-ID in every commit that advances it.
       the classifier and report composer were reachable only from tests and an
       authorized audit could never finish. Exit-gate criterion 2 now also
       drives the journey through HTTP.
-      **Remaining for the full operator journey:** the browser client that
-      enumerates `getTools()`, exercises the surface, reads `cart.js`, and
-      POSTs the transcript. The server half is complete and tested; the UI is
-      not built.
+- [x] T9 — The operator journey in the browser: an Audit view with its own rail
+      entry; authorization for one origin behind an explicit affirmation; the
+      pack catalogue offered and never auto-selected (FR-161); a collector
+      generated *from the chosen pack* that bakes in FR-162's never-invoked list
+      and reads `cart.js` in the operator's own session (§25.8); transcript
+      submission; and the merchant report with its limits rendered.
+      **Why a snippet and not a button:** a document can enumerate only its own
+      `modelContext`, and `cart.js` is a read of the caller's own session —
+      neither crosses an origin, and the one design that would appear to (a
+      server-side fetch) is what §12.17 forbids. The generated collector runs on
+      the storefront and the transcript comes back; that is the trust boundary,
+      not a workaround for it.
+      Collector text lives in `webmcp/auditCollector.ts` so the isolation gate
+      still covers the component that displays it.

@@ -126,4 +126,17 @@ test.describe("capability reporting", () => {
     await workspace.open();
     await expect(workspace.capabilities).toContainText("buggy_store");
   });
+
+  test("shows disabled Shopify guidance without offering a pairing action", async ({
+    workspace,
+  }) => {
+    // The hermetic E2E deployment intentionally supplies no Shopify target.
+    // A shipped optional integration must be visible as unavailable without
+    // leaving a control that can only fail against an unmounted route.
+    await workspace.open();
+
+    const pairing = workspace.panel("Shopify pairing");
+    await expect(pairing).toContainText("target disabled");
+    await expect(pairing.getByRole("button", { name: /create pairing/i })).toHaveCount(0);
+  });
 });

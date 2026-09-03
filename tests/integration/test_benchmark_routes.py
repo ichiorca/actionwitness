@@ -127,6 +127,67 @@ async def test_a_suite_is_created_in_draft(visitor: httpx.AsyncClient) -> None:
     assert created.json()["source_kind"] == "recorded_fixture"
 
 
+async def test_the_suites_can_be_listed_so_a_person_can_choose_one(
+    visitor: httpx.AsyncClient,
+) -> None:
+    """The matrix had no door: every other benchmark route needs an id.
+
+    Without a listing, a suite could only be reached by somebody who already
+    held its identifier — workable for an API client and impossible from a
+    screen, which is why the dual-layer view shipped unreachable.
+    """
+    # Arrange
+    first = await _suite(visitor)
+    second = await _suite(visitor)
+
+    # Act
+    listed = await visitor.get(BENCHMARKS)
+
+    # Assert
+    assert listed.status_code == 200, listed.text
+    ids = [row["benchmark_id"] for row in listed.json()["benchmarks"]]
+    assert set(ids) == {first, second}
+    # Newest first, so the suite just created is the one offered by default.
+    assert ids[0] == second
+    assert listed.json()["benchmarks"][0]["status"] == "draft"
+
+
+async def test_an_empty_workspace_lists_no_suites(visitor: httpx.AsyncClient) -> None:
+    """Nothing yet is an ordinary state, not a 404 and not an error."""
+    # Arrange / Act
+    listed = await visitor.get(BENCHMARKS)
+
+    # Assert
+    assert listed.status_code == 200
+    assert listed.json()["benchmarks"] == []
+
+
+async def test_the_listing_shows_only_this_workspace_s_suites(stack: FastAPI) -> None:
+    """004's isolation rule reaches the listing too.
+
+    A listing is the one route that returns identifiers nobody supplied, so a
+    leak here hands another workspace's ids to a caller who could then read
+    them by name.
+    """
+    # Arrange
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=stack, raise_app_exceptions=False),
+        base_url="https://harness.test",
+    ) as owner:
+        await _suite(owner)
+
+    # Act — a second client gets its own workspace cookie.
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=stack, raise_app_exceptions=False),
+        base_url="https://harness.test",
+    ) as intruder:
+        listed = await intruder.get(BENCHMARKS)
+
+    # Assert
+    assert listed.status_code == 200
+    assert listed.json()["benchmarks"] == []
+
+
 async def test_an_unknown_source_kind_is_refused(visitor: httpx.AsyncClient) -> None:
     """The enum is closed; a typo must not become a new population."""
     # Arrange / Act

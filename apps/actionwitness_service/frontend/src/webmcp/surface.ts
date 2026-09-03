@@ -42,7 +42,7 @@
 import { useCallback, useEffect, useRef } from "react";
 
 import { request } from "../api/client";
-import { readSurface, subscribeToToolChange } from "./adapter";
+import { canObserveToolChanges, readSurface, subscribeToToolChange } from "./adapter";
 
 /** How long a `toolchange` burst is allowed to settle before re-reading. */
 export const TOOLCHANGE_QUIET_PERIOD_MS = 150;
@@ -166,9 +166,16 @@ export function useToolSurfaceWitness(runId: string | null): ToolSurfaceWitness 
     if (unsubscribe === null) {
       return;
     }
+    // EventTarget is optional in embedded WebMCP bridges. Snapshot reads still
+    // work there, so capture the baseline now and take the missing second
+    // snapshot when verification flushes this witness.
+    const observesToolChanges = canObserveToolChanges();
     void capture();
 
     pending.current = async (): Promise<void> => {
+      if (!observesToolChanges) {
+        missed = true;
+      }
       // Any debounced read is owed to this run now, rather than after a quiet
       // period the caller is about to make irrelevant.
       if (timer !== undefined) {

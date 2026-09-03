@@ -22,6 +22,7 @@ from actionwitness_service.persistence.database import Database
 from actionwitness_service.persistence.migrations import (
     MIGRATIONS,
     TIER_ONE_TABLES,
+    TIER_THREE_SHOPIFY_TABLES,
     TIER_TWO_BENCHMARK_TABLES,
     TIER_TWO_EVAL_TABLES,
     Migration,
@@ -31,11 +32,26 @@ from actionwitness_service.persistence.migrations import (
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
-#: Tables §17.1 defines that no milestone has yet written to. M6 landed the
-#: three eval tables in migration 2 and M7 the two benchmark tables in migration
-#: 3, so each moved out of this list into its own tuple as its code arrived. The
-#: Shopify tables belong to M10 and would still be placeholders today.
-UNBUILT_TABLES = ("shopify_pairings",)
+#: Every table §17.1 defines that some milestone has landed the code for. M6
+#: landed the three eval tables in migration 2, M7 the two benchmark tables in
+#: migration 3, migration 5 the audit table, and migration 9 the Shopify pairing
+#: table alongside `ShopifyPairingService` — the code that fills it.
+#:
+#: This list used to be its complement: the tables that had *not* been built,
+#: asserted absent. That reading retired itself as each one landed, and would
+#: have gone vacuous the moment the last one did. The positive form keeps the
+#: same property and survives: a table added to the schema without being
+#: declared here fails, so no table arrives unannounced.
+DECLARED_TABLES = (
+    *TIER_ONE_TABLES,
+    *TIER_TWO_EVAL_TABLES,
+    *TIER_TWO_BENCHMARK_TABLES,
+    *TIER_THREE_SHOPIFY_TABLES,
+    "external_audits",
+    # The rebuild scratch table migration 4 drops before it commits; named so
+    # the accounting below is total rather than approximately total.
+    "evaluation_runs_rebuilt",
+)
 
 
 async def _table_names(connection: aiosqlite.Connection) -> set[str]:
@@ -61,9 +77,11 @@ async def test_migrations_create_every_tier_one_table(database: Database) -> Non
 async def test_no_table_ships_before_the_code_that_fills_it(database: Database) -> None:
     """A schema no code fills is a wish, not a record (ADR-0003).
 
-    Narrowed when M6 landed the eval tables: the benchmark and Shopify tables
-    are still unwritten, so shipping them now would be exactly the placeholder
-    this gate forbids.
+    Every table the runner creates must be one this module names, and each name
+    in `DECLARED_TABLES` is one a milestone has landed the writing code for. A
+    table added ahead of its code fails here, which is the placeholder this gate
+    forbids; a table renamed without updating the list fails too, which is the
+    decay the old absent-tables reading could not catch.
     """
     # Arrange / Act
     await database.initialize()
@@ -71,7 +89,8 @@ async def test_no_table_ships_before_the_code_that_fills_it(database: Database) 
     # Assert
     async with database.connect() as connection:
         present = await _table_names(connection)
-    assert present.isdisjoint(UNBUILT_TABLES)
+    undeclared = sorted(present - set(DECLARED_TABLES) - {"sqlite_sequence"})
+    assert undeclared == [], f"tables created by no declared milestone: {undeclared}"
 
 
 async def test_migration_one_still_carries_only_tier_one_tables(database: Database) -> None:
@@ -177,6 +196,58 @@ async def test_a_benchmark_trial_cannot_bind_one_run_twice(database: Database) -
         # Act / Assert — a second trial naming the same outcome run is refused.
         with pytest.raises(sqlite3.IntegrityError):
             await connection.execute(*_trial("t2", "trial-2"))
+
+
+async def test_migration_ten_preserves_old_pairings_and_adds_safe_capture_paths(
+    database: Database,
+) -> None:
+    """A version-9 pairing upgrades without invented provenance or secret-bearing paths."""
+    async with database.connect() as connection:
+        assert await apply_migrations(connection, MIGRATIONS[:9]) == 9
+        await connection.execute(
+            "INSERT INTO workspaces (id, kind, created_at, last_seen_at) "
+            "VALUES ('ws_shopify', 'interactive', '2026-01-01T00:00:00Z', "
+            "'2026-01-01T00:00:00Z')"
+        )
+        await connection.execute(
+            "INSERT INTO contracts (id, workspace_id, content_hash, name, schema_version, "
+            "document_json, created_at) VALUES ('con_shopify', 'ws_shopify', 'sha256:x', "
+            "'shopify', '1.0', '{}', '2026-01-01T00:00:00Z')"
+        )
+        await connection.execute(
+            "INSERT INTO shopify_pairings (id, workspace_id, contract_id, "
+            "contract_content_hash, store_origin, pairing_token_hash, status, expires_at, "
+            "created_at) VALUES ('pair_old', 'ws_shopify', 'con_shopify', 'sha256:x', "
+            "'https://dev-store.myshopify.com', 'digest', 'created', "
+            "'2026-01-01T00:15:00Z', '2026-01-01T00:00:00Z')"
+        )
+        await connection.commit()
+
+        assert await apply_migrations(connection) == 10
+        async with connection.execute("PRAGMA table_info(shopify_pairings)") as cursor:
+            columns = {str(row[1]) for row in await cursor.fetchall()}
+        assert {"before_capture_path", "after_capture_path"} <= columns
+
+        async with connection.execute(
+            "SELECT before_capture_path, after_capture_path FROM shopify_pairings "
+            "WHERE id = 'pair_old'"
+        ) as cursor:
+            old_pairing = await cursor.fetchone()
+        assert old_pairing is not None
+        assert tuple(old_pairing) == (None, None)
+
+        await connection.execute(
+            "UPDATE shopify_pairings SET before_capture_path = '/cart.js', "
+            "after_capture_path = '/en/cart.js' WHERE id = 'pair_old'"
+        )
+        await connection.commit()
+        for column in ("before_capture_path", "after_capture_path"):
+            with pytest.raises(sqlite3.IntegrityError):
+                await connection.execute(
+                    f"UPDATE shopify_pairings SET {column} = ? WHERE id = 'pair_old'",
+                    ("/cart.js?credential=secret",),
+                )
+            await connection.rollback()
 
 
 async def test_applying_migrations_twice_is_a_no_op(database: Database) -> None:

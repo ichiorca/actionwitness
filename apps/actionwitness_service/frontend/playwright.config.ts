@@ -110,6 +110,11 @@ export default defineConfig({
       stdout: "pipe",
       stderr: "pipe",
       env: {
+        // A developer's root `.env` may name a deployed public origin or enable
+        // optional integrations. The E2E stack is a hermetic local deployment;
+        // make its complete configuration the mapping below instead of quietly
+        // inheriting machine-local values through the service's `.env` loader.
+        HARNESS_ENV_FILE: `apps/actionwitness_service/frontend/${E2E_ROOT.slice(2)}/no-env`,
         // `local` omits only the cookie's `Secure` attribute (FR-005); the
         // lane runs over plain HTTP on loopback, and `HttpOnly` and
         // `SameSite=Strict` stay on, which is what the cookie tests assert.

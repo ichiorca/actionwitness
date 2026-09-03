@@ -102,13 +102,13 @@ labelled rows, the verbatim payload one disclosure away, and a live expiry:
 
 ![The consent dialog: Approve this action? — the consequence as labelled rows, a countdown beside the absolute expiry, and Approve once / Deny withheld from the tab that does not own the waiting call](docs/screenshots/consent-dialog.png)
 
-**Status.** Tier 1 and Tier 2 are implemented and tested: the target-neutral core
-kernel, the standalone Buggy Store and its adapter, workspace persistence, the run
-slice, the React/WebMCP workspace with human confirmation, regression evals with a
-replay CLI, and external-evaluator report import. 2,800+ deterministic Python
-tests and 280+ frontend unit tests, including the false-success fault proof. Tier 3 modules are present as
-configuration-gated scaffolds and ship **off** — see [What is not
-here](#what-is-not-here).
+**Status.** Tiers 1–3 are implemented and tested: the target-neutral core, the
+failure-injectable Buggy Store, the React/WebMCP workspace and human confirmation,
+regression replay, evaluator import, self-witnessing, live Gemini variant drafting,
+repeated-trial correlation, the operator-driven external audit, and the configured
+Shopify development-store proof. The suite now contains 3,000+ deterministic Python
+tests and 400+ frontend unit tests. Credentialed integrations remain optional and
+fail closed when their exact server-side configuration is absent.
 
 **Normative sources.** The functional specification is `docs/actionwitness-functional-spec.md`,
 version 1.9; the implementation plan and milestone gates are `docs/BUILD_ORDER.md`.
@@ -270,10 +270,11 @@ response is never persisted as observed state (constitution §4).
     packages/actionwitness_core      target-neutral assurance library (no app/demo/vendor imports — enforced)
     apps/actionwitness_service       FastAPI app, orchestration, guidance, persistence, CLI, React frontend
     integrations/buggy_store         core ports <-> Buggy Store versioned HTTP API + WebMCP bridge
-    integrations/google_evals        pinned webmcp-evals report adapter (import/normalize/correlate)
-    integrations/shopify             external-surface audit (audit.py, pack.py — live, used by /api/v1/audits); Tier 3 dev-store target (adapter.py, observation.py — scaffold, router unmounted)
+    integrations/google_evals        pinned report adapter plus the credential-gated Gemini REST variant client
+    integrations/self_target         self-witness adapter and observer, restricted to the public HTTP API
+    integrations/shopify             external-audit pack plus the configured cart-only development-store adapter
     examples/buggy_store             independently runnable demo target (no assurance-stack imports — enforced)
-    shopify_bridge                   Tier 3 theme bridge (placeholder)
+    shopify_bridge                   reviewed theme bridge for same-session Cart API observation
     tests/                           architecture, unit, integration, adapters, contracts, evals lanes
 
 Dependency direction is enforced, not documented. `actionwitness_core` imports no
@@ -561,13 +562,19 @@ same transaction that records the artifact row — so the next audit is no longe
 blocked behind the 24-hour workspace sweep. `cancel` is the other exit, for an
 audit begun against the wrong origin.
 
-**The browser client for this flow is not built.** The server path is complete,
-tested end to end over HTTP (`tests/integration/test_external_audit_pass.py`), and
-entirely API-driven — but there is no audit UI in the React workspace, and no
-frontend module references `/audits`. Today this is exercised by an API client
-that supplies the transcript, not from the app. What is missing is the browser
-half that runs `getTools()`, exercises the pack, and reads `cart.js` in the
-operator's own session; nothing in the endpoints above will do that for you.
+**The operator journey is in the workspace.** The left rail's **Audit → External
+surface** view walks it: assert one authorized origin behind an explicit
+affirmation, choose a pack (offered, never auto-selected), copy the generated
+collector, run it on the storefront you are authorized on, paste the transcript
+back, and read the merchant report.
+
+The collection step is a snippet rather than a button, and that is the boundary
+rather than a shortcut: a document can enumerate only its **own**
+`modelContext`, and `cart.js` is a read of the caller's **own** session, so
+neither crosses an origin — and the one arrangement that would appear to, a
+server-side fetch, is exactly what §12.17 forbids. The collector is generated
+from the chosen pack, so FR-162's never-invoked tools are excluded by
+construction rather than by the reader remembering.
 
 - **Off unless configured.** `external_audit` ships disabled, so an anonymous
   workspace can never assert authorization for an origin the deployment did not
@@ -620,12 +627,12 @@ exists to prove the core is target-neutral rather than commerce software with th
 labels changed.
 
 **Supported external target scope.** Exactly one: an authorized Shopify development
-store, one configured variant and currency, cart-only, and only when the operator
-supplies the configuration. It is **not enabled in any build** — configuring it
-reports `disabled` with a reason naming the missing adapter rather than switching
-anything on. Every other external target is roadmap scope, not V1. The audit
-surface above is a different thing and does not need it: it observes a storefront
-through the operator's browser and drives no target adapter at all.
+store, one server-configured variant and currency, and cart-only behavior. The
+adapter and `/api/v1/shopify` pairing routes become available only when all four
+exact deployment values are valid; otherwise the module reports a bounded disabled
+or misconfigured state and the Buggy Store path remains unaffected. Every other
+external target is roadmap scope, not V1. The audit surface above is different: it
+observes a storefront through the operator's browser and drives no target adapter.
 
 ## Deployment
 
@@ -714,16 +721,16 @@ runtime.
 Report a security issue by opening an issue without exploit detail, and we will
 arrange a private channel.
 
-## What is not here
+## Optional modules and deliberate limits
 
-Named, not hidden. Each of these is switched off in this deployment and reports its
-own state at `GET /api/v1/workspace` under `modules`.
+Named, not hidden. Each configuration-gated module reports its current state and a
+human-readable reason at `GET /api/v1/workspace` under `modules`.
 
 | Module | State | Why |
 |---|---|---|
-| `shopify` | **off** (Tier 3, optional) | The adapter, the theme bridge, and `/api/v1/shopify` are unmounted scaffolds, so the module reports `disabled` **even when all four environment variables are set** — the reason names the build rather than blaming the operator, and no settings object is exposed, because a populated one is how "is it configured?" quietly becomes a stand-in for "is it on?". Switching it on is one edit (`_SHOPIFY_ADAPTER_SHIPPED`) once the adapter and route land. |
-| `live_evaluator` | **off** (Tier 3, optional) | Live model runs need a provider credential. Recorded fixtures are used instead, and are labelled `recorded_fixture` rather than `live_model_run`. |
-| `external_audit` | **off by default** (Tier 3, optional) | Implemented and tested; ships disabled because an anonymous workspace must never assert authorization for an origin the deployment did not configure. Enabling it needs `EXTERNAL_AUDIT_ALLOWED_ORIGINS` — see [above](#auditing-a-storefront-you-did-not-build). |
+| `shopify` | **off by default** (Tier 3, optional) | Implemented and tested. It enables only for one exact authorized development-store origin, one server-controlled variant, one currency, and the exact harness origin. Without all four values, no pairing can start. |
+| `live_evaluator` | **off by default** (Tier 3, optional) | The Gemini REST drafting client is implemented, but live generation needs an explicitly enabled provider/model and a server-side credential. Recorded fixtures remain usable and are labelled `recorded_fixture`, never `live_model_run`. |
+| `external_audit` | **off by default** (Tier 3, optional) | Implemented and tested; an anonymous workspace must never direct an audit at an origin the deployment did not allow. Enabling it requires `EXTERNAL_AUDIT_ALLOWED_ORIGINS` plus the operator's per-audit authorization assertion. |
 
 Other known limitations:
 
@@ -748,8 +755,8 @@ rule are in ADR-0002. Re-run the spike
 | Item | Pinned value |
 |---|---|
 | Chrome build + flag/origin-trial config (`chrome://flags/#enable-webmcp-testing`) | Chrome 151.0.0.0 stable (Windows), flag **Enabled** |
-| WebMCP API location | `document.modelContext` **and** `navigator.modelContext` (verified live 2026-08-31; `registerTool`/`getTools`/`executeTool`/`ontoolchange`). Re-verified 2026-09-03 against the deployed workspace: only `document.modelContext` present in that build — the adapter reads `document.modelContext` exclusively, so nothing depends on the second location |
-| `getTools()` / `toolchange` | both present; `toolchange` fires per change (bursts not coalesced, none dropped); descriptors carry descriptions + `readOnlyHint`/`untrustedContentHint` → `stable_tool_surface` viable |
+| WebMCP API location | The adapter resolves callable `document.modelContext` first and `navigator.modelContext` second. The 2026-09-03 deployed Codex browser exposed only the document location. |
+| `getTools()` / `toolchange` | The deployed surface exposes `getTools()` but not EventTarget-style `addEventListener`/`removeEventListener`. ActionWitness therefore re-reads the snapshot at verification; live `toolchange` observation is used only when the host actually provides it. |
 | Hook package (`use-webmcp-tool` vs `usewebmcp` spike decision) | `use-webmcp-tool@0.2.0` (exact); cancellation-sensitive tools use direct native registration — no path in this build forwards the per-invocation signal |
 | `webmcp-types` version | `0.1.5` (exact) |
 | `webmcp-evals` package + reporter schema + normalizer version | `webmcp-evals@0.0.4` (`fe33c1b`); explicit binding, fail-closed on weak addressing (ADR-0005) |

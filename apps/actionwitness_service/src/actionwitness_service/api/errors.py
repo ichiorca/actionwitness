@@ -53,6 +53,7 @@ class ApiErrorCode(StrEnum):
     PROPOSAL_RUN_NOT_VERIFIABLE = "PROPOSAL_RUN_NOT_VERIFIABLE"
     PROPOSAL_RUN_NOT_ELIGIBLE = "PROPOSAL_RUN_NOT_ELIGIBLE"
     SURFACE_BASELINE_ALREADY_SET = "SURFACE_BASELINE_ALREADY_SET"
+    OBSERVATION_ALREADY_CAPTURED = "OBSERVATION_ALREADY_CAPTURED"
     SELF_OBSERVATION_LOOP = "SELF_OBSERVATION_LOOP"
     TRIAL_BINDING_AMBIGUOUS = "TRIAL_BINDING_AMBIGUOUS"
     TRIAL_ALREADY_BOUND = "TRIAL_ALREADY_BOUND"
@@ -244,6 +245,20 @@ API_ERROR_DESCRIPTIONS: Mapping[ApiErrorCode, ApiErrorSpec] = {
             "has one. Identical resubmissions are idempotent and do not reach this."
         ),
         spec_ref="§15.8",
+        provenance="spec",
+    ),
+    ApiErrorCode.OBSERVATION_ALREADY_CAPTURED: ApiErrorSpec(
+        http_status=409,
+        retryable=False,
+        description=(
+            "A second, differing observation was submitted for a phase that already "
+            "has one. §15.7 makes capture idempotent by `(pairing_id, phase, "
+            "content_hash)`: a repeat carrying the same hash returns the existing "
+            "result and never reaches this. Not retryable — the phase is captured, "
+            "and a bridge that saw a different cart is describing a different moment "
+            "than the one this trial recorded."
+        ),
+        spec_ref="§15.7",
         provenance="spec",
     ),
     ApiErrorCode.SELF_OBSERVATION_LOOP: ApiErrorSpec(

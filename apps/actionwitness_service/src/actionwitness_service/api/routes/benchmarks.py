@@ -4,8 +4,12 @@
 |--------|-----------------------------------------|---------|
 | `POST` | `/benchmarks`                           | Create a suite from a validated manifest |
 | `POST` | `/benchmarks/{id}/imports`              | Import, validate, redact, preserve, normalize |
+| `POST` | `/benchmarks/{id}/intent-variants`      | Draft candidate variants, unapproved (FR-100) |
+| `POST` | `/benchmarks/{id}/frozen-variants`      | Seal the approved intent variants (FR-100) |
 | `PUT`  | `/benchmarks/{id}/bindings`             | Save explicit one-to-one trial bindings |
 | `POST` | `/benchmarks/{id}/replay`               | Execute eligible replay trials in isolation |
+| `POST` | `/benchmarks/{id}/repeated-trials`      | Run one frozen variant again, N times (§26.5) |
+| `GET`  | `/benchmarks/{id}/correlation`          | Per-variant evaluator-vs-observed correlation |
 | `POST` | `/benchmarks/{id}/finalize`             | Create the immutable derived artifact |
 | `GET`  | `/benchmarks/{id}`                      | Status, metadata, matrix, metrics, trials |
 | `GET`  | `/benchmarks/{id}/trials/{trial_id}`    | Bounded redacted evidence for one trial |
@@ -24,18 +28,42 @@ not identical, and the hash would not match.
 
 **Bindings are `PUT` and the suite must still be `draft`.** §16.4 freezes them at
 `ready`; the service refuses afterwards, and this layer does not soften it.
+
+**Freezing variants is `POST` to a sub-resource, not `PUT` to the manifest.**
+FR-100 forbids rerunning generation between repetitions, so the frozen set is
+created once and never replaced — and `PUT` would advertise the idempotent
+overwrite the requirement exists to prevent.
+
+**Generation and freezing are two endpoints, not one.** `/intent-variants`
+drafts candidates and stores nothing; `/frozen-variants` records a named
+person's decision. Collapsing them would let one request both write the
+variants and approve them, which is the consent an agent may not create for
+itself — and it would also make FR-100's "generation is not rerun between
+repetitions" unenforceable, because the freeze could no longer be the thing that
+happens once.
 """
 
 from __future__ import annotations
 
 import json
+import os
+from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager
 from typing import Annotated, Any
 
-from actionwitness_core.benchmarks.enums import CorrelationMode, SourceKind
+import httpx
+from actionwitness_core.benchmarks.approval import approve
+from actionwitness_core.benchmarks.enums import CorrelationMode, SourceKind, VariantKind
+from actionwitness_core.benchmarks.intents import (
+    MAX_INTENT_VARIANT_CHARS,
+    MAX_INTENT_VARIANTS,
+    validate_candidates,
+)
 from actionwitness_core.benchmarks.models import ScenarioDefinition, TrialBinding
+from actionwitness_core.benchmarks.screening import require_screened
 from actionwitness_core.kernel import CoreError
 from fastapi import APIRouter, Body, Path, Request, Response
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from actionwitness_service.api.dependencies import (
     ArtifactsDependency,
@@ -47,9 +75,18 @@ from actionwitness_service.api.dependencies import (
 )
 from actionwitness_service.api.errors import ApiError, ApiErrorCode
 from actionwitness_service.application.benchmark_service import (
+    MAX_TRIAL_REPETITIONS,
     BenchmarkService,
     write_benchmark_report,
 )
+from actionwitness_service.application.variant_generation import (
+    MAX_GENERATED_VARIANTS,
+    CredentialUnavailable,
+    VariantGenerationService,
+    VariantProposer,
+    live_credential,
+)
+from actionwitness_service.config import LiveEvaluatorSettings
 
 __all__ = ["router"]
 
@@ -103,6 +140,61 @@ class BindingsRequest(_Body):
     #: several calls and seal once, rather than being forced to send them all
     #: at once or to seal prematurely.
     seal: bool = False
+
+
+class VariantRequest(_Body):
+    """One candidate variant, exactly as the reviewer read it (FR-100)."""
+
+    kind: VariantKind
+    #: Bounded here with the core's own constant rather than a second number.
+    #: The boundary caps the bytes; the core owns the *reason* a variant is too
+    #: short to be a paraphrase of anything, and says so in its refusal.
+    text: Annotated[str, Field(min_length=1, max_length=MAX_INTENT_VARIANT_CHARS)]
+
+
+class FreezeVariantsRequest(_Body):
+    """FR-100's last clause: the set a human approved, and who approved it.
+
+    **There is no `actor` field, and that is the point.** The constitution
+    forbids an agent creating or approving its own consent, so the actor is not
+    something a request may state — it is fixed to `human` on the way into the
+    core, which refuses any other value. A field here would be an invitation to
+    record an approval nobody made.
+
+    **The whole reviewed set arrives, not just the approved part.** An approval
+    is a statement about specific texts, and the core binds it to a fingerprint
+    of the full set; sending only the survivors would produce a record that
+    could not say what was turned down.
+    """
+
+    canonical_intent: Annotated[str, Field(min_length=1, max_length=MAX_INTENT_VARIANT_CHARS)]
+    variants: Annotated[tuple[VariantRequest, ...], Field(max_length=MAX_INTENT_VARIANTS)] = ()
+    #: Positions within `variants`. Explicit rather than "all": a reviewer who
+    #: rejected two of six made a decision the record has to carry.
+    approved_indices: tuple[Annotated[int, Field(ge=0)], ...] = ()
+    reviewer: Annotated[str, Field(min_length=1, max_length=128)]
+    note: Annotated[str, Field(max_length=500)] = ""
+
+
+class GenerateVariantsRequest(_Body):
+    """FR-100's generate step: one canonical intent, and how many drafts.
+
+    **There is no `reviewer` field and no `approved_indices` field.** Generation
+    produces candidates and nothing else; an approval is a separate request a
+    person makes after reading them. A body that could carry both would let one
+    call write the variants and approve them — the consent an agent may not
+    create for itself.
+
+    **There is no model, provider, or endpoint field either.** Which backend
+    this deployment talks to is server-controlled configuration (§20.1); a
+    caller who could name one could point the harness at an arbitrary origin.
+    """
+
+    canonical_intent: Annotated[str, Field(min_length=1, max_length=MAX_INTENT_VARIANT_CHARS)]
+    #: Bounded by FR-100's ceiling at the boundary as well as in the core. A
+    #: request for seven is refused rather than clamped: clamping would answer a
+    #: question the caller did not ask.
+    count: Annotated[int, Field(ge=1, le=MAX_GENERATED_VARIANTS)] = 3
 
 
 _DEFAULT_CREATE = CreateBenchmarkRequest()
@@ -269,6 +361,279 @@ async def import_evaluator_report(
     }
 
 
+@asynccontextmanager
+async def _live_proposer(
+    http_request: Request, live: LiveEvaluatorSettings
+) -> AsyncIterator[VariantProposer]:
+    """The configured live model, wired to an HTTP client with a bounded life.
+
+    **The client is injected into the proposer, never built inside it**
+    (ADR-0001). What this scope owns is the *wiring*: a deployment that
+    supplied its own client on `app.state.live_variant_client` keeps it — the
+    same rule the lifespan applies to the target client, and the seam a test
+    uses to hand in an `httpx.MockTransport` so no test ever reaches Google.
+
+    **Request-scoped rather than lifespan-owned, deliberately.** ADR-0001's
+    reason for one long-lived client is connection reuse on the run path, where
+    an observation happens on every invocation. This call happens once while a
+    person is drafting a variant set, so a per-request client costs one
+    handshake and buys deterministic closure — and closure is what matters here,
+    because this is the only client in the process that has ever held a
+    credential.
+
+    **The credential is read here and passed straight through.** Not resolved at
+    startup, not stored in `ServiceSettings`, not put on `app.state`: it exists
+    for the duration of one request, inside one object whose `repr` does not
+    show it.
+    """
+    from integrations.google_evals.generation import LiveVariantClient, as_candidates
+    from integrations.google_evals.live import describe_live_run
+
+    # `os.environ` in a deployment; `live_environ` is the injected mapping a
+    # test composes with, for the same reason `config.py` resolves settings from
+    # one — every absence and misconfiguration stays testable without mutating
+    # process state. Read here rather than at startup so the value is never held
+    # anywhere between requests.
+    environ: Mapping[str, str] = getattr(http_request.app.state, "live_environ", os.environ)
+    supplied: httpx.AsyncClient | None = getattr(
+        http_request.app.state, "live_variant_client", None
+    )
+    client = supplied or httpx.AsyncClient()
+    try:
+        model = LiveVariantClient(
+            client=client,
+            configuration=describe_live_run(live),
+            credential=live_credential(live.credential_var, environ),
+        )
+
+        class _Proposer:
+            """Adapts the client's typed variants to the loose mappings the
+            service validates. Declared here rather than in the integration
+            because the shape is the *service's* contract, not the vendor's."""
+
+            async def propose(
+                self, canonical_intent: str, *, count: int = 3
+            ) -> list[dict[str, str]]:
+                return as_candidates(await model.propose(canonical_intent, count=count))
+
+        yield _Proposer()
+    finally:
+        if supplied is None:
+            await client.aclose()
+
+
+@router.post("/benchmarks/{benchmark_id}/intent-variants")
+async def generate_benchmark_variants(
+    benchmark_id: BenchmarkId,
+    http_request: Request,
+    workspace_id: WorkspaceDependency,
+    database: DatabaseDependency,
+    settings: SettingsDependency,
+    request: Annotated[GenerateVariantsRequest, Body()],
+) -> dict[str, Any]:
+    """FR-100's generate step: candidates for a human to read, and nothing more.
+
+    **Nothing is persisted and nothing is approved.** The response is a draft a
+    reviewer edits, ticks, and then submits to `/frozen-variants`, which is
+    still the only place an approval is recorded and the only place a variant
+    reaches a manifest. A route that wrote what it generated would freeze
+    material nobody read.
+
+    **The suite is checked first, and only while it is `draft`.** Generating for
+    a suite that has already frozen a set, or that has left `draft`, would offer
+    a person work the freeze route must then refuse — and FR-100's "generation
+    is not rerun between repetitions" is exactly the case where that refusal
+    matters most.
+
+    **No transaction is open across the model call.** ADR-0003 forbids it, and a
+    third-party call is the longest wait in this service. The suite is read
+    before, the model is asked after, and nothing is written at all.
+
+    **Every failure is an explicit non-pass.** An unconfigured module, a missing
+    credential, an unreachable model, and an unusable answer each get their own
+    refusal; none of them degrades into an empty-but-successful set, because an
+    empty set is a real answer — "the model proposed nothing" — that a reviewer
+    would read as a measurement.
+    """
+    from integrations.google_evals.generation import LiveModelUnavailable, ProposalRejected
+    from integrations.google_evals.live import CredentialMaterialRejected, LiveRunUnavailable
+
+    live = settings.live_evaluator
+    if live is None:
+        state = settings.module("live_evaluator")
+        raise ApiError(
+            ApiErrorCode.TARGET_UNAVAILABLE,
+            "No live model backend is configured in this deployment, so nothing "
+            f"here can draft variants — {state.reason} Write the set by hand and "
+            "freeze it — the approval FR-100 requires is a person's either way.",
+        )
+
+    async with database.reading() as work:
+        suite = await BenchmarkService(work, workspace_id).get(benchmark_id)
+    if str(suite["status"]) != "draft":
+        raise ApiError(
+            ApiErrorCode.BENCHMARK_BINDINGS_SEALED,
+            f"this suite is {suite['status']}; FR-100 freezes variants before trials "
+            "begin, so a new set belongs to a new suite.",
+        )
+    if json.loads(str(suite["manifest_json"])).get("frozen_variants") is not None:
+        raise ApiError(
+            ApiErrorCode.PRECONDITION_FAILED,
+            "this benchmark already has frozen variants; FR-100 forbids rerunning "
+            "generation between repetitions, so a different set is a different "
+            "benchmark and needs a new suite.",
+        )
+
+    try:
+        async with _live_proposer(http_request, live) as proposer:
+            candidates = await VariantGenerationService(
+                proposer, credential_var=live.credential_var
+            ).propose(request.canonical_intent, count=request.count)
+    except (LiveRunUnavailable, CredentialUnavailable, LiveModelUnavailable) as unavailable:
+        # One code for three causes, because a client's remedy is the same:
+        # nothing was drafted, and the manual path is still open. The message
+        # separates them; none of the three carries a response body or a
+        # credential, by construction in the client.
+        raise ApiError(ApiErrorCode.TARGET_UNAVAILABLE, str(unavailable)) from unavailable
+    except CredentialMaterialRejected as carried:
+        raise ApiError(ApiErrorCode.CONTRACT_VALIDATION_FAILED, str(carried)) from carried
+    except ProposalRejected as rejected:
+        raise ApiError(ApiErrorCode.CONTRACT_VALIDATION_FAILED, str(rejected)) from rejected
+    except CoreError as refused:
+        # The core's own refusals: a set carrying a confirmation-bypass
+        # instruction, or one quoting the credential variable. Statements about
+        # what the model wrote, which is why they read as validation failures
+        # rather than as availability.
+        raise ApiError(ApiErrorCode.CONTRACT_VALIDATION_FAILED, str(refused)) from refused
+    except ValidationError as invalid:
+        # The core's *set-level* rules — a duplicate, a bidirectional override,
+        # a variant too short to be a paraphrase, one repeating the canonical
+        # intent — are raised inside Pydantic validators, so they arrive wrapped.
+        # Caught separately rather than widened above, because only `msg` may be
+        # forwarded: Pydantic's `input` echoes the rejected text, and this is
+        # exactly the material that may carry a secret.
+        raise ApiError(
+            ApiErrorCode.CONTRACT_VALIDATION_FAILED,
+            "The model's proposal was not a set a reviewer could be shown.",
+            details=[
+                {
+                    "path": ".".join(str(part) for part in error["loc"]),
+                    "message": error["msg"],
+                }
+                for error in invalid.errors()
+            ],
+        ) from invalid
+
+    return {
+        "benchmark_id": benchmark_id,
+        "canonical_intent": candidates.canonical_intent,
+        "variants": [variant.canonical_document() for variant in candidates.variants],
+        # Reproducibility metadata FR-093 records for a suite, echoed so the
+        # person reviewing can see which model wrote what they are reading. The
+        # credential *variable* is not among these: it tells an operator nothing
+        # they need while drafting, and the fewer places it is printed the
+        # better.
+        "model_provider": live.provider,
+        "model_name": live.model,
+        # Said in the response, not only in the UI: a client that treated this
+        # as an approval would be recording a decision nobody made.
+        "approved": False,
+    }
+
+
+@router.post("/benchmarks/{benchmark_id}/frozen-variants", status_code=201)
+async def freeze_benchmark_variants(
+    benchmark_id: BenchmarkId,
+    workspace_id: WorkspaceDependency,
+    database: DatabaseDependency,
+    locks: LocksDependency,
+    settings: SettingsDependency,
+    request: Annotated[FreezeVariantsRequest, Body()],
+) -> dict[str, Any]:
+    """FR-100: "approved variants are frozen into the content-hashed benchmark
+    manifest before trials begin; generation is not rerun between repetitions".
+
+    The service has enforced both halves since 010 and nothing could reach it,
+    so the capability existed and no person could exercise it. This is the door.
+
+    **The whole FR-100 sequence runs here, in its order.** Validate the shape,
+    screen for secrets and confirmation-bypass language, record the approval,
+    then freeze. Screening precedes the approval because a reviewer must never
+    be shown a variant asking them to approve bypassing a safeguard — and
+    because a caller cannot skip a step that the next one's argument type
+    requires.
+
+    **Nothing awaits inside the transaction.** Validation, screening and
+    approval are pure CPU over at most six short strings, so ADR-0003's rule —
+    no DB transaction across I/O — holds while the timestamp still comes from
+    the one injected clock, which is what keeps a replayed freeze deterministic.
+
+    **The refusals.** An unknown suite is `RESOURCE_NOT_FOUND` and a suite in
+    another workspace is indistinguishable from it; a suite past `draft` is
+    `BENCHMARK_BINDINGS_SEALED`; a second freeze is `PRECONDITION_FAILED`; and
+    anything the core turns down — an oversized set, a held-back variant, an
+    approval naming a variant that does not exist — is
+    `CONTRACT_VALIDATION_FAILED`, because it is the caller's document to fix.
+    """
+    live = settings.live_evaluator
+    # Deployment knowledge the target-neutral core cannot have: the *name* of
+    # the variable a credential lives in. Its value never leaves the server, and
+    # a variant quoting the name is a secret being carried in.
+    markers = () if live is None else (live.credential_var,)
+
+    async with locks.hold(workspace_id), database.transaction() as work:
+        service = BenchmarkService(work, workspace_id)
+        try:
+            candidates = require_screened(
+                validate_candidates(
+                    request.canonical_intent,
+                    [variant.model_dump(mode="json") for variant in request.variants],
+                ),
+                extra_secret_markers=markers,
+            )
+            approved = approve(
+                candidates,
+                approved_indices=request.approved_indices,
+                reviewer=request.reviewer,
+                approved_at=work.instant(),
+                note=request.note,
+            )
+        except CoreError as refused:
+            raise ApiError(ApiErrorCode.CONTRACT_VALIDATION_FAILED, str(refused)) from refused
+        except ValidationError as invalid:
+            # Only `msg` is forwarded, never Pydantic's `input`. The rejected
+            # value here is variant text, and a variant is refused in precisely
+            # the cases where it may carry a secret — echoing it would put the
+            # value in a response and, from there, in whatever logs that
+            # response. The same rule the malformed-request handler follows.
+            raise ApiError(
+                ApiErrorCode.CONTRACT_VALIDATION_FAILED,
+                "That variant set was not accepted.",
+                details=[
+                    {
+                        "path": ".".join(str(part) for part in error["loc"]),
+                        "message": error["msg"],
+                    }
+                    for error in invalid.errors()
+                ],
+            ) from invalid
+
+        frozen_content_hash = await service.freeze_variants(benchmark_id, approved)
+        # Re-read inside the same transaction: the manifest hash moved when the
+        # variants landed, and FR-100 makes that new value the identity of the
+        # thing a repetition is measured under. A caller that had to fetch it
+        # separately could quote a hash from before its own freeze.
+        suite = await service.get(benchmark_id)
+
+    return {
+        "benchmark_id": benchmark_id,
+        "frozen_variants_content_hash": frozen_content_hash,
+        "manifest_content_hash": str(suite["manifest_content_hash"]),
+        "variant_count": len(approved.approved),
+        "reviewer": approved.approval.reviewer,
+    }
+
+
 @router.put("/benchmarks/{benchmark_id}/bindings")
 async def save_bindings(
     benchmark_id: BenchmarkId,
@@ -426,6 +791,37 @@ async def finalize_benchmark(
     }
 
 
+@router.get("/benchmarks")
+async def list_benchmarks(
+    workspace_id: WorkspaceDependency,
+    database: DatabaseDependency,
+) -> dict[str, Any]:
+    """The suites this workspace owns, so a person can pick one.
+
+    Added because the matrix had no door: every other benchmark route needs an
+    id the caller already holds, which is workable for an API client and
+    useless to somebody looking at a screen. The listing is deliberately thin —
+    enough to identify and choose a suite, and nothing that would tempt a client
+    to render a matrix from it instead of reading the suite.
+    """
+    async with database.reading() as work:
+        suites = await BenchmarkService(work, workspace_id).list_suites()
+
+    return {
+        "benchmarks": [
+            {
+                "benchmark_id": str(suite["id"]),
+                "status": str(suite["status"]),
+                "source_kind": str(suite["source_kind"]),
+                "correlation_mode": str(suite["correlation_mode"]),
+                "result_artifact_id": suite["result_artifact_id"],
+                "created_at": str(suite["created_at"]),
+            }
+            for suite in suites
+        ]
+    }
+
+
 @router.get("/benchmarks/{benchmark_id}")
 async def read_benchmark(
     benchmark_id: BenchmarkId,
@@ -447,6 +843,11 @@ async def read_benchmark(
         "normalized_adapter_version": str(suite["normalized_adapter_version"]),
         "result_artifact_id": suite["result_artifact_id"],
         "manifest": json.loads(str(suite["manifest_json"])),
+        # FR-100 seals the approved variants into a *content-hashed* manifest,
+        # so the hash is what a reader quotes when they say which manifest a
+        # repetition ran under. Recomputing it from the document above would be
+        # a second opinion on an identity the row already holds.
+        "manifest_content_hash": str(suite["manifest_content_hash"]),
         "counts": summary.counts.canonical_document(),
         "metrics": summary.metrics.canonical_document(),
         "by_scenario": [group.canonical_document() for group in summary.by_scenario],
@@ -541,6 +942,157 @@ async def download_benchmark_report(
         content=artifacts.read_bytes(relative_path),
         media_type="application/json",
     )
+
+
+class RepeatedTrialsRequest(_Body):
+    """§26.5: run one frozen variant again, N times.
+
+    **`trials` carries no upper bound here.** The ceiling lives in
+    `BenchmarkService.MAX_TRIAL_REPETITIONS`, which is where the repetitions are
+    actually written, so there is exactly one number to change and exactly one
+    place that refuses. A `le=` here would be a second copy free to drift, and a
+    request that got past it would still have to be refused underneath.
+
+    **`variant_index` is named, never inferred.** FR-100 froze the set in a
+    definite order, and which variant a batch measures is the caller's statement
+    about what the resulting rate is a rate *of*. A suite with no frozen set
+    leaves it `None`, and the correlation view then groups by scenario — which
+    normalization already treats as the shared intent repeated trials repeat.
+    """
+
+    source_external_trial_id: Annotated[str, Field(min_length=1, max_length=128)]
+    trials: Annotated[int, Field(ge=1)] = 1
+    variant_index: Annotated[int, Field(ge=0)] | None = None
+
+
+@router.post("/benchmarks/{benchmark_id}/repeated-trials", status_code=201)
+async def run_repeated_trials(
+    benchmark_id: BenchmarkId,
+    workspace_id: WorkspaceDependency,
+    database: DatabaseDependency,
+    registry: RegistryDependency,
+    request: Annotated[RepeatedTrialsRequest, Body()],
+) -> dict[str, Any]:
+    """§26.5: "six intent variants with five repeated trials each".
+
+    One sample cannot characterise a non-deterministic agent — it can only say
+    what happened once. Running the *same* frozen variant N times is what turns
+    "the observed state disagreed with the evaluator here" into a rate, and
+    `/correlation` is where that rate is read.
+
+    **Deliberately outside the workspace lock**, for the same reason `/replay`
+    is: every repetition creates its own eval workspace and its own
+    transactions, and holding the caller's write lock across that I/O would
+    break ADR-0003's rule that nothing async holds a lock across a wait. The
+    guard that matters is not the lock but the state check `record_repetition`
+    repeats before each insert — a suite sealed midway stops the batch instead of
+    growing a population that was already closed.
+
+    **A partial batch is a real answer.** Each repetition's row is committed
+    before it runs, so a cancelled request leaves the repetitions it started
+    visible as excluded rather than absent, and nothing retries them. `201` says
+    trials were created; the body says what each of them concluded, including
+    the ones that concluded nothing.
+    """
+    from actionwitness_service.application.benchmark_replay import RepeatedTrialService
+    from actionwitness_service.application.workspaces import WorkspaceStore
+
+    async with database.reading() as work:
+        plan = await BenchmarkService(work, workspace_id).plan_repetitions(
+            benchmark_id,
+            source_external_trial_id=request.source_external_trial_id,
+            count=request.trials,
+            variant_index=request.variant_index,
+        )
+
+    contract, adapter_id = await _scenario_inputs(database, registry, workspace_id)
+    completed = await RepeatedTrialService(database, registry, WorkspaceStore(database)).run(
+        plan,
+        workspace_id=workspace_id,
+        contract=contract,
+        adapter_id=adapter_id,
+    )
+    return {
+        "benchmark_id": benchmark_id,
+        "source_external_trial_id": plan.source_external_trial_id,
+        "variant_index": plan.variant_index,
+        "trials": len(completed),
+        "repetitions": [
+            {
+                "external_trial_id": trial.external_trial_id,
+                "repetition_index": trial.repetition_index,
+                # The two layers stay two fields. `call_level_result` is
+                # deliberately absent from this response: a repetition adds no
+                # new evaluator evidence, and repeating the imported verdict
+                # beside a fresh outcome would invite a reader to count it as a
+                # second measurement.
+                "outcome_result": trial.outcome_result.value,
+                "eligibility": trial.eligibility.value,
+                "exclusion_reason": (
+                    None if trial.exclusion_reason is None else trial.exclusion_reason.value
+                ),
+                "evaluation_run_id": trial.evaluation_run_id,
+            }
+            for trial in completed
+        ],
+    }
+
+
+@router.get("/benchmarks/{benchmark_id}/correlation")
+async def read_benchmark_correlation(
+    benchmark_id: BenchmarkId,
+    workspace_id: WorkspaceDependency,
+    database: DatabaseDependency,
+    settings: SettingsDependency,
+) -> dict[str, Any]:
+    """The evaluator's verdicts against the deterministic ones, per variant.
+
+    `GET /benchmarks/{id}` already reports the suite-wide two-by-two. This
+    reports it *per population*, with the outcome distribution beside the
+    evaluator's own, because that is the shape repetition produces: one variant
+    run five times can pass three and fail two, and a suite-wide cell cannot say
+    so.
+
+    Read-only and computed on every request rather than stored. Until
+    finalization these numbers are a view, and a cached copy would go stale the
+    moment another repetition landed — the same reason `summarize` recomputes.
+
+    An empty `populations` means no trials have run, not that the trials that ran
+    found nothing. The two are different findings and the caller is left able to
+    tell them apart.
+    """
+    from actionwitness_service.application.benchmark_correlation import (
+        correlate,
+        variant_trials,
+    )
+
+    async with database.reading() as work:
+        service = BenchmarkService(work, workspace_id)
+        suite = await service.get(benchmark_id)
+        rows = await service.trials(benchmark_id)
+
+    manifest = json.loads(str(suite["manifest_json"]))
+    frozen = manifest.get("frozen_variants") if isinstance(manifest, dict) else None
+    populations = correlate(
+        variant_trials(rows, frozen_variants=frozen if isinstance(frozen, dict) else None)
+    )
+    return {
+        "benchmark_id": benchmark_id,
+        "status": str(suite["status"]),
+        # AC-16 again: a correlation view is still a claim about where these
+        # trials came from, and it must never read as a live execution.
+        "source_kind": str(suite["source_kind"]),
+        "correlation_mode": str(suite["correlation_mode"]),
+        "repetition_ceiling": MAX_TRIAL_REPETITIONS,
+        # The left axis of this matrix is an *imported* evaluator verdict, so a
+        # deployment with evaluator import switched off can never populate it.
+        # Reported here rather than left for a client to infer, because an empty
+        # axis with no explanation reads as "the evaluator found nothing" — a
+        # measurement claim — instead of "no evaluator result can reach this
+        # deployment at all", which is a configuration fact.
+        "evaluator_import_available": settings.evaluator_import is not None,
+        "populations": [population.canonical_document() for population in populations],
+    }
 
 
 def _rejection(rejected: Exception) -> ApiError:

@@ -7,7 +7,11 @@ version = "0.1.0"
 description = "webmcp-evals report import, normalization, and trial correlation adapter"
 requires-python = ">=3.12"
 license = "Apache-2.0"
-dependencies = ["actionwitness-core"]
+# `httpx` is declared because `generation.py` imports it (constitution §1: every
+# dependency declared by its importing package). It is the project's existing
+# client, not a new admission — a vendor SDK for one POST would be an undeclared
+# runtime dependency needing operator approval.
+dependencies = ["actionwitness-core", "httpx>=0.27"]
 
 [tool.uv.sources]
 actionwitness-core = { workspace = true }

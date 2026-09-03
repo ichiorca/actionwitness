@@ -36,6 +36,8 @@ from actionwitness_service.application import rate_limits as fr009
 from actionwitness_service.persistence.database import Database
 from fastapi import FastAPI
 
+from integrations.buggy_store import TARGET_ID as STORE_TARGET_ID
+
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
 ENABLED = {"HARNESS_ENV": "local", "BUGGY_STORE_ENABLED": "true"}
@@ -462,9 +464,15 @@ async def test_gate_5_the_service_starts_with_the_buggy_store_disabled(
     # not merely an absence.
     assert capability["reason"]
 
-    # No target, so no templates — and that is a served empty list, not a 500.
+    # No target, so no templates *from it* — and that is a served list, not a
+    # 500. Scoped to the store's own target because FR-173 later gave the `self`
+    # target a contract pack, and `self` is registered whatever the store is
+    # doing: an empty-list assertion would now be asserting that an integration
+    # which is installed and available contributes nothing, which is not what
+    # this gate is about.
     assert templates.status_code == 200
-    assert templates.json()["templates"] == []
+    listed = templates.json()["templates"]
+    assert [item for item in listed if item["target_id"] == STORE_TARGET_ID] == []
 
 
 async def test_gate_5_selecting_a_contract_for_a_disabled_target_is_bounded(

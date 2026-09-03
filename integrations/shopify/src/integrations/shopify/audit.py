@@ -39,13 +39,16 @@ from actionwitness_core.ports.models import Observation, TargetDescriptor
 
 __all__ = [
     "MAX_CART_PAYLOAD_BYTES",
+    "NAMESPACE",
     "PROVENANCE",
     "PROVIDER_ID",
     "SCHEMA_VERSION",
     "TARGET_ID",
     "AuditObservationError",
     "ExternalAuditAdapter",
+    "cart_amount",
     "normalize_cart",
+    "require_exact_origin",
 ]
 
 TARGET_ID: Final = "external-audit"
@@ -113,16 +116,37 @@ class AuditObservationError(ValueError):
     """
 
 
-def _amount(cents: object) -> Decimal:
+def cart_amount(cents: object) -> Decimal:
     """Shopify reports money as integer minor units; the harness stores exact decimals.
 
     Converted through `Decimal` rather than float arithmetic — `2599 / 100` is
     not `25.99` in binary floating point, and this value is compared for
     equality by contract assertions.
+
+    Public because the cart-proof normalizer in `observation.py` reads one field
+    this module does not (`total_discount`) and must convert it the *same* way.
+    A second minor-units conversion is how two paths that both look right start
+    disagreeing by a cent (011-T5).
     """
     if isinstance(cents, bool) or not isinstance(cents, int):
         raise AuditObservationError(f"expected integer minor units, got {type(cents).__name__}")
     return (Decimal(cents) / Decimal(100)).quantize(Decimal("0.01"))
+
+
+def require_exact_origin(origin: str, authorized: str) -> None:
+    """Exact equality, and nothing looser (FR-110, §12.17).
+
+    §12.17 forbids following "a redirect, a link, or a navigation beyond" the
+    authorized origin, so there is no prefix, suffix, or subdomain rule here to
+    be talked into `https://shop.example.evil.test`.
+
+    A free function rather than a method because two adapters need the identical
+    rule — the audit target below and the Shopify development-store target in
+    `adapter.py` — and an origin check that exists twice is an origin check that
+    will one day differ.
+    """
+    if origin != authorized:
+        raise AuditObservationError("observation origin does not match the authorized origin")
 
 
 def normalize_cart(payload: Mapping[str, Any]) -> dict[str, JsonValue]:
@@ -162,17 +186,17 @@ def normalize_cart(payload: Mapping[str, Any]) -> dict[str, JsonValue]:
         items[str(variant)] = {
             "variant_id": str(variant),
             "quantity": _count(entry.get("quantity")),
-            "unit_price": str(_amount(entry.get("price"))),
-            "line_price": str(_amount(entry.get("line_price", entry.get("price")))),
+            "unit_price": str(cart_amount(entry.get("price"))),
+            "line_price": str(cart_amount(entry.get("line_price", entry.get("price")))),
         }
 
-    total = _amount(payload.get("total_price", 0))
+    total = cart_amount(payload.get("total_price", 0))
     return {
         "cart": {
             "items": items,
             "item_count": _count(payload.get("item_count")),
             "subtotal": str(
-                _amount(payload.get("items_subtotal_price", payload.get("total_price", 0)))
+                cart_amount(payload.get("items_subtotal_price", payload.get("total_price", 0)))
             ),
             "total": str(total),
             "currency": _currency(payload.get("currency")),
@@ -218,14 +242,8 @@ class ExternalAuditAdapter:
         return DESCRIPTOR
 
     def validate_origin(self, origin: str) -> None:
-        """Exact equality, and nothing looser (FR-110, §12.17).
-
-        §12.17 forbids following "a redirect, a link, or a navigation beyond"
-        the authorized origin, so there is no prefix, suffix, or subdomain rule
-        here to be talked into `https://shop.example.evil.test`.
-        """
-        if origin != self._authorized_origin:
-            raise AuditObservationError("observation origin does not match the authorized origin")
+        """Exact equality, and nothing looser (FR-110, §12.17)."""
+        require_exact_origin(origin, self._authorized_origin)
 
     def normalize(self, payload: dict, provenance: str) -> Observation:
         """Validate a submitted `cart.js` read into an authoritative observation.

@@ -124,17 +124,29 @@ export interface InstalledDouble {
   readonly uninstall: () => void;
 }
 
-/**
- * Install the double on `document`. Always pair with `uninstall()` in a teardown:
- * a leaked double makes the unsupported-browser tests silently meaningless.
- */
-export function installModelContextDouble(): InstalledDouble {
-  const modelContext = new ModelContextDouble();
-  const had = "modelContext" in document;
-  const previous = (document as Document & { modelContext?: WebMCP.ModelContext })
-    .modelContext;
+/** Which host object to install on — the two locations the adapter resolves. */
+export type DoubleHost = "document" | "navigator";
 
-  Object.defineProperty(document, "modelContext", {
+/**
+ * Install the double on `document` (default) or on `navigator`.
+ *
+ * The host is a parameter because the browser API has been observed in both
+ * places: ADR-0002's spike found it at `document.modelContext` *and*
+ * `navigator.modelContext`, and a later build exposed only the first. A double
+ * that could only ever be a `document` one would let the adapter hard-code that
+ * location and still pass every test — which is exactly the state this parameter
+ * was added to end.
+ *
+ * Always pair with `uninstall()` in a teardown: a leaked double makes the
+ * unsupported-browser tests silently meaningless.
+ */
+export function installModelContextDouble(host: DoubleHost = "document"): InstalledDouble {
+  const modelContext = new ModelContextDouble();
+  const target: object = host === "document" ? document : navigator;
+  const had = "modelContext" in target;
+  const previous = (target as { modelContext?: WebMCP.ModelContext }).modelContext;
+
+  Object.defineProperty(target, "modelContext", {
     value: modelContext,
     configurable: true,
     writable: true,
@@ -144,13 +156,13 @@ export function installModelContextDouble(): InstalledDouble {
     modelContext,
     uninstall: () => {
       if (had) {
-        Object.defineProperty(document, "modelContext", {
+        Object.defineProperty(target, "modelContext", {
           value: previous,
           configurable: true,
           writable: true,
         });
       } else {
-        delete (document as Document & { modelContext?: WebMCP.ModelContext }).modelContext;
+        delete (target as { modelContext?: WebMCP.ModelContext }).modelContext;
       }
     },
   };

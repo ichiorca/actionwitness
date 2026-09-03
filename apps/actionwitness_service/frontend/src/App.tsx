@@ -30,6 +30,32 @@ import {
   listEvalCaseDetails,
   replayEvalCase,
 } from "./api/evals";
+import {
+  type BenchmarkSummary,
+  type BenchmarkView,
+  type VariantApprovalRequest,
+  createBenchmark,
+  finalizeBenchmark,
+  freezeBenchmarkVariants,
+  importEvaluatorReport,
+  listBenchmarks,
+  readBenchmark,
+  replayBenchmark,
+} from "./api/benchmark";
+import {
+  type AuditOutcome,
+  type AuditPack,
+  type LiveAudit,
+  assertAuthorization,
+  cancelAudit,
+  listAuditPacks,
+  readAuditReport,
+  readCurrentAudit,
+  submitAuditEvidence,
+} from "./api/audit";
+import { AuditSection } from "./components/AuditSection";
+import { BenchmarkSection } from "./components/BenchmarkSection";
+import { ShopifyPairingSection } from "./components/ShopifyPairingPanel";
 import { ConfirmationDialog } from "./components/ConfirmationDialog";
 import { CREATE_CONTRACT_TOOL, ContractForm } from "./components/ContractForm";
 import { GuidanceBanner, goToAction } from "./components/GuidanceBanner";
@@ -59,6 +85,7 @@ import {
   type ToolExpectation,
   expectationOf,
   isWebMcpSupported,
+  webMcpHostLabel,
   useToolReconciliation,
 } from "./webmcp/adapter";
 import { useToolSurfaceWitness } from "./webmcp/surface";
@@ -69,7 +96,7 @@ const TERMINAL = ["passed", "passed_with_warnings", "failed", "error", "cancelle
 const EVAL_ELIGIBLE_PHASES = ["failed", "passed_with_warnings"];
 
 /** The lifecycle groups the panels are laid out in, in reading order. */
-type StageId = "setup" | "contract" | "run" | "verdict" | "regression";
+type StageId = "setup" | "contract" | "run" | "verdict" | "regression" | "benchmark";
 
 /**
  * Which stage §11.5's workspace phase belongs to — presentation only.
@@ -124,6 +151,10 @@ const WORKFLOW_NAV = [
   { id: "run", step: 2, title: "Run" },
   { id: "verdict", step: 3, title: "Verdict" },
   { id: "regression", step: 4, title: "Regression" },
+  // §9.9's dual-layer view. Last in the journey because it reads across runs
+  // rather than advancing one: a benchmark is what you look at after several
+  // verdicts exist, and no workspace phase maps to it.
+  { id: "benchmark", step: 5, title: "Benchmark" },
 ] as const;
 
 /**
@@ -178,6 +209,37 @@ function asText(value: unknown, fallback: string): string {
   return typeof value === "string" && value !== "" ? value : fallback;
 }
 
+/**
+ * A pasted transcript's `reports` map, narrowed without inspecting the reports
+ * themselves.
+ *
+ * Each report's *shape* is the server's business — it is the tool's own claim,
+ * and this page is a courier for it. What has to be true here is only that the
+ * container is an object of objects, so a paste of `"reports": 7` is named as a
+ * bad transcript rather than sent on to fail somewhere less legible.
+ */
+function isRecordOf(value: unknown): Record<string, Record<string, unknown>> {
+  const outer = requireRecord(value, "transcript.reports");
+  const narrowed: Record<string, Record<string, unknown>> = {};
+  for (const [name, entry] of Object.entries(outer)) {
+    narrowed[name] = requireRecord(entry, `transcript.reports.${name}`);
+  }
+  return narrowed;
+}
+
+/**
+ * An observation payload, or `null`.
+ *
+ * `null` is meaningful and is not an error: §12.17 says an origin with no
+ * independent channel is reported `observation_unavailable`, so a transcript
+ * that carries no cart read is a valid transcript about an unobservable
+ * storefront. Coercing it to `{}` would turn "we could not look" into "we
+ * looked and found an empty cart".
+ */
+function asDocument(value: unknown): Record<string, unknown> | null {
+  return value === null || value === undefined ? null : requireRecord(value, "transcript.observed");
+}
+
 export default function App(): React.ReactElement {
   const { status, error, loading, refresh } = useWorkspace();
   const [busy, setBusy] = useState(false);
@@ -191,6 +253,19 @@ export default function App(): React.ReactElement {
   // dependency on the state it sets would rebuild the effect on its own result.
   const heldCases = useRef<readonly EvalCaseDetail[]>([]);
   heldCases.current = evalCases;
+  // The benchmark view is read on demand rather than polled: a suite changes
+  // only when this page changes it, so a timer would spend requests re-reading
+  // a matrix nobody moved.
+  const [benchmarks, setBenchmarks] = useState<readonly BenchmarkSummary[]>([]);
+  const [benchmarkId, setBenchmarkId] = useState<string | null>(null);
+  const [benchmark, setBenchmark] = useState<BenchmarkView | null>(null);
+  // The selection, readable from a callback that must not re-derive itself when
+  // it changes — see `refreshBenchmarks`.
+  const heldBenchmarkId = useRef<string | null>(null);
+  heldBenchmarkId.current = benchmarkId;
+  const [auditPacks, setAuditPacks] = useState<readonly AuditPack[]>([]);
+  const [audit, setAudit] = useState<LiveAudit | null>(null);
+  const [auditOutcome, setAuditOutcome] = useState<AuditOutcome | null>(null);
   const [comparison, setComparison] = useState<{
     comparable: boolean | null;
     differingFields: readonly string[];
@@ -378,6 +453,36 @@ export default function App(): React.ReactElement {
    * and `useRunTimeline` each guard against, arriving here by a different route.
    */
   const evalRead = useRef(0);
+  /**
+   * Re-read the suite listing, and the selected suite's matrix with it.
+   *
+   * One callback for both because they are one question — "what is there, and
+   * what does the chosen one say" — and splitting them let the listing show a
+   * suite whose matrix had not arrived yet. Selection falls back to the newest
+   * suite so that creating one lands the operator on it rather than on an empty
+   * panel they then have to choose from.
+   */
+  const refreshBenchmarks = useCallback(async (preferId?: string, signal?: AbortSignal) => {
+    const rows = await listBenchmarks(signal);
+    setBenchmarks(rows);
+    // Read from the ref, not from state: a callback that re-derived itself
+    // whenever the selection changed would rebuild the mount effect below on
+    // every selection, and re-running that effect would immediately undo the
+    // selection that caused it. Same reason `refreshEvals` reads `heldCases`.
+    const held = heldBenchmarkId.current;
+    const chosen =
+      preferId ??
+      (held !== null && rows.some((row) => row.benchmarkId === held)
+        ? held
+        : (rows[0]?.benchmarkId ?? null));
+    setBenchmarkId(chosen);
+    if (chosen === null) {
+      setBenchmark(null);
+      return;
+    }
+    setBenchmark(await readBenchmark(chosen, signal));
+  }, []);
+
   const refreshEvals = useCallback(async (signal?: AbortSignal) => {
     const generation = (evalRead.current += 1);
     try {
@@ -404,6 +509,65 @@ export default function App(): React.ReactElement {
       controller.abort();
     };
   }, [refreshEvals, runId]);
+
+  // Once, at mount. Suites outlive runs — a benchmark reads across several — so
+  // keying this on the run would re-read it four times a journey for a list
+  // that had not changed. A workspace with no suites is not an error, so a
+  // failure here leaves the empty state rather than an error banner.
+  useEffect(() => {
+    const controller = new AbortController();
+    refreshBenchmarks(undefined, controller.signal).catch(() => undefined);
+    return () => {
+      controller.abort();
+    };
+  }, [refreshBenchmarks]);
+
+  /**
+   * Read the audit's state: the catalogue, the live audit, and any report.
+   *
+   * All three tolerate refusal. The module ships off, so on most deployments
+   * every one of these is a 403 — which is a fact about the deployment the
+   * section renders, not an error the page should shout about. The report is
+   * read separately because it exists only after an audit completes, and a 404
+   * there is the ordinary state of a workspace that has not run one.
+   */
+  // Looked up once. The module's own reported state is what decides whether the
+  // audit surface is offered at all — §21.1's "visibly disabled" needs the UI to
+  // know which module it is reporting on.
+  const auditModule = status?.modules.find((module) => module.name === "external_audit") ?? null;
+
+  const refreshAudit = useCallback(async (signal?: AbortSignal) => {
+    try {
+      setAuditPacks(await listAuditPacks(signal));
+      setAudit(await readCurrentAudit(signal));
+    } catch {
+      setAuditPacks([]);
+      setAudit(null);
+    }
+    try {
+      setAuditOutcome(await readAuditReport(signal));
+    } catch {
+      // No completed audit is the ordinary state of a workspace that has not
+      // run one; a 404 here is an answer, not a failure.
+      setAuditOutcome(null);
+    }
+  }, []);
+
+  // Only when the server says the module is on. With it off the routes are not
+  // mounted at all, so asking anyway would 404 on every page load of every
+  // deployment that ships the default — a dead request whose only effect is
+  // noise in the console the release checklist tells an operator to read.
+  const auditEnabled = auditModule?.status === "enabled";
+  useEffect(() => {
+    if (!auditEnabled) {
+      return;
+    }
+    const controller = new AbortController();
+    void refreshAudit(controller.signal);
+    return () => {
+      controller.abort();
+    };
+  }, [auditEnabled, refreshAudit]);
 
   const timeline = useRunTimeline(runId);
 
@@ -445,7 +609,7 @@ export default function App(): React.ReactElement {
   // WebMCP surface (including the declarative form's tool) must not change
   // shape because a person looked at the other view — so the inactive one is
   // `hidden`, never unmounted.
-  const [view, setView] = useState<"workflow" | "administration">("workflow");
+  const [view, setView] = useState<"workflow" | "audit" | "administration">("workflow");
 
   /** Bring the owning view forward, then walk to the control. */
   const goTo = useCallback((targetId: string) => {
@@ -516,6 +680,24 @@ export default function App(): React.ReactElement {
           ))}
         </ul>
 
+        {/* A journey of its own, not a step in the run: auditing a surface
+            somebody else built shares the classifier and nothing else. */}
+        <p className="sidebar__heading">Audit</p>
+        <ul className="sidebar__list">
+          <li>
+            <button
+              type="button"
+              className="sidebar__item"
+              aria-current={view === "audit" ? "page" : undefined}
+              onClick={() => {
+                setView("audit");
+              }}
+            >
+              External surface
+            </button>
+          </li>
+        </ul>
+
         <p className="sidebar__heading">Administration</p>
         <ul className="sidebar__list">
           <li>
@@ -536,6 +718,7 @@ export default function App(): React.ReactElement {
           <CapabilityBar
             capabilities={status?.capabilities ?? []}
             webMcpSupported={isWebMcpSupported()}
+            webMcpHost={webMcpHostLabel()}
             registeredToolCount={reconciliation.count}
           />
         </div>
@@ -627,6 +810,20 @@ export default function App(): React.ReactElement {
             // looked exactly like a quiet run.
             error={timeline.error}
           />
+
+          {/* §12.12's external target. It sits in the Run stage because that is
+              what it is — a run whose acting happens in another tab, on a store
+              this project does not control. The section owns its own pairing
+              state and cadence; nothing else on this page reads a pairing. */}
+          <ShopifyPairingSection
+            moduleStatus={
+              status.modules.find((module) => module.name === "shopify")?.status ?? "disabled"
+            }
+            moduleReason={
+              status.modules.find((module) => module.name === "shopify")?.reason ?? ""
+            }
+            contractId={status.selectedContractId}
+          />
           </Stage>
 
           <Stage id="verdict" step={3} title="Verdict" activeStage={activeStage}>
@@ -703,6 +900,133 @@ export default function App(): React.ReactElement {
             }}
           />
           </Stage>
+
+          <Stage id="benchmark" step={5} title="Benchmark" activeStage={activeStage}>
+          {/* §9.9's dual layer, made reachable. The matrix was written and
+              tested long before this: what was missing was a suite listing, a
+              way to create one, and a control to import a report — so the panel
+              existed and no person could arrive at it. */}
+          <BenchmarkSection
+            benchmarks={benchmarks}
+            selectedId={benchmarkId}
+            benchmark={benchmark}
+            busy={busy}
+            onSelect={(chosen) => {
+              void act(async () => {
+                await refreshBenchmarks(chosen);
+              });
+            }}
+            onCreate={(sourceKind, correlationMode) => {
+              void act(async () => {
+                const created = await createBenchmark(sourceKind, correlationMode);
+                // Land on the suite just made, rather than leaving the operator
+                // to find it in a list that now has one more row.
+                await refreshBenchmarks(created);
+              });
+            }}
+            onImport={(report) => {
+              void act(async () => {
+                await importEvaluatorReport(benchmarkId ?? "", report);
+                await refreshBenchmarks(benchmarkId ?? undefined);
+              });
+            }}
+            liveEvaluatorStatus={
+              status?.modules.find((module) => module.name === "live_evaluator")?.status ??
+              "unknown"
+            }
+            liveEvaluatorReason={
+              status?.modules.find((module) => module.name === "live_evaluator")?.reason ?? ""
+            }
+            onFreezeVariants={(approval: VariantApprovalRequest) => {
+              void act(async () => {
+                // Re-read rather than merge the receipt: FR-100's seal is a
+                // change to the manifest, and the server's copy of it is the
+                // one a person should be looking at.
+                await freezeBenchmarkVariants(benchmarkId ?? "", approval);
+                await refreshBenchmarks(benchmarkId ?? undefined);
+              });
+            }}
+            onReplay={() => {
+              void act(async () => {
+                await replayBenchmark(benchmarkId ?? "");
+                await refreshBenchmarks(benchmarkId ?? undefined);
+              });
+            }}
+            onFinalize={() => {
+              void act(async () => {
+                await finalizeBenchmark(benchmarkId ?? "");
+                await refreshBenchmarks(benchmarkId ?? undefined);
+              });
+            }}
+            trialHref={(externalTrialId) =>
+              `/api/v1/benchmarks/${benchmarkId ?? ""}/trials/${externalTrialId}`
+            }
+            reportHref={`/api/v1/benchmarks/${benchmarkId ?? ""}/report`}
+          />
+          </Stage>
+        </div>
+      )}
+
+      {/* The audit view. Its own journey: §12.17 audits a surface somebody else
+          built, so it shares the classifier with the run path and none of its
+          state. Hidden, never unmounted — same rule as the others, because the
+          tool surface must not change because a person looked elsewhere. */}
+      {status === null ? null : (
+        <div className="workspace__panels" hidden={view !== "audit"}>
+          <section className="stage" id="stage-audit" tabIndex={-1} data-stage="audit">
+            <h2 className="stage__title">
+              <span className="stage__step" aria-hidden="true">
+                ★
+              </span>
+              External surface audit
+            </h2>
+            <div className="stage__panels">
+              <AuditSection
+                moduleStatus={auditModule?.status ?? "disabled"}
+                moduleReason={auditModule?.reason ?? ""}
+                packs={auditPacks}
+                audit={audit}
+                outcome={auditOutcome}
+                busy={busy}
+                onAuthorize={(origin, assertedBy) => {
+                  void act(async () => {
+                    // `true` is sent because the operator ticked the box the
+                    // button is gated on; the server refuses a submission
+                    // without it, and this client never asserts on their behalf.
+                    await assertAuthorization(origin, assertedBy, true);
+                    await refreshAudit();
+                  });
+                }}
+                onSubmit={(packId, transcript) => {
+                  void act(async () => {
+                    // Parsed here so a malformed paste is named as such, rather
+                    // than reaching the server as an unreadable body.
+                    let parsed: unknown;
+                    try {
+                      parsed = JSON.parse(transcript);
+                    } catch {
+                      throw new Error("That transcript is not valid JSON.");
+                    }
+                    const record = requireRecord(parsed, "transcript");
+                    await submitAuditEvidence({
+                      packId,
+                      enumerated: stringList(record["enumerated"]),
+                      reports: isRecordOf(record["reports"]),
+                      observedBefore: asDocument(record["observed_before"]),
+                      observedAfter: asDocument(record["observed_after"]),
+                    });
+                    await refreshAudit();
+                  });
+                }}
+                onCancel={() => {
+                  void act(async () => {
+                    await cancelAudit();
+                    await refreshAudit();
+                  });
+                }}
+              />
+            </div>
+          </section>
         </div>
       )}
 

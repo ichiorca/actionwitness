@@ -37,6 +37,8 @@ from actionwitness_core.reports.enums import (
 )
 from actionwitness_core.reports.models import (
     ContractReference,
+    ExternalCaptureReference,
+    ExternalTargetReference,
     GuidanceReference,
     LayeredResult,
     OutcomeReport,
@@ -351,6 +353,64 @@ def test_an_undeclared_change_block_reports_its_waivers_and_metadata() -> None:
             "attributed_cause": "none",
         }
     ]
+
+
+# --- external-target provenance (§23.9, FR-117) -----------------------------
+
+
+@pytest.mark.unit
+def test_an_external_target_report_carries_complete_canonical_provenance() -> None:
+    external = ExternalTargetReference(
+        target_type="shopify_development_store",
+        origin="https://dev-store.myshopify.com",
+        pairing_id="pair_1",
+        bridge_version="1.0.0",
+        theme_build_id="theme-build-7",
+        observation_provider="shopify_cart_state",
+        provenance="platform_session_api",
+        before=ExternalCaptureReference(
+            path="/en/cart.js", captured_at=EPOCH, content_hash="sha256:" + "2" * 64
+        ),
+        after=ExternalCaptureReference(
+            path="/en/cart.js",
+            captured_at=EPOCH + timedelta(seconds=1),
+            content_hash="sha256:" + "3" * 64,
+        ),
+        safe_scope_result=LayerResult.PASSED,
+    )
+
+    document = _report(external_target=external).canonical_document()
+
+    assert document["schema_version"] == "1.2"
+    assert document["external_target"] == {
+        "target_type": "shopify_development_store",
+        "origin": "https://dev-store.myshopify.com",
+        "pairing_id": "pair_1",
+        "bridge_version": "1.0.0",
+        "theme_build_id": "theme-build-7",
+        "observation_provider": "shopify_cart_state",
+        "provenance": "platform_session_api",
+        "captures": {
+            "before": {
+                "path": "/en/cart.js",
+                "captured_at": "2026-01-01T00:00:00Z",
+                "content_hash": "sha256:" + "2" * 64,
+            },
+            "after": {
+                "path": "/en/cart.js",
+                "captured_at": "2026-01-01T00:00:01Z",
+                "content_hash": "sha256:" + "3" * 64,
+            },
+        },
+        "safe_scope_result": "passed",
+    }
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("path", ["cart.js", "/cart.js?token=secret", "/cart.js#secret"])
+def test_an_external_capture_refuses_noncanonical_or_sensitive_paths(path: str) -> None:
+    with pytest.raises(ValidationError, match=r"absolute.*no query or fragment"):
+        ExternalCaptureReference(path=path, captured_at=EPOCH, content_hash="sha256:" + "2" * 64)
 
 
 # --- byte-identical serialization (002 exit gate 5) -------------------------

@@ -1,0 +1,29 @@
+{%- comment -%}
+  ActionWitness theme bridge (spec §12.12, FR-111).
+
+  Render this as the FIRST thing inside <head> in `layout/theme.liquid`:
+
+      {% render 'actionwitness-bridge' %}
+
+  Position is not cosmetic. FR-111 requires the one-time pairing credential to
+  be read out of the URL fragment and removed "before unrelated third-party
+  theme scripts" run, and the only way to guarantee that is a *blocking classic
+  script* ahead of every other tag on the page. `defer`, `async` and
+  `type="module"` would each move this after the chat widget and the analytics
+  tag, which is exactly the window the fragment must not be readable in.
+
+  The two origins are set here, in the theme, rather than carried in the launch
+  URL. The launch URL is a link — whoever composes one would otherwise choose
+  where this store's cart observations are sent. Set them once, at install.
+
+  Replace the placeholder below with your harness origin. Both must be exact
+  HTTPS origins with no trailing slash and no path; the bridge refuses anything
+  else and says so in the console.
+{%- endcomment -%}
+
+<script
+  src="{{ 'actionwitness-bridge.js' | asset_url }}"
+  data-actionwitness
+  data-harness-origin="https://REPLACE-WITH-YOUR-HARNESS.example"
+  data-store-origin="https://{{ shop.permanent_domain }}"
+></script>

@@ -33,6 +33,7 @@ import {
   EvalPanel,
   RunTimeline,
   ToolSurfacePanel,
+  TargetPanel,
   UndeclaredChangesPanel,
   FindingsPanel,
 } from "./panels";
@@ -1070,5 +1071,41 @@ describe("ConfigPanel offers only what the adapter supports (§15.1, §9.1)", ()
 
     expect(screen.getByText(/no scenario modes to choose from/)).toBeDefined();
     expect(screen.queryByLabelText("Profile")).toBeNull();
+  });
+});
+
+describe("TargetPanel and the observed workspace", () => {
+  function targetPanel(overrides: Record<string, unknown> = {}) {
+    return render(
+      <TargetPanel
+        status={workspace(overrides)}
+        busy={false}
+        canArm={false}
+        canVerify={false}
+        onArm={() => {}}
+        onVerify={() => {}}
+      />,
+    );
+  }
+
+  it("says nothing about a second workspace for an ordinary run", () => {
+    // An ordinary target's observed workspace *is* the recording workspace, so
+    // there is no second one to name. Rendering a placeholder would suggest the
+    // run was watching something it was not.
+    targetPanel();
+
+    expect(screen.queryByText(/Observing:/)).toBeNull();
+  });
+
+  it("names the workspace a self-witnessing run observes", () => {
+    // FR-172's claim, made visible. Without this the run reports a verdict
+    // about a workspace nothing on screen ever mentions.
+    targetPanel({ observed_workspace_id: "ws_observed_7" });
+
+    expect(screen.getByText(/Observing:/)).toBeTruthy();
+    expect(screen.getByText(/ws_observed_7/)).toBeTruthy();
+    // Stated in words, so the separation reads without relying on layout or
+    // colour to carry it (§8.4).
+    expect(screen.getByText(/never observes the state it is producing/)).toBeTruthy();
   });
 });

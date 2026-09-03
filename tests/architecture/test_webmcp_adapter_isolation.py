@@ -42,9 +42,25 @@ _WEBMCP = "modelContext"
 #: - `spike/**` — ADR-0002's decision harness. A separate Vite entry point
 #:   (`spike.html`), deliberately outside the product surface so a decision tool
 #:   can never leak into it.
+#: - `webmcp/compat.d.ts` — types, not access. It exists to declare
+#:   `navigator.modelContext`, which the pinned `webmcp-types` package types on
+#:   `Document` alone, and a declaration file cannot declare a property without
+#:   naming it. Nothing here runs: the augmentation gives the adapter a typed
+#:   second location to feature-detect, and detection is still what proves
+#:   support (§25.12). It sits beside the adapter, in the one directory this rule
+#:   is about.
+#: - `webmcp/auditCollector.ts` — a string, not a call. It emits JavaScript for
+#:   a *different document*: §12.17 puts the audit's enumeration and its
+#:   `cart.js` read in the operator's own session on the audited storefront, and
+#:   a document can reach neither across an origin. So the browser-API tokens in
+#:   that file are the text of a script this page hands to a person, and nothing
+#:   in it executes here. It is its own module for exactly this reason — the
+#:   component that displays it stays covered by this rule.
 _ALLOWED = frozenset(
     {
         "webmcp/adapter.ts",
+        "webmcp/compat.d.ts",
+        "webmcp/auditCollector.ts",
         "integrations/buggyStore/poisoned.ts",
     }
 )
@@ -165,11 +181,20 @@ def test_the_adapter_is_the_only_caller_of_get_tools() -> None:
     shows a person, and what the surface capture sends the server to judge. A
     second call site lets those diverge — and the divergence would look like the
     page telling the truth while the evidence said otherwise.
+
+    `webmcp/auditCollector.ts` is excluded, and the reason is the rule rather
+    than an exception to it. That module reads no surface: it emits the text of
+    a script that runs on an **audited storefront**, enumerating *that*
+    document's tools in the operator's own session. It cannot disagree with this
+    page's registration view because it never reads this page. Excluding it by
+    name keeps the property this test is really about — one reader of *our*
+    surface — instead of relaxing the count to two and losing it.
     """
     callers = [
         path.relative_to(FRONTEND_SRC).as_posix()
         for path in _shipped_sources()
         if "getTools()" in _code(path.read_text(encoding="utf-8"))
+        and path.relative_to(FRONTEND_SRC).as_posix() != "webmcp/auditCollector.ts"
         and not path.relative_to(FRONTEND_SRC).as_posix().startswith(_ALLOWED_TREES)
     ]
     assert callers == ["webmcp/adapter.ts"], (

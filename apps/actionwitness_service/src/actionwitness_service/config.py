@@ -133,6 +133,7 @@ SERVICE_CLOSED_ENUMS: tuple[tuple[str, str, Mapping[Any, str]], ...] = (
 
 #: Every optional module, in the order the capability bar reports them.
 MODULE_NAMES: tuple[str, ...] = (
+    "self",
     "buggy_store",
     "evaluator_import",
     "live_evaluator",
@@ -409,14 +410,39 @@ def _resolve_live_evaluator(
 
 #: Whether this build actually ships the Shopify target.
 #:
-#: It does not. `application/adapter_registry.py` registers `buggy_store` alone,
-#: `api/routes/shopify.py` is an unmounted empty router, and every task in
-#: `specs/011-shopify-cart-proof/tasks.md` is unticked — a state
-#: `test_010_exit_gate.py` actively enforces. Configuration parsing is kept and
-#: kept tested so the module can be switched on in one edit when the adapter and
-#: route land; what is *not* kept is the claim that setting four environment
-#: variables turned a feature on.
-_SHOPIFY_ADAPTER_SHIPPED: Final = False
+#: It does now. `application/adapter_registry.py` registers `shopify` from these
+#: settings and `integrations.shopify.ShopifyAdapter` is a real
+#: `ExternalTargetAdapter` with a `shopify_cart_state` observation provider and
+#: the `shopify_exact_cart` contract behind it.
+#:
+#: The flag stays rather than being deleted, because what it guards is a claim
+#: an operator reads: `enabled` here has to mean a run can actually happen. It
+#: said `False` for the whole period when four correct environment variables
+#: produced `enabled` with nothing behind them, and `modules.shopify` therefore
+#: contradicted `capabilities`, which listed no shopify target. Anything that
+#: makes the adapter unavailable again — a registration removed, an integration
+#: uninstalled — must flip this back rather than leave the workspace response
+#: disagreeing with itself.
+_SHOPIFY_ADAPTER_SHIPPED: Final = True
+
+
+def _resolve_self() -> ModuleState:
+    """The built-in self target is always available (§12.20, FR-171).
+
+    It takes no configuration and reaches no third party: it drives and observes
+    this same deployment through `/api/v1`. There is nothing an operator could
+    set, so there is no state in which it could be *mis*configured — and gating
+    it behind a flag would invent an off switch for a capability that costs
+    nothing to have on.
+
+    It is still listed in `MODULE_NAMES` so the workspace's module report names
+    it. §21.1's rule cuts both ways: a reader should be able to see that the
+    self target exists and is on, not only that an absent one is off.
+    """
+    return _enabled(
+        "self",
+        "ActionWitness observes its own workspaces through its public API.",
+    )
 
 
 def _resolve_shopify(environ: Mapping[str, str]) -> tuple[ShopifySettings | None, ModuleState]:
@@ -536,6 +562,7 @@ class ServiceSettings(_Frozen):
             shopify=shopify,
             external_audit=external_audit,
             modules=(
+                _resolve_self(),
                 buggy_store_state,
                 evaluator_import_state,
                 live_evaluator_state,

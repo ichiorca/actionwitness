@@ -27,12 +27,25 @@ export interface CapabilityBarProps {
   readonly capabilities: readonly CapabilityReport[];
   readonly webMcpSupported: boolean;
   readonly registeredToolCount: number;
+  /**
+   * Where this browser exposed WebMCP, already formatted for reading.
+   *
+   * Shown because "works in Chrome, not in the ChatGPT in-app browser" is
+   * otherwise a report with nothing in it; naming the location in use turns a
+   * shrug into something an operator can act on. The string is built by the
+   * adapter, not here — the shape of the browser API is the adapter's knowledge,
+   * and a panel that assembled the label would be a second place that knows what
+   * the API is called. Optional: a caller with nothing to say omits it rather
+   * than inventing a default.
+   */
+  readonly webMcpHost?: string | null;
 }
 
 export function CapabilityBar({
   capabilities,
   webMcpSupported,
   registeredToolCount,
+  webMcpHost = null,
 }: CapabilityBarProps): React.ReactElement {
   return (
     <section className="capabilities" aria-label="Capabilities">
@@ -42,6 +55,7 @@ export function CapabilityBar({
           <>
             <strong>available</strong> — {registeredToolCount} tool
             {registeredToolCount === 1 ? "" : "s"} registered
+            {webMcpHost === null ? null : ` (via ${webMcpHost})`}
           </>
         ) : (
           // AC-09: a statement about the browser, not an error. The workspace
@@ -326,6 +340,21 @@ export function TargetPanel({
         <span className="panel__label">Run:</span>{" "}
         {status.activeRun === null ? "none" : `${status.activeRun.runId} (${status.activeRun.status})`}
       </p>
+      {/*
+        Shown only for a self-witnessing run, because only then is there a
+        second workspace. Without it the run reports a verdict about a
+        workspace nothing on screen ever names, and the one claim the run
+        exists to make — that it watched something other than itself — is
+        invisible to the person reading the result.
+      */}
+      {status.observedWorkspaceId === null ? null : (
+        <p>
+          <span className="panel__label">Observing:</span> {status.observedWorkspaceId}{" "}
+          <span className="panel__note">
+            (a separate workspace, so the run never observes the state it is producing)
+          </span>
+        </p>
+      )}
       {/* `id`s: the banner's shortcut targets for `arm_run` / `verify_outcome`. */}
       <button type="button" id="action-arm-run" onClick={onArm} disabled={busy || !canArm}>
         Arm the contract

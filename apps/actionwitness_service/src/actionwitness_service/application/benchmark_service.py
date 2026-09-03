@@ -39,6 +39,7 @@ from typing import Any
 from actionwitness_core.benchmarks.approval import freeze
 from actionwitness_core.benchmarks.enums import (
     BenchmarkStatus,
+    CallLevelResult,
     CorrelationMode,
     ExclusionReason,
     OutcomeTrialResult,
@@ -71,12 +72,34 @@ from actionwitness_service.persistence.database import UnitOfWork
 from actionwitness_service.persistence.repositories import new_id
 
 __all__ = [
+    "MAX_TRIAL_REPETITIONS",
     "BenchmarkService",
     "ImportedSuite",
     "PreparedFinalization",
     "PreparedImport",
+    "RepetitionPlan",
     "write_benchmark_report",
 ]
+
+#: How many repetitions of one variant a single request may run (§26.5).
+#:
+#: The Tier 3 showcase runs "six intent variants with five repeated trials
+#: each"; this doubles that per request so a suite can be deepened without
+#: changing the number, and refuses anything above rather than truncating to it.
+#:
+#: A named ceiling rather than whatever a caller sends, because the cost is not
+#: the caller's to choose: each repetition mints its own eval workspace, restores
+#: a fixture through the adapter, and replays a whole journey. An unbounded `n`
+#: would let one request hold a target and a database for an unbounded time and
+#: leave an unbounded number of workspaces behind — FR-008's ceilings exist for
+#: exactly that class of request, and this is the benchmark-shaped one.
+MAX_TRIAL_REPETITIONS = 10
+
+#: `NormalizedTrial.external_trial_id` is bounded at 128 characters, and a
+#: repetition's id is composed from its source's. A source id long enough to
+#: overflow the composition is refused up front rather than stored as a row that
+#: `trial_from_row` would later fail to read back.
+_MAX_TRIAL_ID_CHARS = 128
 
 #: Run states an `executed_browser` binding may point at. §17.1 requires "the
 #: exact completed outcome `run_id`", so an in-flight run is not bindable: its
@@ -120,6 +143,57 @@ class PreparedImport:
 
     correlation_mode: CorrelationMode
     source_kind: str
+
+
+@dataclass(frozen=True, slots=True)
+class RepetitionPlan:
+    """Everything N repetitions of one variant need, decided before any write.
+
+    Assembled by `plan_repetitions`, which is where every refusal lives, and
+    consumed one repetition at a time by `record_repetition`. The split is
+    ADR-0003's: the replay between two repetitions is I/O, so no transaction may
+    span the batch, and a plan is what survives across the gap.
+
+    `call_level_result` travels on the plan because it is *copied*, never
+    re-measured. The evaluator scored this variant's intent once; every
+    repetition carries that same self-report, and `source_external_trial_id`
+    records which trial it came from. Re-deriving it per repetition would turn
+    one evaluator statement into N, which is precisely the promotion of a
+    self-report to independent evidence the constitution forbids.
+    """
+
+    benchmark_id: str
+    source_external_trial_id: str
+    source_artifact_id: str
+    scenario_id: str
+    correlation_mode: CorrelationMode
+    call_level_result: CallLevelResult
+    contract_content_hash: str | None
+    scenario_mode: str | None
+    failure_profile: str | None
+    #: The source trial's stored metadata, carried across verbatim. It holds the
+    #: trajectory a repetition replays; re-deriving it would need the evaluator
+    #: report, which is no longer in hand.
+    metadata_json: str
+    #: Which frozen variant this repeats, or `None` when the suite froze none.
+    variant_index: int | None
+    count: int
+    #: Where this batch's numbering starts, so a second batch continues the
+    #: sequence instead of colliding with the first one's identifiers.
+    first_repetition_index: int
+
+    def repetition_ids(self) -> tuple[int, ...]:
+        return tuple(range(self.first_repetition_index, self.first_repetition_index + self.count))
+
+    def external_trial_id(self, repetition_index: int) -> str:
+        """This repetition's identity within the suite.
+
+        Derived from the source id so a reader can see at a glance which trial a
+        repetition repeats, and numbered rather than randomised so the same batch
+        run twice against the same suite collides loudly instead of quietly
+        producing a second population.
+        """
+        return f"{self.source_external_trial_id}#repetition-{repetition_index}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -362,6 +436,202 @@ class BenchmarkService:
             ),
         )
         return frozen.content_hash()
+
+    # -- repeated trials ------------------------------------------------------
+
+    async def plan_repetitions(
+        self,
+        benchmark_id: str,
+        *,
+        source_external_trial_id: str,
+        count: int,
+        variant_index: int | None = None,
+    ) -> RepetitionPlan:
+        """Decide N repetitions of one variant, and write nothing (§26.5).
+
+        **Every refusal is here.** The ceiling, the suite's state, the mode, the
+        source trial, the variant, the composed identifier length: all of them
+        happen before a byte is written, so a refused batch leaves no half-run
+        population behind. `record_repetition` re-checks the state when it
+        commits, because between two repetitions there is a replay, and ADR-0003
+        forbids a transaction spanning it.
+
+        **Only while the suite is `draft`.** §16.4 closes the population at
+        `ready` — that is the moment `seal` derives every trial's outcome layer
+        and FR-092's denominator stops moving. Adding repetitions afterwards
+        would change the denominator of a matrix somebody has already read.
+
+        **Only in `imported_trajectory_replay` mode.** An `executed_browser`
+        trial is bound one-to-one to a browser execution that already happened;
+        there is no second execution to repeat, and manufacturing one would
+        attribute a fresh outcome to evidence from a different run (FR-091).
+
+        **`variant_index` is named, never inferred.** FR-100 froze the variants
+        in a definite order; which one a batch exercises is the caller's
+        statement about what they are measuring, and guessing it from the source
+        trial's text would be the same class of error as guessing a binding.
+        """
+        if count < 1 or count > MAX_TRIAL_REPETITIONS:
+            raise ApiError(
+                ApiErrorCode.CONTRACT_VALIDATION_FAILED,
+                f"a repeated-trial batch runs between 1 and {MAX_TRIAL_REPETITIONS} "
+                f"trials; this one asked for {count}. Run several batches if you need "
+                "a deeper population — each one is recorded, so nothing is lost.",
+                details=[{"path": "trials", "message": "outside the repetition ceiling"}],
+            )
+
+        suite = await self._draft(benchmark_id)
+        mode = CorrelationMode(str(suite["correlation_mode"]))
+        if mode is not CorrelationMode.IMPORTED_TRAJECTORY_REPLAY:
+            raise ApiError(
+                ApiErrorCode.PRECONDITION_FAILED,
+                f"this suite is {mode.value}; only an imported_trajectory_replay suite "
+                "repeats a trial, because an executed_browser trial is bound to a "
+                "browser execution that already happened and cannot be run again "
+                "(FR-091).",
+            )
+
+        source = await self._trial(benchmark_id, source_external_trial_id)
+        if source is None:
+            raise ApiError(
+                ApiErrorCode.RESOURCE_NOT_FOUND,
+                f"no trial {source_external_trial_id!r} in this benchmark",
+            )
+        if source["repetition_index"] is not None:
+            raise ApiError(
+                ApiErrorCode.PRECONDITION_FAILED,
+                f"trial {source_external_trial_id!r} is itself a repetition. Repeat the "
+                "imported trial it came from, so every repetition in a population is a "
+                "repetition of the same recorded intent.",
+            )
+        if not _has_trajectory(source["metadata_json"]):
+            raise ApiError(
+                ApiErrorCode.PRECONDITION_FAILED,
+                f"trial {source_external_trial_id!r} carries no replayable trajectory, "
+                "so there is nothing to run again.",
+            )
+
+        self._check_variant(suite, variant_index)
+        first = await self._next_repetition_index(benchmark_id, source_external_trial_id)
+        plan = RepetitionPlan(
+            benchmark_id=benchmark_id,
+            source_external_trial_id=source_external_trial_id,
+            source_artifact_id=str(source["external_source_artifact_id"]),
+            scenario_id=str(source["scenario_id"]),
+            correlation_mode=mode,
+            call_level_result=CallLevelResult(str(source["call_level_result"])),
+            contract_content_hash=_optional(source["contract_content_hash"]),
+            scenario_mode=_optional(source["scenario_mode"]),
+            failure_profile=_optional(source["failure_profile"]),
+            metadata_json=str(source["metadata_json"]),
+            variant_index=variant_index,
+            count=count,
+            first_repetition_index=first,
+        )
+        longest = plan.external_trial_id(first + count - 1)
+        if len(longest) > _MAX_TRIAL_ID_CHARS:
+            raise ApiError(
+                ApiErrorCode.CONTRACT_VALIDATION_FAILED,
+                f"repetitions of {source_external_trial_id!r} would need identifiers "
+                f"longer than {_MAX_TRIAL_ID_CHARS} characters, which this suite cannot "
+                "store or read back.",
+                details=[{"path": "source_external_trial_id", "message": "too long to repeat"}],
+            )
+        return plan
+
+    def _check_variant(self, suite: Mapping[str, Any], variant_index: int | None) -> None:
+        """A named variant must exist in the set FR-100 froze.
+
+        A suite with no frozen set may still be repeated — a Tier 2 fixture has
+        no variants and its repetitions group by scenario — but a caller who
+        names an index into a set that does not exist is describing a population
+        this suite cannot have.
+        """
+        if variant_index is None:
+            return
+        stored = json.loads(str(suite["manifest_json"]))
+        frozen = stored.get("frozen_variants")
+        variants = frozen.get("variants") if isinstance(frozen, Mapping) else None
+        available = len(variants) if isinstance(variants, list) else 0
+        if variant_index < 0 or variant_index >= available:
+            raise ApiError(
+                ApiErrorCode.CONTRACT_VALIDATION_FAILED,
+                f"this suite has {available} frozen variants, so variant "
+                f"{variant_index} is not one of them. FR-100 freezes the set before "
+                "trials begin; a different set requires a new suite.",
+                details=[{"path": "variant_index", "message": "no such frozen variant"}],
+            )
+
+    async def _next_repetition_index(self, benchmark_id: str, source_trial_id: str) -> int:
+        """Where this batch's numbering starts, counted from what is stored.
+
+        Read from the rows rather than from a counter the caller supplies, so a
+        second batch continues the first one's sequence even if the two requests
+        know nothing about each other. Numbering from one, because "repetition 1
+        of 5" is what a reader is being shown.
+        """
+        row = await self._work.fetch_one(
+            "SELECT MAX(repetition_index) AS highest FROM benchmark_trials "
+            "WHERE benchmark_suite_id = ? AND source_external_trial_id = ?",
+            (benchmark_id, source_trial_id),
+        )
+        highest = None if row is None else row["highest"]
+        return 1 if highest is None else int(highest) + 1
+
+    async def record_repetition(self, plan: RepetitionPlan, repetition_index: int) -> str:
+        """Store one repetition, before it runs. Returns its row id.
+
+        **Written before the replay, not after.** A row that appeared only on
+        success would make a batch interrupted halfway look like a shorter batch
+        that finished — and constitution §5 requires a partially completed
+        operation to stay visible rather than be silently retried. This row lands
+        as `excluded` / `not_reached`, which is the truth at the moment it is
+        written: the outcome layer has not run. The replay makes it eligible, or
+        it stays exactly this and says so.
+
+        The suite's state is re-checked here rather than trusted from the plan.
+        The batch does not hold the workspace lock across its replays (ADR-0003
+        forbids holding a lock across a wait), so a suite that is sealed midway
+        stops the batch at the next repetition instead of growing a population
+        that was already closed.
+        """
+        await self._draft(plan.benchmark_id)
+        trial_row_id = new_id("trial")
+        await self._work.execute(
+            """
+            INSERT INTO benchmark_trials (
+                id, benchmark_suite_id, external_source_artifact_id, external_trial_id,
+                scenario_id, contract_content_hash, scenario_mode, failure_profile,
+                correlation_mode, call_level_result, outcome_result, eligibility,
+                exclusion_reason, metadata_json, variant_index, repetition_index,
+                source_external_trial_id, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                trial_row_id,
+                plan.benchmark_id,
+                # The same immutable evaluator artifact the source trial cites.
+                # A repetition adds no new evaluator evidence, so it must not
+                # look like it references any.
+                plan.source_artifact_id,
+                plan.external_trial_id(repetition_index),
+                plan.scenario_id,
+                plan.contract_content_hash,
+                plan.scenario_mode,
+                plan.failure_profile,
+                plan.correlation_mode.value,
+                plan.call_level_result.value,
+                OutcomeTrialResult.NOT_REACHED.value,
+                TrialEligibility.EXCLUDED.value,
+                ExclusionReason.OUTCOME_NOT_REACHED.value,
+                plan.metadata_json,
+                plan.variant_index,
+                repetition_index,
+                plan.source_external_trial_id,
+                self._work.now(),
+            ),
+        )
+        return trial_row_id
 
     # -- binding --------------------------------------------------------------
 
@@ -768,6 +1038,24 @@ class BenchmarkService:
 
     # -- reads ----------------------------------------------------------------
 
+    async def list_suites(self) -> list[Mapping[str, Any]]:
+        """Every suite this workspace owns, newest first.
+
+        A summary row rather than the whole suite: a listing exists so somebody
+        can *choose* one, and the matrix, metrics and trials that `get` returns
+        are the answer to a question they have not asked yet. `created_at` with
+        the id as tie-break, because timestamps here have coarse granularity and
+        two suites made inside one tick would otherwise order by whichever way
+        SQLite happened to scan them.
+        """
+        rows = await self._work.fetch_all(
+            "SELECT id, status, source_kind, correlation_mode, result_artifact_id, created_at "
+            "FROM benchmark_suites WHERE workspace_id = ? "
+            "ORDER BY created_at DESC, id DESC",
+            (self._workspace_id,),
+        )
+        return [dict(row) for row in rows]
+
     async def get(self, benchmark_id: str) -> Mapping[str, Any]:
         suite = await self._work.fetch_one(
             "SELECT * FROM benchmark_suites WHERE id = ? AND workspace_id = ?",
@@ -897,6 +1185,28 @@ def _outcome_of_run(status: str, overall_result: Any) -> OutcomeTrialResult:
         if status == RunState.ERROR.value
         else OutcomeTrialResult.NOT_REACHED
     )
+
+
+def _optional(value: Any) -> str | None:
+    return None if value is None else str(value)
+
+
+def _has_trajectory(metadata_json: Any) -> bool:
+    """Whether this stored trial carries calls a repetition could re-execute.
+
+    Read here rather than through `benchmark_replay.stored_trajectory`, which
+    would make these two modules import each other: the repetition runner is the
+    one that reaches back into this service, and the dependency has to point one
+    way. The question asked is deliberately narrower than that function's — this
+    only needs to know whether *anything* replayable is recorded, and the runner
+    still refuses a malformed trajectory on its own terms.
+    """
+    try:
+        stored = json.loads(str(metadata_json or "{}"))
+    except json.JSONDecodeError:  # pragma: no cover - written by this module
+        return False
+    trajectory = stored.get("trajectory") if isinstance(stored, dict) else None
+    return isinstance(trajectory, list) and bool(trajectory)
 
 
 def _addressable(trial: Mapping[str, Any]) -> bool:

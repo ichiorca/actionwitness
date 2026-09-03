@@ -25,12 +25,16 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   MAX_TOOL_RESULT_CHARS,
   type RegistrationState,
+  canObserveToolChanges,
   expectationOf,
   isWebMcpSupported,
   normalizeError,
   normalizeResult,
+  readSurface,
+  subscribeToToolChange,
   useNativeTool,
   useToolReconciliation,
+  webMcpHost,
 } from "./adapter";
 import { type InstalledDouble, installModelContextDouble } from "../test/modelContextDouble";
 
@@ -60,8 +64,118 @@ describe("support detection", () => {
   it("detects support from the document, not from a user agent string", () => {
     installed = installModelContextDouble();
     expect(isWebMcpSupported()).toBe(true);
+    expect(webMcpHost()).toBe("document");
+  });
+
+  it("detects support when the browser exposes WebMCP on the navigator", () => {
+    // ADR-0002's spike found the API at both locations in one Chrome build, and
+    // a later build exposed only `document`. A browser that keeps it on
+    // `navigator` alone — an embedded one, or the next Chrome — must not be
+    // reported as having no WebMCP, because that reads identically to a browser
+    // that genuinely has none and takes the whole agent path away silently.
+    installed = installModelContextDouble("navigator");
+
+    expect("modelContext" in document).toBe(false);
+    expect(isWebMcpSupported()).toBe(true);
+    expect(webMcpHost()).toBe("navigator");
+  });
+
+  it("registers through the navigator when that is where the API lives", async () => {
+    // Detection alone would be a half-fix: every other call site has to resolve
+    // the same way, or support is *reported* and nothing registers.
+    installed = installModelContextDouble("navigator");
+
+    const { result } = renderHook(() => useNativeTool(tool()));
+
+    await waitFor(() => expect(result.current.phase).toBe("registered"));
+    expect(installed.modelContext.toolNames).toEqual(["get_workspace_status"]);
+  });
+
+  it("reads the surface and subscribes through the navigator too", async () => {
+    // `readSurface` feeds the evidence the server judges and
+    // `subscribeToToolChange` feeds the witness. Either one resolving to a
+    // different location than registration would make the page and the evidence
+    // disagree about what is registered.
+    installed = installModelContextDouble("navigator");
+    renderHook(() => useNativeTool(tool()));
+    await waitFor(async () => expect(await readSurface()).toHaveLength(1));
+
+    const unsubscribe = subscribeToToolChange(() => undefined);
+
+    expect(unsubscribe).not.toBeNull();
+    unsubscribe?.();
+  });
+
+  it("prefers the document when a browser exposes both", () => {
+    // Both hosts were present in the spike's build. The order is deterministic
+    // rather than arbitrary: a resolver that picked either would make the
+    // reported host depend on nothing a reader could see.
+    const onNavigator = installModelContextDouble("navigator");
+    installed = installModelContextDouble();
+
+    try {
+      expect(webMcpHost()).toBe("document");
+    } finally {
+      onNavigator.uninstall();
+    }
+  });
+
+  it("reports no host at all when the browser has neither", () => {
+    expect(isWebMcpSupported()).toBe(false);
+    expect(webMcpHost()).toBeNull();
   });
 });
+
+  it("falls back to snapshots when an advertised event channel rejects subscription", () => {
+    const partialContext = {
+      registerTool: async () => undefined,
+      getTools: async () => [],
+      addEventListener: () => {
+        throw new Error("event bridge unavailable");
+      },
+      removeEventListener: () => undefined,
+    };
+    Object.defineProperty(document, "modelContext", {
+      value: partialContext,
+      configurable: true,
+    });
+
+    try {
+      expect(canObserveToolChanges()).toBe(true);
+      expect(() => subscribeToToolChange(() => undefined)).not.toThrow();
+      expect(canObserveToolChanges()).toBe(false);
+    } finally {
+      delete (document as { modelContext?: unknown }).modelContext;
+    }
+  });
+
+  it("keeps the workspace usable when WebMCP has tools but no event target", async () => {
+    // The Codex in-app browser exposes the callable WebMCP surface without
+    // EventTarget methods. Property-presence detection used to accept that
+    // object and then crash the whole React tree on `addEventListener`.
+    const partialContext = {
+      registerTool: async () => undefined,
+      getTools: async () => [],
+    };
+    Object.defineProperty(document, "modelContext", {
+      value: partialContext,
+      configurable: true,
+    });
+
+    try {
+      expect(isWebMcpSupported()).toBe(true);
+      const unsubscribe = subscribeToToolChange(() => undefined);
+      expect(unsubscribe).not.toBeNull();
+      expect(() => unsubscribe?.()).not.toThrow();
+
+      const { result } = renderHook(() =>
+        useToolReconciliation(expectationOf({}), expectationOf({})),
+      );
+      await waitFor(() => expect(result.current.supported).toBe(true));
+    } finally {
+      delete (document as { modelContext?: unknown }).modelContext;
+    }
+  });
 
 describe("registration lifecycle", () => {
   it("registers one tool and reports it registered", async () => {
@@ -275,6 +389,43 @@ describe("reconciliation", () => {
     await registerExtra("search_catalog");
 
     await waitFor(() => expect(result.current.count).toBe(1));
+  });
+
+  it("re-reads a snapshot-only browser when this page's registration claim changes", async () => {
+    // The Codex in-app browser has registerTool/getTools but no toolchange
+    // channel. Its initial read can happen while only the always-on tools are
+    // present; a later registration-state render is the only boundary at which
+    // the page can know it should ask the browser again.
+    const reported: WebMCP.ModelContextTool[] = [];
+    const partialContext = {
+      registerTool: async () => undefined,
+      getTools: async () => reported,
+    };
+    Object.defineProperty(document, "modelContext", {
+      value: partialContext,
+      configurable: true,
+    });
+
+    try {
+      const { result, rerender } = renderHook(
+        ({ state }: { state: RegistrationState }) =>
+          useToolReconciliation(expectation({ get_workspace_status: state }), expectation({})),
+        { initialProps: { state: pending } },
+      );
+      await waitFor(() => expect(result.current.count).toBe(0));
+
+      reported.push({
+        name: "get_workspace_status",
+        description: "Report the current workspace.",
+        execute: async () => ({ content: [] }),
+      } as WebMCP.ModelContextTool);
+      rerender({ state: registered });
+
+      await waitFor(() => expect(result.current.count).toBe(1));
+      expect(result.current.harness.present).toEqual(["get_workspace_status"]);
+    } finally {
+      delete (document as { modelContext?: unknown }).modelContext;
+    }
   });
 
   it("names a tool the browser reports that neither group declared", async () => {

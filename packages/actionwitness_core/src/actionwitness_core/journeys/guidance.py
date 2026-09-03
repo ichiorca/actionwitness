@@ -76,6 +76,15 @@ class GuidanceState(CoreModel):
     reason: _Text
     expected_consequence: _Text
     action_code: GuidanceActionCode | None = None
+    #: A safe way out when this phase stalls, or `None` where nothing is stalled
+    #: to begin with — a reached verdict, or a phase with no run in flight.
+    #:
+    #: There is deliberately no `recovery_instruction` beside it. §12.13 makes
+    #: the code the stable thing and the sentence the changeable one, and the
+    #: sentence for every code already exists once, in
+    #: `GUIDANCE_ACTION_DESCRIPTIONS`, which the generated registry publishes to
+    #: the frontend. A second copy field here would be the same sentence stored
+    #: twice with no rule about which one a reader believes.
     recovery_action_code: GuidanceActionCode | None = None
     waiting_for: _Text | None = None
     #: FR-121's "whether human input is required", so a tool result can say so
@@ -102,6 +111,8 @@ def phase_for(
     *,
     has_contract: bool,
     run_state: RunState | None,
+    regression_case_ready: bool = False,
+    regression_replay_open: bool = False,
 ) -> WorkspacePhase:
     """Project authoritative workspace and run state onto one phase (§11.5).
 
@@ -109,8 +120,28 @@ def phase_for(
     a `running` run is in `running`, not `contract_ready`. Without a run, the
     phase is decided by whether a contract has been selected — which is the
     fork §11.5's diagram opens with.
+
+    The two regression flags carry the only lifecycle §11.5 draws that a run
+    state cannot express. Its edges are `PassedWarnings --> EvalReady: eval
+    created`, `Failed --> EvalReady: eval created`, `EvalReady --> EvalRunning:
+    replay started`, and `EvalRunning --> EvalReady: replay completed` — every
+    one of them leaves the source run's own state untouched, so a projection
+    reading `RunState` alone can never reach either phase. It could not before:
+    `eval_ready` and `eval_running` had guidance nobody could ever be shown, and
+    the server could not emit `run_regression_eval` however many cases a
+    workspace held.
+
+    They are consulted only for the two verdict states §11.5 draws the "eval
+    created" edge from. §15.4 generates a case "from a failed or warning-bearing
+    run", so a `passed` run with the flags set is still `passed` — offering a
+    replay there would name a case that cannot exist.
     """
     if run_state is not None:
+        if run_state in _EVAL_CAPABLE_RUN_STATES:
+            if regression_replay_open:
+                return WorkspacePhase.EVAL_RUNNING
+            if regression_case_ready:
+                return WorkspacePhase.EVAL_READY
         return _PHASE_BY_RUN_STATE[run_state]
     return WorkspacePhase.CONTRACT_READY if has_contract else WorkspacePhase.NO_CONTRACT
 
@@ -138,11 +169,24 @@ _PHASE_BY_RUN_STATE: Final[Mapping[RunState, WorkspacePhase]] = {
     RunState.PASSED: WorkspacePhase.PASSED,
     RunState.PASSED_WITH_WARNINGS: WorkspacePhase.PASSED_WITH_WARNINGS,
     RunState.FAILED: WorkspacePhase.FAILED,
-    #: A run that errored or was cancelled leaves the workspace ready to arm
-    #: again — the contract is retained (FR-013), so there is nothing to choose.
-    RunState.ERROR: WorkspacePhase.CONTRACT_READY,
-    RunState.CANCELLED: WorkspacePhase.CONTRACT_READY,
+    #: Each of these keeps its own phase rather than collapsing onto
+    #: `contract_ready`. Both *do* leave the contract selected (FR-013), so the
+    #: old mapping picked the right next action — and then said nothing else, so
+    #: a run the harness had abandoned mid-verification was greeted with "Arm
+    #: the run." and no acknowledgement that anything had happened. §22 is
+    #: explicit that an observation failure "produces an explicit non-pass
+    #: result; it never degrades to success", and a banner that cannot tell the
+    #: operator a run ended without a verdict is that degradation in the one
+    #: place a person actually reads.
+    RunState.ERROR: WorkspacePhase.ERROR,
+    RunState.CANCELLED: WorkspacePhase.CANCELLED,
 }
+
+#: The verdict states §11.5 draws an "eval created" edge from, and §15.4 permits
+#: generating a case from: "a failed or warning-bearing run".
+_EVAL_CAPABLE_RUN_STATES: Final[frozenset[RunState]] = frozenset(
+    {RunState.FAILED, RunState.PASSED_WITH_WARNINGS}
+)
 
 
 _GUIDANCE: Final[Mapping[WorkspacePhase, Mapping[str, object]]] = {
@@ -158,6 +202,11 @@ _GUIDANCE: Final[Mapping[WorkspacePhase, Mapping[str, object]]] = {
             "be armed."
         ),
         "action_code": GuidanceActionCode.SELECT_CONTRACT,
+        # No recovery: nothing is in flight to recover *from*. Reset is legal
+        # here (FR-013 makes it legal everywhere) and would do nothing a person
+        # could observe, and a recovery that changes nothing is worse than none
+        # — it invites someone stuck at a real problem to click it and conclude
+        # the harness is broken.
         "requires_human_input": True,
     },
     WorkspacePhase.CONTRACT_READY: {
@@ -175,6 +224,8 @@ _GUIDANCE: Final[Mapping[WorkspacePhase, Mapping[str, object]]] = {
             "begin using target tools."
         ),
         "action_code": GuidanceActionCode.ARM_RUN,
+        # No recovery, for the same reason `no_contract` has none: no run exists
+        # yet, so there is nothing stalled that a reset would release.
         "requires_human_input": True,
     },
     WorkspacePhase.ARMED: {
@@ -228,6 +279,14 @@ _GUIDANCE: Final[Mapping[WorkspacePhase, Mapping[str, object]]] = {
             "decision and its outcome are recorded."
         ),
         "action_code": GuidanceActionCode.DECIDE_CONFIRMATION,
+        # The one phase where cancelling is a real capability, and the only one
+        # that may name it. `DELETE /runs/{run_id}/confirmations/{id}` reaches
+        # `Decision.CANCEL`, which refuses any request that is not `pending` —
+        # and a pending request exists in no other phase. §14.9 keeps this
+        # distinct from denial: a person who cannot decide (the agent's tab
+        # closed, the consequence is unreadable) previously had only a reset,
+        # which throws the run's evidence away to escape one stuck request.
+        "recovery_action_code": GuidanceActionCode.CANCEL_CONFIRMATION,
         "waiting_for": "the agent is waiting for this decision before it can continue",
         "requires_human_input": True,
     },
@@ -243,6 +302,12 @@ _GUIDANCE: Final[Mapping[WorkspacePhase, Mapping[str, object]]] = {
         ),
         "expected_consequence": "A report and its findings become available.",
         "action_code": GuidanceActionCode.WAIT,
+        # §11.5 draws `Verifying --> ContractReady: reset`, so this is a named
+        # exit rather than an inferred one. It matters here more than in most
+        # phases: verification refuses new target actions, so a capture that
+        # never returns leaves a workspace with no legal move and — until this
+        # code was set — nothing on screen saying what to do about it.
+        "recovery_action_code": GuidanceActionCode.RESET_WORKSPACE,
         "waiting_for": "the server is capturing final state and evaluating the contract",
     },
     WorkspacePhase.PASSED: {
@@ -253,6 +318,11 @@ _GUIDANCE: Final[Mapping[WorkspacePhase, Mapping[str, object]]] = {
         "reason": "Every assertion held against independently observed state.",
         "expected_consequence": "The run is terminal; its evidence is retained.",
         "action_code": GuidanceActionCode.REVIEW_FINDINGS,
+        # No recovery, and this is the deliberate null the banner renders as an
+        # absence. The banner labels recovery "If this stalls" — a run that
+        # reached a verdict did not stall, it finished. Naming a reset here
+        # would invent a problem to solve, and §15.1 reserves the recovery slot
+        # for the case where something is genuinely stuck.
     },
     WorkspacePhase.PASSED_WITH_WARNINGS: {
         "phase": WorkspacePhase.PASSED_WITH_WARNINGS,
@@ -264,6 +334,7 @@ _GUIDANCE: Final[Mapping[WorkspacePhase, Mapping[str, object]]] = {
             "The run is terminal; a regression eval can be generated from it."
         ),
         "action_code": GuidanceActionCode.REVIEW_FINDINGS,
+        # No recovery: a warning-bearing verdict is a finished run, not a stall.
     },
     WorkspacePhase.FAILED: {
         "phase": WorkspacePhase.FAILED,
@@ -277,6 +348,50 @@ _GUIDANCE: Final[Mapping[WorkspacePhase, Mapping[str, object]]] = {
             "The run is terminal; a regression eval can be generated to reproduce it."
         ),
         "action_code": GuidanceActionCode.REVIEW_FINDINGS,
+        # No recovery: a failed verdict is the harness working, not stalling.
+        # This is the outcome the product exists to produce.
+    },
+    WorkspacePhase.ERROR: {
+        "phase": WorkspacePhase.ERROR,
+        "active_actor": GuidanceActor.OPERATOR,
+        "headline": "The run stopped without a verdict.",
+        "instruction": "Read the report to see why verification could not be completed.",
+        "reason": (
+            "The harness could not finish — a required observation was unavailable, or a "
+            "resource ceiling was reached — so no assertion was judged and nothing here "
+            "is a pass."
+        ),
+        "expected_consequence": (
+            "The run is terminal and its evidence is kept. Resetting clears it, keeps the "
+            "selected contract, and reseeds the target so the next run starts from a known "
+            "state."
+        ),
+        # §16 makes `error` a verdict-bearing terminal state and §23.1 writes a
+        # report for it, so there is something real to read; `_abandon_unobservable`
+        # records the `observation_unavailable` finding that says which.
+        "action_code": GuidanceActionCode.REVIEW_FINDINGS,
+        "recovery_action_code": GuidanceActionCode.RESET_WORKSPACE,
+    },
+    WorkspacePhase.CANCELLED: {
+        "phase": WorkspacePhase.CANCELLED,
+        "active_actor": GuidanceActor.OPERATOR,
+        "next_actor": GuidanceActor.AGENT,
+        "headline": "The run was cancelled before it was verified.",
+        "instruction": "Arm a new run when you are ready; the selected contract was kept.",
+        "reason": (
+            "A reset cancelled the run in flight, so no verdict was produced and its "
+            "partial evidence stands as a record rather than a result."
+        ),
+        "expected_consequence": (
+            "A new run is created in `armed` with a fresh initial observation, and the "
+            "cancelled run stays on record."
+        ),
+        "action_code": GuidanceActionCode.ARM_RUN,
+        # Reset again is the genuine second option: it is what reseeds the
+        # target, so an operator unsure what the cancelled run left behind has a
+        # way to start from a known state rather than arming on top of it.
+        "recovery_action_code": GuidanceActionCode.RESET_WORKSPACE,
+        "requires_human_input": True,
     },
     WorkspacePhase.PROPOSING: {
         "phase": WorkspacePhase.PROPOSING,
@@ -300,6 +415,11 @@ _GUIDANCE: Final[Mapping[WorkspacePhase, Mapping[str, object]]] = {
         ),
         "expected_consequence": "The accepted set becomes one immutable contract.",
         "action_code": GuidanceActionCode.CURATE_CANDIDATES,
+        # The proposal run is terminal but the workspace is not: nothing moves
+        # until a person curates, and a candidate set nobody wants would
+        # otherwise be a dead end with no named way out. Reset returns the
+        # workspace to ready (FR-013) and keeps whatever contract was selected.
+        "recovery_action_code": GuidanceActionCode.RESET_WORKSPACE,
         "requires_human_input": True,
     },
     WorkspacePhase.EVAL_READY: {
@@ -310,6 +430,8 @@ _GUIDANCE: Final[Mapping[WorkspacePhase, Mapping[str, object]]] = {
         "reason": "A regression case is only useful once it has reproduced its source failure.",
         "expected_consequence": "The replay reports whether the original classification recurred.",
         "action_code": GuidanceActionCode.RUN_REGRESSION_EVAL,
+        # §11.5 draws `EvalReady --> ContractReady: reset`.
+        "recovery_action_code": GuidanceActionCode.RESET_WORKSPACE,
     },
     WorkspacePhase.EVAL_RUNNING: {
         "phase": WorkspacePhase.EVAL_RUNNING,
@@ -320,6 +442,13 @@ _GUIDANCE: Final[Mapping[WorkspacePhase, Mapping[str, object]]] = {
         "reason": "The fixture is being restored and the recorded trajectory replayed.",
         "expected_consequence": "The replay's classification is compared against the source run.",
         "action_code": GuidanceActionCode.WAIT,
+        # §11.5 draws `EvalRunning --> ContractReady: reset`, and this phase is
+        # entered on an *open* eval-run row rather than a heartbeat: the row is
+        # opened as `error` with no `completed_at` so a process that dies
+        # mid-replay leaves an honest record (`EvalRunService._open`). The
+        # consequence is that a dead replay keeps saying "replaying", and the
+        # named reset is what stops a person waiting on it forever.
+        "recovery_action_code": GuidanceActionCode.RESET_WORKSPACE,
         "waiting_for": "the server is replaying the recorded trajectory",
     },
 }

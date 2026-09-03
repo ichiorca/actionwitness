@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="620" viewBox="0 0 1440 620" role="img" aria-labelledby="title desc">
+  <title id="title">ActionWitness architecture at a glance</title>
+  <desc id="desc">An agent invokes a WebMCP tool, ActionWitness records the claim, independently observes business state, and produces a verdict and regression.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#f8fafc"/><stop offset="1" stop-color="#eef0f4"/></linearGradient>
+    <filter id="shadow"><feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#101828" flood-opacity="0.10"/></filter>
+  </defs>
+  <rect width="1440" height="620" rx="28" fill="url(#bg)"/>
+  <text x="720" y="76" text-anchor="middle" fill="#1c2430" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="40" font-weight="760">The response and the outcome travel on separate paths.</text>
+  <text x="720" y="116" text-anchor="middle" fill="#5b6675" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="20">That separation is what lets ActionWitness catch a convincing lie.</text>
+  <g font-family="Inter, Segoe UI, Arial, sans-serif" filter="url(#shadow)">
+    <rect x="52" y="190" width="276" height="270" rx="22" fill="#fff" stroke="#3652c4" stroke-width="2"/>
+    <circle cx="190" cy="250" r="34" fill="#e8ecfb" stroke="#3652c4" stroke-width="2"/>
+    <text x="190" y="260" text-anchor="middle" fill="#3652c4" font-size="30" font-weight="800">1</text>
+    <text x="190" y="329" text-anchor="middle" fill="#1c2430" font-size="24" font-weight="760">Agent acts</text>
+    <text x="190" y="368" text-anchor="middle" fill="#5b6675" font-size="18">A WebMCP tool runs</text>
+    <text x="190" y="397" text-anchor="middle" fill="#5b6675" font-size="18">through the recorded surface.</text>
+
+    <rect x="406" y="190" width="276" height="270" rx="22" fill="#fff" stroke="#1d7a43" stroke-width="2"/>
+    <circle cx="544" cy="250" r="34" fill="#e2f3e8" stroke="#1d7a43" stroke-width="2"/>
+    <text x="544" y="260" text-anchor="middle" fill="#1d7a43" font-size="30" font-weight="800">2</text>
+    <text x="544" y="329" text-anchor="middle" fill="#1c2430" font-size="24" font-weight="760">Claim recorded</text>
+    <text x="544" y="368" text-anchor="middle" fill="#5b6675" font-size="18">Success is stored as</text>
+    <text x="544" y="397" text-anchor="middle" fill="#5b6675" font-size="18">tool-reported evidence.</text>
+
+    <rect x="760" y="190" width="276" height="270" rx="22" fill="#fff" stroke="#6d3fb4" stroke-width="2"/>
+    <circle cx="898" cy="250" r="34" fill="#f0e9fb" stroke="#6d3fb4" stroke-width="2"/>
+    <text x="898" y="260" text-anchor="middle" fill="#6d3fb4" font-size="30" font-weight="800">3</text>
+    <text x="898" y="329" text-anchor="middle" fill="#1c2430" font-size="24" font-weight="760">State observed</text>
+    <text x="898" y="368" text-anchor="middle" fill="#5b6675" font-size="18">A separate provider reads</text>
+    <text x="898" y="397" text-anchor="middle" fill="#5b6675" font-size="18">authoritative business state.</text>
+
+    <rect x="1114" y="190" width="276" height="270" rx="22" fill="#fff" stroke="#b3312e" stroke-width="2"/>
+    <circle cx="1252" cy="250" r="34" fill="#fbe7e6" stroke="#b3312e" stroke-width="2"/>
+    <text x="1252" y="260" text-anchor="middle" fill="#b3312e" font-size="30" font-weight="800">4</text>
+    <text x="1252" y="329" text-anchor="middle" fill="#1c2430" font-size="24" font-weight="760">Verdict + replay</text>
+    <text x="1252" y="368" text-anchor="middle" fill="#5b6675" font-size="18">The contract decides;</text>
+    <text x="1252" y="397" text-anchor="middle" fill="#5b6675" font-size="18">a failure becomes a test.</text>
+  </g>
+  <g fill="none" stroke="#8ca0f0" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M342 325h40"/><path d="m369 313 13 12-13 12"/>
+    <path d="M696 325h40"/><path d="m723 313 13 12-13 12"/>
+    <path d="M1050 325h40"/><path d="m1077 313 13 12-13 12"/>
+  </g>
+  <text x="720" y="530" text-anchor="middle" fill="#3652c4" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="20" font-weight="760">Tool self-report ≠ independent observation</text>
+  <text x="720" y="564" text-anchor="middle" fill="#5b6675" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="17">Protected mutations can pause between steps 1 and 2 until a person approves the exact action.</text>
+</svg>

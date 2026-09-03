@@ -67,6 +67,35 @@ _TERMINAL: Final[frozenset[str]] = frozenset(
     }
 )
 
+#: §16's `external_webmcp` exception, and the whole of it.
+#:
+#: FR-038's precondition is "at least one recorded target action has a terminal
+#: event", and for every target the harness dispatches to that is a
+#: `tool_invocation_*` row. An `external_webmcp` run has none **by design**:
+#: §9.1 forbids the adapter from impersonating the target's own tools "through a
+#: second implementation", so the harness never records their start or their
+#: finish and cannot honestly write one.
+#:
+#: §16 names the replacement in the same breath: "the accepted final external
+#: observation is evidence that the shopper-session state changed outside the
+#: harness; it appends `external_observation_received` and transitions the run
+#: from `armed` to `running` immediately before verification. This exception does
+#: not manufacture tool events."
+#:
+#: So this widens *which recorded event proves an action happened*, and nothing
+#: else. Three reasons it is that stated exception rather than a loosening: the
+#: event is appended only by the path that has already accepted, normalized and
+#: redacted an independent `cart.js` read, so it is evidence and not a marker; it
+#: is written by the harness with actor `external` and can never arrive from a
+#: tool result; and `_require_nothing_in_flight` is untouched, so a run holding an
+#: unfinished invocation still loses the race. The alternative on offer was
+#: writing a `tool_invocation_completed` nothing invoked, which is exactly the
+#: manufactured evidence §16 forbids in the same sentence.
+_EXTERNAL_ACTION: Final = str(OutcomeEventType.EXTERNAL_OBSERVATION_RECEIVED.value)
+
+#: What satisfies "at least one recorded target action has a terminal event".
+_COMPLETED_ACTIONS: Final[frozenset[str]] = _TERMINAL | {_EXTERNAL_ACTION}
+
 
 async def require_no_lease(work: UnitOfWork, workspace_id: str) -> None:
     """FR-039: refuse a direct human target mutation while a run holds the lease.
@@ -165,15 +194,19 @@ class VerificationGate:
         against a target nobody touched, and the report would describe an agent
         that never acted as having passed.
 
+        An `external_webmcp` run satisfies this with `external_observation_received`
+        rather than a `tool_invocation_*` terminal event - see `_EXTERNAL_ACTION`
+        above for why that is §16's own exception and not a widening of the rule.
+
         Reached only defensively. An `armed` run is refused by the core's
         transition table before this, and a `running` run has either completed
         an action or has one in flight — so this fires only if the timeline is
         in a shape neither path produces.
         """
-        placeholders = ",".join("?" for _ in _TERMINAL)
+        placeholders = ",".join("?" for _ in _COMPLETED_ACTIONS)
         row = await self._work.fetch_one(
             f"SELECT id FROM events WHERE run_id = ? AND event_type IN ({placeholders}) LIMIT 1",
-            (run_id, *sorted(_TERMINAL)),
+            (run_id, *sorted(_COMPLETED_ACTIONS)),
         )
         if row is None:
             raise ApiError(

@@ -31,6 +31,25 @@ The only reader of the environment besides `app.py`'s call into it.
 - Store origins, variants, currencies and allowlists are **server-controlled**;
   no request body widens them.
 
+## Environment files — `env_file.py`
+
+Turns an environment file on disk into the mapping `config.py` is handed.
+Composed at the root, so `config.py` still takes an injected mapping and never
+learns that files exist.
+
+- **The process environment wins.** A file is a default written earlier; an
+  explicit `FOO=bar uv run ...` is a decision made now.
+- **Only on the un-injected path.** `create_app(environ=...)` gets exactly that
+  mapping — a developer's local file leaking into the suite would make tests
+  pass differently per machine.
+- **Names are logged; values never are.** This file holds credentials, so
+  unparseable lines are counted rather than quoted.
+- **Nothing here is fatal.** Missing, oversized, binary, or malformed all resolve
+  to "no variables from the file", matching `config.py`'s rule that construction
+  never raises.
+- Not a shell parser: no interpolation, no substitution, no escape decoding. A
+  configuration file must not be a program.
+
 ## Telemetry — `telemetry.py` (269 lines)
 
 One structured line per request, and it cannot leak by construction.

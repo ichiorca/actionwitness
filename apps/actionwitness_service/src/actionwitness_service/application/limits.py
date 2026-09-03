@@ -80,14 +80,14 @@ CONCURRENT_EVENT_STREAMS: Final = 2
 
 #: FR-008's per-workspace row ceilings, keyed by the table they count.
 #:
-#: The Tier 2 tables — evaluation cases and runs, benchmark suites and trials,
-#: Shopify pairings — are absent from this map because their tables arrive with
-#: M6/M7 and counting a table that does not exist is an error, not a ceiling.
-#: Their constants are declared above so the numbers land in one place, and
-#: `test_every_fr_008_ceiling_is_declared` fails if one is dropped.
+#: A ceiling appears here when the table it counts exists and something writes
+#: to it — counting a table no migration has created is an error, not a ceiling.
+#: The remaining Tier 2 constants are declared above so the numbers land in one
+#: place, and `test_every_fr_008_ceiling_is_declared` fails if one is dropped.
 _ROW_CEILINGS: Final[dict[str, tuple[int, str]]] = {
     "runs": (OUTCOME_RUNS_PER_WORKSPACE, "outcome runs"),
     "artifacts": (ARTIFACTS_PER_WORKSPACE, "artifacts"),
+    "shopify_pairings": (SHOPIFY_PAIRINGS_PER_WORKSPACE, "Shopify pairings"),
 }
 
 #: FR-008's remedy, quoted in every refusal: "an action to purge completed
@@ -111,6 +111,16 @@ class WorkspaceCeilings:
 
     async def guard_new_run(self) -> None:
         await self._guard_row("runs")
+
+    async def guard_new_pairing(self) -> None:
+        """FR-008's five Shopify pairings per interactive workspace.
+
+        Distinct from §17.1's "at most one *nonterminal* pairing", which the
+        partial unique index in migration 9 enforces. That one bounds concurrency;
+        this one bounds how many trials a workspace may accumulate over its
+        lifetime, and a workspace can be at five with none of them live.
+        """
+        await self._guard_row("shopify_pairings")
 
     async def guard_new_artifact(self, byte_size: int) -> None:
         """Both artifact ceilings: the count and the byte total.

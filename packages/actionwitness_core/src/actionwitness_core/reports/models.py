@@ -46,7 +46,14 @@ from actionwitness_core.journeys.enums import (
     OutcomeEventType,
     RunState,
 )
-from actionwitness_core.kernel import ContractError, CoreErrorCode, CoreModel, JsonValue
+from actionwitness_core.kernel import (
+    ContractError,
+    CoreErrorCode,
+    CoreModel,
+    JsonValue,
+    UtcInstant,
+    format_instant,
+)
 from actionwitness_core.reports.enums import (
     ALLOWED_LAYER_RESULTS,
     LayerResult,
@@ -60,6 +67,8 @@ __all__ = [
     "REPORT_SCHEMA_VERSION",
     "ContractReference",
     "CountsBlock",
+    "ExternalCaptureReference",
+    "ExternalTargetReference",
     "GuidanceReference",
     "LayeredResult",
     "OutcomeReport",
@@ -76,9 +85,12 @@ __all__ = [
 #:
 #: 1.1 — `undeclared_changes.paths` carries §23.1's `{path, before, after,
 #: attributed_cause}` objects instead of bare path strings, which FR-159
-#: requires and which a reader cannot recover from a 1.0 document. A stored 1.0
-#: report is still readable as the document it is; it simply records less.
-REPORT_SCHEMA_VERSION = "1.1"
+#: requires and which a reader cannot recover from a 1.0 document.
+#:
+#: 1.2 — an optional `external_target` block carries §23.9/FR-117's source
+#: provenance. Existing non-external reports retain their prior fields; stored
+#: 1.0 and 1.1 reports remain readable as the documents they are.
+REPORT_SCHEMA_VERSION = "1.2"
 
 type Identifier = Annotated[str, StringConstraints(min_length=1, max_length=128)]
 type ContentHash = Annotated[str, StringConstraints(pattern=r"^sha256:[0-9a-f]{64}$")]
@@ -131,6 +143,61 @@ class ContractReference(CoreModel):
             "id": self.id,
             "schema_version": self.schema_version,
             "content_hash": self.content_hash,
+        }
+
+
+class ExternalCaptureReference(CoreModel):
+    """One independently observed external-state capture (§23.9, FR-117)."""
+
+    path: Annotated[str, StringConstraints(min_length=1, max_length=2048)]
+    captured_at: UtcInstant
+    content_hash: ContentHash
+
+    @model_validator(mode="after")
+    def _require_safe_path(self) -> ExternalCaptureReference:
+        if not self.path.startswith("/") or "?" in self.path or "#" in self.path:
+            raise ContractError(
+                "an external capture path must be absolute and contain no query or fragment",
+                code=CoreErrorCode.EVALUATION_INPUT_INVALID,
+            )
+        return self
+
+    def canonical_document(self) -> dict[str, JsonValue]:
+        return {
+            "path": self.path,
+            "captured_at": format_instant(self.captured_at),
+            "content_hash": self.content_hash,
+        }
+
+
+class ExternalTargetReference(CoreModel):
+    """Target-neutral source metadata for an externally observed run (§23.9)."""
+
+    target_type: Identifier
+    origin: Annotated[str, StringConstraints(min_length=1, max_length=2048)]
+    pairing_id: Identifier
+    bridge_version: Identifier
+    theme_build_id: Identifier | None = None
+    observation_provider: Identifier
+    provenance: Identifier
+    before: ExternalCaptureReference
+    after: ExternalCaptureReference
+    safe_scope_result: LayerResult
+
+    def canonical_document(self) -> dict[str, JsonValue]:
+        return {
+            "target_type": self.target_type,
+            "origin": self.origin,
+            "pairing_id": self.pairing_id,
+            "bridge_version": self.bridge_version,
+            "theme_build_id": self.theme_build_id,
+            "observation_provider": self.observation_provider,
+            "provenance": self.provenance,
+            "captures": {
+                "before": self.before.canonical_document(),
+                "after": self.after.canonical_document(),
+            },
+            "safe_scope_result": self.safe_scope_result.value,
         }
 
 
@@ -298,6 +365,7 @@ class OutcomeReport(CoreModel):
     target: TargetReference
     scenario: ScenarioReference
     contract: ContractReference
+    external_target: ExternalTargetReference | None = None
     layers: LayeredResult
     counts: CountsBlock = CountsBlock()
     guidance_at_finalization: GuidanceReference | None = None
@@ -353,6 +421,8 @@ class OutcomeReport(CoreModel):
                 self.primary_failure.value if self.primary_failure is not None else None
             ),
         }
+        if self.external_target is not None:
+            document["external_target"] = self.external_target.canonical_document()
         if self.undeclared_changes is not None:
             document["undeclared_changes"] = self.undeclared_changes.canonical_document()
         if self.guidance_at_finalization is not None:
@@ -417,6 +487,7 @@ def compose_outcome_report(
     target: TargetReference,
     scenario: ScenarioReference,
     contract: ContractReference,
+    external_target: ExternalTargetReference | None = None,
     assertion_findings: Sequence[Finding] = (),
     policy_findings: Sequence[Finding] = (),
     trajectory_finding: Finding | None = None,
@@ -503,6 +574,7 @@ def compose_outcome_report(
         target=target,
         scenario=scenario,
         contract=contract,
+        external_target=external_target,
         layers=layers,
         counts=counts,
         guidance_at_finalization=guidance_at_finalization,

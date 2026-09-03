@@ -50,6 +50,17 @@ export class ApiError extends Error {
 export interface RequestOptions<T> {
   readonly method?: "GET" | "POST" | "PUT" | "DELETE";
   readonly body?: unknown;
+  /**
+   * A body sent exactly as given, for the routes that read raw bytes.
+   *
+   * The evaluator import reads `await request.body()` so FR-117's size cap can
+   * precede the JSON parser. Handing it a re-serialized object would still
+   * work, but it would mean the bytes the operator chose and the bytes the
+   * server measured were different — and the one place that matters is the
+   * cap, which exists to bound what an *uploaded file* can do. Mutually
+   * exclusive with `body`; passing both is a caller error.
+   */
+  readonly rawBody?: string;
   // `| undefined` is deliberate under exactOptionalPropertyTypes: callers
   // forward an invocation signal that the pinned build never supplies
   // (ADR-0002), so an explicit undefined must be assignable.
@@ -63,7 +74,14 @@ export interface RequestOptions<T> {
 }
 
 export async function request<T>(path: string, options: RequestOptions<T>): Promise<T> {
-  const { method = "GET", body, signal, parse } = options;
+  const { method = "GET", body, rawBody, signal, parse } = options;
+
+  const sent =
+    rawBody !== undefined
+      ? { headers: { "Content-Type": "application/json" }, body: rawBody }
+      : body === undefined
+        ? {}
+        : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
 
   let response: Response;
   try {
@@ -72,9 +90,7 @@ export async function request<T>(path: string, options: RequestOptions<T>): Prom
       // The workspace cookie is the authorization boundary (§20.1), so it has
       // to travel — and only to this origin.
       credentials: "same-origin",
-      ...(body === undefined
-        ? {}
-        : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+      ...sent,
       ...(signal === undefined ? {} : { signal }),
     });
   } catch (error: unknown) {

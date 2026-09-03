@@ -79,6 +79,7 @@ COPY packages/actionwitness_core/pyproject.toml   ./packages/actionwitness_core/
 COPY apps/actionwitness_service/pyproject.toml    ./apps/actionwitness_service/
 COPY integrations/buggy_store/pyproject.toml      ./integrations/buggy_store/
 COPY integrations/google_evals/pyproject.toml     ./integrations/google_evals/
+COPY integrations/self_target/pyproject.toml      ./integrations/self_target/
 COPY integrations/shopify/pyproject.toml          ./integrations/shopify/
 COPY examples/buggy_store/pyproject.toml          ./examples/buggy_store/
 
@@ -86,6 +87,7 @@ COPY packages/actionwitness_core/src   ./packages/actionwitness_core/src
 COPY apps/actionwitness_service/src    ./apps/actionwitness_service/src
 COPY integrations/buggy_store/src      ./integrations/buggy_store/src
 COPY integrations/google_evals/src     ./integrations/google_evals/src
+COPY integrations/self_target/src      ./integrations/self_target/src
 COPY integrations/shopify/src          ./integrations/shopify/src
 COPY examples/buggy_store/src          ./examples/buggy_store/src
 COPY README.md LICENSE ./
@@ -104,6 +106,7 @@ RUN uv export --frozen --no-dev --no-emit-workspace --no-hashes \
         --package actionwitness-service \
         --package actionwitness-integration-buggy-store \
         --package actionwitness-integration-google-evals \
+        --package actionwitness-integration-self-target \
         --package actionwitness-integration-shopify \
         -o /tmp/harness-requirements.txt \
  && uv venv /opt/harness \
@@ -113,6 +116,7 @@ RUN uv export --frozen --no-dev --no-emit-workspace --no-hashes \
         ./apps/actionwitness_service \
         ./integrations/buggy_store \
         ./integrations/google_evals \
+        ./integrations/self_target \
         ./integrations/shopify
 
 # §29.1 step 3 — the store prefix. Resolved from its own manifest alone, so the

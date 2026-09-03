@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, Final
 
@@ -55,7 +55,13 @@ from actionwitness_service.application.adapter_registry import AdapterRegistry, 
 from actionwitness_service.application.authorization import WorkspaceScope
 from actionwitness_service.application.guidance_service import GuidanceRecorder, current_guidance
 from actionwitness_service.application.limits import WorkspaceCeilings
+from actionwitness_service.application.self_witness import (
+    capture_target_state,
+    ensure_observed_workspace,
+    observes_a_separate_workspace,
+)
 from actionwitness_service.application.workspace_service import NONTERMINAL_RUN_STATES
+from actionwitness_service.application.workspaces import WorkspaceStore
 from actionwitness_service.persistence.database import Database, UnitOfWork
 from actionwitness_service.persistence.locks import WorkspaceLocks
 from actionwitness_service.persistence.repositories import (
@@ -87,6 +93,16 @@ class WorkspaceConfiguration:
     scenario_mode: str | None
     failure_profile: str | None
     document: Mapping[str, Any]
+    #: FR-172's other workspace, for a target that observes one. `None` for every
+    #: ordinary target, whose observed workspace *is* the recording workspace.
+    #:
+    #: Deliberately absent from `controlled_inputs` below. That tuple is the set
+    #: of choices an operator makes and a concurrent request could change
+    #: underneath an observation in flight; this one is minted by the server,
+    #: written once, and never reassigned — so comparing it would only ever
+    #: report the difference between "not provisioned yet" and "provisioned by
+    #: this same call", refusing an arm that nothing had actually raced.
+    observed_workspace_id: str | None = None
 
     def controlled_inputs(self) -> tuple[str | None, ...]:
         """Everything that must not have moved while the target was observed."""
@@ -162,6 +178,13 @@ class RunService:
         # false claim this harness exists to catch (012-T8, §13.3).
         self._require_injectable_profile(selected)
 
+        # FR-172, before anything is observed. A self-witnessing target needs a
+        # second workspace, and the run must be refused *here* if it cannot have
+        # one legitimately — after the capture below it would already have read
+        # the state its own run was producing, which is the loop rather than a
+        # report about it.
+        selected = await self._isolate_observer(selected, workspace_id)
+
         # Phase 2 — the one authoritative read. Outside every lock.
         observation = await self._capture(selected, workspace_id)
         # And, from the same target and in the same phase, what it says about
@@ -192,6 +215,31 @@ class RunService:
                 comparison_source_run_id,
                 fault_active=fault_active,
             )
+
+    async def _isolate_observer(
+        self, selected: WorkspaceConfiguration, workspace_id: str
+    ) -> WorkspaceConfiguration:
+        """Give a self-witnessing run the separate workspace FR-172 requires.
+
+        A no-op for every ordinary target: its observed workspace is the
+        recording one, so there is no second workspace to provision and none to
+        keep apart. Only a provider that asks *which* workspace to read reaches
+        the mint, which is why the question is asked of the protocol rather than
+        of the target's name.
+
+        Its own short transaction, and not folded into phase 3's. Phase 3 opens
+        after the observation, and the observed workspace has to exist before the
+        observation is taken — there is nothing to read otherwise.
+        """
+        adapter = self._registry.adapter(selected.adapter_id)
+        if not observes_a_separate_workspace(adapter):
+            return selected
+
+        async with self._locks.hold(workspace_id), self._database.transaction() as work:
+            observed = await ensure_observed_workspace(
+                work, WorkspaceStore(self._database), workspace_id
+            )
+        return replace(selected, observed_workspace_id=observed)
 
     def _require_injectable_profile(self, selected: WorkspaceConfiguration) -> None:
         """Refuse to arm against a fault the selected target cannot inject.
@@ -259,8 +307,8 @@ class RunService:
 
     async def _configuration(self, work: UnitOfWork, workspace_id: str) -> WorkspaceConfiguration:
         row = await work.fetch_one(
-            "SELECT selected_contract_id, selected_target_id, scenario_mode, failure_profile "
-            "FROM workspaces WHERE id = ?",
+            "SELECT selected_contract_id, selected_target_id, scenario_mode, failure_profile, "
+            "observed_workspace_id FROM workspaces WHERE id = ?",
             (workspace_id,),
         )
         if row is None:  # pragma: no cover - the middleware creates it first
@@ -296,6 +344,7 @@ class RunService:
             scenario_mode=row["scenario_mode"],
             failure_profile=row["failure_profile"],
             document=document,
+            observed_workspace_id=row["observed_workspace_id"],
         )
 
     # -- phase 2: the one authoritative read ---------------------------------
@@ -310,7 +359,9 @@ class RunService:
         guess.
         """
         adapter = self._registry.adapter(selected.adapter_id)
-        observation = await adapter.observation_provider().capture(workspace_id)
+        observation = await capture_target_state(
+            adapter, workspace_id, selected.observed_workspace_id
+        )
 
         # §20.3: redacted before persistence, hashing, or export — and before
         # evaluation too, so the baseline a verdict rests on is byte-for-byte

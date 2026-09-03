@@ -101,6 +101,7 @@ from actionwitness_service.application.confirmation_service import (
 )
 from actionwitness_service.application.guidance_service import GuidanceRecorder, current_guidance
 from actionwitness_service.application.limits import WorkspaceCeilings
+from actionwitness_service.application.self_witness import bound_adapter, capture_scoped
 from actionwitness_service.application.surface_service import SurfaceService
 from actionwitness_service.persistence.database import Database, UnitOfWork
 from actionwitness_service.persistence.locks import WorkspaceLocks
@@ -205,6 +206,13 @@ class InvocationService:
             # resolve, which is worse than refusing the action outright.
             reservation += CONFIRMATION_EVENT_RESERVATION
         adapter = self._registry.adapter(str(run["target_adapter_id"]))
+        # FR-172, bound before the agent's arguments are even validated. A
+        # target that acts on a workspace separate from the recording one is
+        # told which by the *server*, from what arming provisioned; nothing an
+        # agent sends can name it, so an agent cannot point a call at the
+        # workspace recording its own run. Every ordinary adapter is returned
+        # unchanged.
+        adapter = await bound_adapter(self._database, adapter, workspace_id)
         spec = _require_published(adapter, tool_name)
 
         # Arguments are validated before anything is written: an argument the
@@ -432,7 +440,7 @@ class InvocationService:
         self, adapter: Any, workspace_id: str, policy: RedactionPolicy
     ) -> Observation:
         """Capture, then redact before anything is hashed or stored (§20.3)."""
-        observation = await adapter.observation_provider().capture(workspace_id)
+        observation = await capture_scoped(self._database, adapter, workspace_id)
         return redacted_observation(observation, policy)
 
     async def _observe_or_none(

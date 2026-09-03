@@ -9,9 +9,10 @@ migrations; startup-time table creation and placeholder migrations are
 forbidden").
 
 Only the nine Tier 1 tables BUILD_ORDER §7/M3 names are here. The Tier 2 tables
-- evaluation cases and runs, benchmark suites and trials, Shopify pairings -
-arrive in the M6/M7 migrations that first write to them. Shipping a schema no
-code fills would make the migration list a wish rather than a record.
+- evaluation cases and runs, benchmark suites and trials - arrive in the M6/M7
+migrations that first write to them, and Tier 3's `shopify_pairings` in
+migration 9 alongside the service that fills it. Shipping a schema no code fills
+would make the migration list a wish rather than a record.
 
 Two structural rules run through every table:
 
@@ -37,6 +38,8 @@ import aiosqlite
 __all__ = [
     "MIGRATIONS",
     "TIER_ONE_TABLES",
+    "TIER_THREE_SHOPIFY_TABLES",
+    "TIER_TWO_BENCHMARK_TABLES",
     "TIER_TWO_EVAL_TABLES",
     "Migration",
     "apply_migrations",
@@ -684,6 +687,191 @@ MIGRATIONS: Final[tuple[Migration, ...]] = (
             """,
         ),
     ),
+    Migration(
+        version=7,
+        name="a self-witnessing run records the workspace it observes",
+        statements=(
+            # FR-172: "a self-witnessing run shall observe a workspace other
+            # than the one recording it." This column is where the *other* one is
+            # named, on the recording workspace's row beside the target and
+            # contract it already selects.
+            #
+            # It is deliberately not a foreign key back into `workspaces`.
+            # SQLite cannot add a foreign key with `ALTER TABLE ADD COLUMN`, and
+            # rebuilding the root table of nine cascades to gain one is a
+            # destructive migration bought for a constraint the code already
+            # holds: the value is only ever written by
+            # `create_observed_workspace`, which inserts the row it then names,
+            # inside the same transaction. The cascade that matters runs the
+            # other way and already exists — the observed workspace's
+            # `owner_workspace_id` points here, so deleting a recording
+            # workspace takes the workspace it observed with it.
+            #
+            # Nullable, and null is the ordinary case: every workspace that is
+            # not running a self-witnessing run observes nothing, which is a
+            # different statement from observing itself and must stay
+            # distinguishable from it.
+            """
+            ALTER TABLE workspaces ADD COLUMN observed_workspace_id TEXT
+            """,
+        ),
+    ),
+    Migration(
+        version=8,
+        name="a benchmark trial records which repetition of which variant it is",
+        statements=(
+            # §26.5's Tier 3 showcase is "six intent variants with five repeated
+            # trials each", and FR-100 freezes those variants "before trials
+            # begin; generation is not rerun between repetitions". Migration 3
+            # gave a trial no way to say which variant it exercised or which
+            # repetition it was, so five repeats of one variant were
+            # indistinguishable from five unrelated trials — and a rate computed
+            # over them would have been a rate over a population nobody defined.
+            #
+            # Additive and nullable, because null is the ordinary case and means
+            # something specific: a trial imported from an evaluator report is
+            # not a repetition of anything this harness ran, and backfilling it
+            # with `repetition_index = 1` would invent a repeated trial that
+            # never happened. The correlation view reads a null variant as "group
+            # this trial by its scenario instead", which is what §24.7 step 1
+            # already calls the shared intent.
+            #
+            # `variant_index` is a position into the frozen set the manifest
+            # carries, not a foreign key: FR-100 seals that set into
+            # `manifest_json`, and the whole point of freezing is that the set
+            # cannot move underneath the index. Storing the variant *text* here
+            # instead would be a second copy of a hashed document, free to drift
+            # from the one the manifest hash covers.
+            """
+            ALTER TABLE benchmark_trials ADD COLUMN variant_index INTEGER
+            """,
+            """
+            ALTER TABLE benchmark_trials ADD COLUMN repetition_index INTEGER
+            """,
+            # The trial whose evaluator verdict and recorded trajectory this
+            # repetition re-executes. Recorded rather than inferred, because the
+            # call-level half of a repetition is *not* a new measurement — it is
+            # the same imported self-report, and a reader has to be able to see
+            # which one. Without this column a repetition would look like an
+            # independent evaluator observation, which is exactly the promotion
+            # of a self-report the constitution forbids.
+            """
+            ALTER TABLE benchmark_trials ADD COLUMN source_external_trial_id TEXT
+            """,
+        ),
+    ),
+    Migration(
+        version=9,
+        name="tier three shopify development-store pairings",
+        statements=(
+            # §17.1 `shopify_pairings`, transcribed column by column, and §16.5's
+            # ten states as a CHECK so a status outside the machine is a schema
+            # error rather than a row nobody can classify.
+            #
+            # **Only hashes.** FR-111: "Only its hash is persisted." There is no
+            # column here that could hold a raw credential, which is the point —
+            # a redaction rule can be forgotten, an absent column cannot. The two
+            # hash columns are the whole of what this table knows about the two
+            # credentials, and `bridge_session_token_hash` is nullable because it
+            # does not exist until redemption.
+            #
+            # `contract_id` and `contract_content_hash` are both recorded for the
+            # reason `runs` records both: the id says which contract, the hash
+            # says which *version* of it, and FR-025 judges a trial against the
+            # document it was paired with even if the workspace later selects
+            # another.
+            #
+            # `run_id` is nullable "until the `before` observation is accepted"
+            # (§17.1) and carries `ON DELETE SET NULL` rather than a cascade:
+            # §15.1's opt-in purge deletes terminal runs, and a purge must not
+            # silently delete the pairing record that says a trial happened.
+            """
+            CREATE TABLE shopify_pairings (
+                id                        TEXT NOT NULL PRIMARY KEY,
+                workspace_id              TEXT NOT NULL,
+                contract_id               TEXT NOT NULL,
+                contract_content_hash     TEXT NOT NULL,
+                run_id                    TEXT,
+                store_origin              TEXT NOT NULL,
+                pairing_token_hash        TEXT NOT NULL,
+                bridge_session_token_hash TEXT,
+                bridge_version            TEXT,
+                theme_build_id            TEXT,
+                status                    TEXT NOT NULL,
+                expires_at                TEXT NOT NULL,
+                redeemed_at               TEXT,
+                completed_at              TEXT,
+                created_at                TEXT NOT NULL,
+                FOREIGN KEY (workspace_id) REFERENCES workspaces (id) ON DELETE CASCADE,
+                FOREIGN KEY (contract_id) REFERENCES contracts (id),
+                FOREIGN KEY (run_id) REFERENCES runs (id) ON DELETE SET NULL,
+                CHECK (status IN (
+                    'created', 'paired', 'armed', 'verifying', 'passed',
+                    'passed_with_warnings', 'failed', 'expired', 'cancelled', 'error'
+                ))
+            )
+            """,
+            # §17.1: "At most one nonterminal pairing may exist per interactive
+            # workspace." A partial unique index rather than a read-then-write
+            # check, for the same reason the audit slot is one: two tabs starting
+            # a pairing at once would both read zero and both insert, and the
+            # second bridge would then redeem against a pairing whose operator
+            # never saw the launch URL.
+            #
+            # The terminal set is §16.5's, written out rather than derived. A
+            # SQLite index expression cannot import an enum, so the list has to be
+            # literal here; `TERMINAL_PAIRING_STATUSES` in the service is the same
+            # set, and a test compares the two so they cannot drift.
+            """
+            CREATE UNIQUE INDEX shopify_pairings_one_live_per_workspace
+                ON shopify_pairings (workspace_id)
+             WHERE status NOT IN (
+                 'passed', 'passed_with_warnings', 'failed', 'expired', 'cancelled', 'error'
+             )
+            """,
+            # §17.1: "`run_id` becomes unique when populated." Partial, because
+            # SQLite treats NULLs as distinct in a plain UNIQUE — which is the
+            # behaviour wanted for the many pairings that never armed a run, and
+            # the wrong one for two pairings claiming the same run.
+            """
+            CREATE UNIQUE INDEX shopify_pairings_one_run
+                ON shopify_pairings (run_id)
+             WHERE run_id IS NOT NULL
+            """,
+            """
+            CREATE INDEX shopify_pairings_by_workspace
+                ON shopify_pairings (workspace_id, created_at DESC)
+            """,
+        ),
+    ),
+    Migration(
+        version=10,
+        name="shopify external capture path provenance",
+        statements=(
+            """
+            ALTER TABLE shopify_pairings ADD COLUMN before_capture_path TEXT
+                CHECK (
+                    before_capture_path IS NULL OR (
+                        length(before_capture_path) BETWEEN 1 AND 2048
+                        AND substr(before_capture_path, 1, 1) = '/'
+                        AND instr(before_capture_path, '?') = 0
+                        AND instr(before_capture_path, '#') = 0
+                    )
+                )
+            """,
+            """
+            ALTER TABLE shopify_pairings ADD COLUMN after_capture_path TEXT
+                CHECK (
+                    after_capture_path IS NULL OR (
+                        length(after_capture_path) BETWEEN 1 AND 2048
+                        AND substr(after_capture_path, 1, 1) = '/'
+                        AND instr(after_capture_path, '?') = 0
+                        AND instr(after_capture_path, '#') = 0
+                    )
+                )
+            """,
+        ),
+    ),
 )
 
 #: §17.1's Tier 2 eval tables, added by migration 2. Migration 4 rebuilt
@@ -705,6 +893,13 @@ TIER_TWO_BENCHMARK_TABLES: Final[tuple[str, ...]] = (
     "benchmark_suites",
     "benchmark_trials",
 )
+
+#: §17.1's Tier 3 table, added by migration 9 alongside `ShopifyPairingService`
+#: — the code that fills it. Declared here for the same reason the two tuples
+#: above are: the migration gate asserts that every table the schema creates is
+#: named by one of these tuples, so a table added without a declaration fails
+#: rather than arriving unannounced.
+TIER_THREE_SHOPIFY_TABLES: Final[tuple[str, ...]] = ("shopify_pairings",)
 
 
 async def schema_version(connection: aiosqlite.Connection) -> int:

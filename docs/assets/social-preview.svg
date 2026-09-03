@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-labelledby="title desc">
+  <title id="title">ActionWitness social preview</title>
+  <desc id="desc">A dark product card showing independent verification diverging from an agent's success report.</desc>
+  <defs>
+    <linearGradient id="shade" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#0b0f16" stop-opacity="1"/>
+      <stop offset="0.58" stop-color="#0b0f16" stop-opacity="0.84"/>
+      <stop offset="1" stop-color="#0b0f16" stop-opacity="0.08"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="18" stdDeviation="24" flood-color="#000" flood-opacity="0.32"/>
+    </filter>
+  </defs>
+  <rect width="1280" height="640" fill="#0b0f16"/>
+  <image href="actionwitness-signal-background.png" x="0" y="0" width="1280" height="640" preserveAspectRatio="xMidYMid slice"/>
+  <rect width="1280" height="640" fill="url(#shade)"/>
+  <g transform="translate(76 70)" filter="url(#shadow)">
+    <rect width="74" height="74" rx="18" fill="#14181f" stroke="#8ca0f0" stroke-width="2"/>
+    <path d="M13 37h17" fill="none" stroke="#8ca0f0" stroke-width="5" stroke-linecap="round"/>
+    <path d="M44 33c9-1 10-14 18-14M44 41c9 1 10 14 18 14" fill="none" stroke-width="5" stroke-linecap="round"/>
+    <path d="M44 33c9-1 10-14 18-14" stroke="#55c283"/>
+    <path d="M44 41c9 1 10 14 18 14" stroke="#ec7f77"/>
+    <circle cx="37" cy="37" r="12" fill="#3652c4" stroke="#fff" stroke-width="2"/>
+    <path d="m31 37 4 4 8-10" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <text x="76" y="218" fill="#ffffff" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="68" font-weight="760" letter-spacing="-2">ActionWitness</text>
+  <text x="76" y="292" fill="#e6e9ee" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="34" font-weight="600">The agent says “done.”</text>
+  <text x="76" y="340" fill="#8ca0f0" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="34" font-weight="700">We check what actually happened.</text>
+  <text x="76" y="406" fill="#b9bfca" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="21">Independent business-state verification for WebMCP actions.</text>
+  <g transform="translate(76 476)" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" letter-spacing="0.8">
+    <rect width="218" height="46" rx="23" fill="#17223e" stroke="#3652c4"/>
+    <text x="109" y="29" text-anchor="middle" fill="#b9c5ff">INDEPENDENT STATE</text>
+    <rect x="232" width="192" height="46" rx="23" fill="#291f3c" stroke="#6d3fb4"/>
+    <text x="328" y="29" text-anchor="middle" fill="#d8c5ff">HUMAN CONSENT</text>
+    <rect x="438" width="214" height="46" rx="23" fill="#153225" stroke="#1d7a43"/>
+    <text x="545" y="29" text-anchor="middle" fill="#a9e8c1">REPLAYABLE PROOF</text>
+  </g>
+</svg>

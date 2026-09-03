@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="810" viewBox="0 0 1440 810" role="img" aria-labelledby="title desc">
+  <title id="title">Human consent pauses a protected action</title>
+  <desc id="desc">A checkout action waits while a person reviews its exact scope and chooses whether to approve it.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#171320"/><stop offset="1" stop-color="#25203a"/></linearGradient>
+    <clipPath id="shot"><rect x="302" y="146" width="836" height="548" rx="20"/></clipPath>
+    <filter id="shadow"><feDropShadow dx="0" dy="16" stdDeviation="22" flood-color="#000" flood-opacity="0.38"/></filter>
+  </defs>
+  <rect width="1440" height="810" fill="url(#bg)"/>
+  <text x="72" y="76" fill="#b795ea" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="16" font-weight="800" letter-spacing="2">PROTECTED ACTION</text>
+  <text x="72" y="126" fill="#fff" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="42" font-weight="760">The agent asks. A person decides.</text>
+  <g filter="url(#shadow)">
+    <rect x="286" y="130" width="868" height="580" rx="28" fill="#1c222c" stroke="#8ca0f0" stroke-width="2"/>
+    <image href="../screenshots/consent-dialog.png" x="302" y="146" width="836" height="548" preserveAspectRatio="xMidYMid slice" clip-path="url(#shot)"/>
+  </g>
+  <g font-family="Inter, Segoe UI, Arial, sans-serif">
+    <rect x="72" y="256" width="182" height="92" rx="16" fill="#232c4a" stroke="#3652c4"/>
+    <text x="163" y="292" text-anchor="middle" fill="#8ca0f0" font-size="15" font-weight="800" letter-spacing="1">AGENT</text>
+    <text x="163" y="323" text-anchor="middle" fill="#e6e9ee" font-size="20" font-weight="700">waits</text>
+    <path d="M254 302h46" stroke="#8ca0f0" stroke-width="4" stroke-linecap="round"/>
+    <rect x="1186" y="256" width="182" height="92" rx="16" fill="#2a1f3d" stroke="#6d3fb4"/>
+    <text x="1277" y="292" text-anchor="middle" fill="#b795ea" font-size="15" font-weight="800" letter-spacing="1">PERSON</text>
+    <text x="1277" y="323" text-anchor="middle" fill="#e6e9ee" font-size="20" font-weight="700">decides</text>
+    <path d="M1140 302h46" stroke="#b795ea" stroke-width="4" stroke-linecap="round"/>
+    <rect x="368" y="742" width="704" height="44" rx="22" fill="#211b2c" stroke="#6d3fb4"/>
+    <text x="720" y="771" text-anchor="middle" fill="#d8c5ff" font-size="17">Bound to this workspace · run · action · arguments · expiry</text>
+  </g>
+</svg>
