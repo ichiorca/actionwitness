@@ -64,10 +64,6 @@
       {
         "functionName": "update_cart",
         "arguments": { "product_id": "mug-ceramic-001", "quantity": 1 }
-      },
-      {
-        "functionName": "apply_discount",
-        "arguments": { "code": "SAVE20" }
       }
     ]
   }

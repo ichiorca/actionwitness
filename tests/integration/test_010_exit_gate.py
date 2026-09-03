@@ -383,3 +383,60 @@ def test_gate_6_shopify_work_has_not_started() -> None:
         "§7/M10's entry condition also requires the development-store "
         "configuration to be locked."
     )
+
+
+# --- the authored live suite -------------------------------------------------
+
+SUITE = REPO_ROOT / "integrations" / "google_evals" / "scenarios" / "save20_suite.json"
+
+#: The one instruction that distinguishes the omitted case: its prompt forbids
+#: the discount. A rubric that still requires `apply_discount` would score an
+#: obedient model as failing at the call level, and the scenario could then
+#: never land in the evaluator-passed / outcome-failed cell it exists to
+#: demonstrate.
+FORBIDS_DISCOUNT = "Do not apply any discount code"
+REQUESTS_DISCOUNT = "apply the discount code SAVE20"
+
+
+def _suite_cases() -> list[dict]:
+    return json.loads(SUITE.read_text(encoding="utf-8"))
+
+
+def test_the_authored_suite_names_are_exactly_the_ids_this_gate_binds() -> None:
+    """FR-091 binds trials by scenario id and forbids guessing: the case names
+    in the authored suite and the scenario ids declared at suite creation must
+    match byte for byte, or every live trial imports as unbound."""
+    # Arrange / Act
+    names = [case["name"] for case in _suite_cases()]
+
+    # Assert
+    assert names == [FAULTY, CORRECTED, OMITTED]
+
+
+def test_each_suite_expectation_is_consistent_with_its_own_prompt() -> None:
+    """A rubric that requires a call its own prompt forbids scores obedience as
+    failure — the copy-paste this catches survived because nothing read the
+    suite until a live run would have."""
+    for case in _suite_cases():
+        # Arrange
+        prompt = " ".join(message["content"] for message in case["messages"])
+        expected = [call["functionName"] for call in case["expectedCall"]]
+
+        # Act — each prompt states its discount intent exactly one way.
+        forbids = FORBIDS_DISCOUNT in prompt
+        requests = REQUESTS_DISCOUNT in prompt
+        assert forbids != requests, (
+            f"{case['name']!r}: the prompt must either request or forbid the "
+            "discount, unambiguously"
+        )
+
+        # Assert — the rubric agrees with the instruction it grades against.
+        if forbids:
+            assert "apply_discount" not in expected, (
+                f"{case['name']!r} forbids the discount but still expects "
+                "apply_discount; an obedient model would fail at the call level"
+            )
+        else:
+            assert "apply_discount" in expected, (
+                f"{case['name']!r} asks for the discount but does not expect apply_discount"
+            )
