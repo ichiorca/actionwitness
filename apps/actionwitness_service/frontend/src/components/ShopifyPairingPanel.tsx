@@ -203,6 +203,7 @@ function ObservationRows({ pairing }: { readonly pairing: ShopifyPairing }): Rea
       <thead>
         <tr>
           <th scope="col">Phase</th>
+          <th scope="col">Source</th>
           <th scope="col">Items</th>
           <th scope="col">Currency</th>
           <th scope="col">Subtotal</th>
@@ -214,6 +215,7 @@ function ObservationRows({ pairing }: { readonly pairing: ShopifyPairing }): Rea
         {pairing.observations.map((observation, index) => (
           <tr key={`${observation.phase}-${String(index)}`}>
             <th scope="row">{observation.phase}</th>
+            <td>{observation.provider} / {observation.provenance}</td>
             {/* "not reported" rather than a zero: an unreported total and a
                 total of 0.00 are different facts, and only one is evidence. */}
             <td>{observation.itemCount === null ? "not reported" : String(observation.itemCount)}</td>

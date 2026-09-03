@@ -716,3 +716,55 @@ async def test_actionwitness_verifies_itself_end_to_end(harness: FastAPI) -> Non
         # The recording workspace's own identifier must appear in neither
         # snapshot: if it did, the run observed the state it was producing.
         assert recording not in row["state"]
+
+
+async def test_reset_after_completed_self_run_reseeds_the_observed_workspace(
+    harness: FastAPI,
+) -> None:
+    """FR-013 reset remains usable after a self-witnessing journey.
+
+    The selected self contract survives reset, so reseeding must prepare the
+    server-owned observed workspace rather than calling an unbound adapter.
+    This is the exact cross-journey transition a recording session exercises:
+    complete self-witnessing, reset, then select the next contract.
+    """
+    # Arrange
+    async with visitor(harness) as client:
+        templates = (await client.get(f"{CONTRACTS}/templates")).json()["templates"]
+        chosen = next(
+            template
+            for template in templates
+            if template["source_template_id"] == "self_completed_run_timeline_is_immutable"
+        )
+        selected = await client.post(f"{CONTRACTS}/{chosen['contract_id']}/select")
+        assert selected.status_code == 200, selected.text
+
+        scenario = await client.put(f"{WORKSPACE}/scenario-mode", json={"scenario_mode": "current"})
+        assert scenario.status_code == 200, scenario.text
+        profile = await client.put(f"{WORKSPACE}/failure-profile", json={"failure_profile": "none"})
+        assert profile.status_code == 200, profile.text
+
+        armed = await client.post(RUNS, json={})
+        assert armed.status_code == 201, armed.text
+        run_id = str(armed.json()["run_id"])
+        observed = str((await client.get(WORKSPACE)).json()["observed_workspace_id"])
+
+        for tool in (GET_RUN_FINDINGS, GET_WORKSPACE_STATUS):
+            invoked = await client.post(
+                f"{RUNS}/{run_id}/target-tools/{tool}:invoke", json={"arguments": {}}
+            )
+            assert invoked.status_code == 200, invoked.text
+        verified = await client.post(f"{RUNS}/{run_id}/verify")
+        assert verified.status_code == 200, verified.text
+        assert verified.json()["status"] == str(RunState.PASSED.value)
+
+        # Act
+        reset = await client.post(f"{WORKSPACE}/reset", json={"purge_completed": True})
+
+        # Assert
+        assert reset.status_code == 200, reset.text
+        assert reset.json()["target_reseeded"] is True
+        status = (await client.get(WORKSPACE)).json()
+        assert status["selected_target_id"] == TARGET_ID
+        assert status["observed_workspace_id"] == observed
+        assert status["active_run"] is None

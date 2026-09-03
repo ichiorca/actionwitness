@@ -32,10 +32,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from actionwitness_core.kernel import CoreError
+from actionwitness_core.ports import ScopedTargetAdapter
 from actionwitness_core.ports.models import ScenarioSelection
 
 from actionwitness_service.api.errors import ApiError, ApiErrorCode
 from actionwitness_service.application.adapter_registry import AdapterRegistry
+from actionwitness_service.application.self_witness import scope_target_adapter
 
 __all__ = ["ReseedOutcome", "ScenarioPreparer"]
 
@@ -74,6 +76,7 @@ class ScenarioPreparer:
         target_id: str | None,
         scenario_mode: str | None,
         failure_profile: str | None,
+        observed_workspace_id: str | None = None,
     ) -> ReseedOutcome:
         """Reseed the target for this scenario, or explain why it was skipped.
 
@@ -98,6 +101,12 @@ class ScenarioPreparer:
             # it has no `prepare` and reseeding it is not merely unsupported but
             # meaningless.
             return ReseedOutcome.skipped("this target is observed rather than driven")
+
+        if isinstance(adapter, ScopedTargetAdapter) and not observed_workspace_id:
+            return ReseedOutcome.skipped(
+                "the target workspace will be provisioned when the run is armed"
+            )
+        adapter = scope_target_adapter(adapter, workspace_id, observed_workspace_id)
 
         selection = ScenarioSelection(
             scenario_mode=scenario_mode,

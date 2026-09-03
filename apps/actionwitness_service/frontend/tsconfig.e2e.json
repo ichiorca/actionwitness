@@ -34,5 +34,5 @@
 
     "types": ["node", "webmcp-types"]
   },
-  "include": ["e2e", "playwright.config.ts"]
+  "include": ["e2e", "playwright*.config.ts"]
 }

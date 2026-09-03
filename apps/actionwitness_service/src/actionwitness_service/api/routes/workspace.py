@@ -132,6 +132,7 @@ async def reset_workspace(
         target_id=status["selected_target_id"],
         scenario_mode=status["scenario_mode"],
         failure_profile=status["failure_profile"],
+        observed_workspace_id=status["observed_workspace_id"],
     )
 
     return {
@@ -236,6 +237,7 @@ async def _select_and_prepare(
         target_id=target_id,
         scenario_mode=intended_mode,
         failure_profile=intended_profile,
+        observed_workspace_id=before["observed_workspace_id"],
     )
 
     async with locks.hold(workspace_id), database.transaction() as work:

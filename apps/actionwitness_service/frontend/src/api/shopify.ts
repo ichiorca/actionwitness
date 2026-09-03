@@ -51,6 +51,8 @@ export interface PairingObservation {
   readonly capturedAt: string | null;
   readonly contentHash: string | null;
   readonly capturePath: string | null;
+  readonly provider: string;
+  readonly provenance: string;
   readonly itemCount: number | null;
   readonly currency: string | null;
   readonly subtotal: string | null;
@@ -116,6 +118,8 @@ function parseObservation(value: unknown, field: string): PairingObservation {
     capturedAt: optionalString(record["captured_at"]),
     contentHash: optionalString(record["content_hash"]),
     capturePath: optionalString(record["capture_url_path"]),
+    provider: requireString(record["provider"], `${field}.provider`),
+    provenance: requireString(record["provenance"], `${field}.provenance`),
     itemCount: parseNumber(record["item_count"]),
     currency: optionalString(record["currency"]),
     subtotal: parseMoney(record["subtotal"]),

@@ -77,6 +77,7 @@ from actionwitness_service.persistence.database import Database, UnitOfWork
 from actionwitness_service.persistence.locks import WorkspaceLocks
 from actionwitness_service.persistence.repositories import (
     EventRepository,
+    SnapshotIntegrityError,
     SnapshotRepository,
     new_id,
 )
@@ -772,6 +773,52 @@ class ShopifyPairingService:
                 )
             return self._expire_if_elapsed(work, pairing)
 
+    async def status_document(self, workspace_id: str, pairing_id: str) -> dict[str, Any]:
+        """Build the operator-facing status from verified persisted evidence."""
+        async with self._database.reading() as work:
+            pairing = await self._read(work, pairing_id)
+            if pairing.workspace_id != workspace_id:
+                raise ApiError(
+                    ApiErrorCode.RESOURCE_NOT_FOUND, "No such pairing in this workspace."
+                )
+            pairing = self._expire_if_elapsed(work, pairing)
+            document = pairing.as_document()
+            observations: list[dict[str, Any]] = []
+            document["overall_result"] = None
+            document["observations"] = observations
+            if pairing.run_id is None:
+                return document
+
+            run_id = str(pairing.run_id)
+            run = await work.fetch_one(
+                "SELECT overall_result FROM runs WHERE id = ? AND workspace_id = ?",
+                (run_id, workspace_id),
+            )
+            if run is None:
+                raise ApiError(
+                    ApiErrorCode.HARNESS_ERROR,
+                    "The Shopify pairing refers to a run that is unavailable.",
+                )
+            document["overall_result"] = run["overall_result"]
+
+            snapshots = SnapshotRepository(work)
+            try:
+                for phase, capture_path in (
+                    (SnapshotPhase.BEFORE, pairing.before_capture_path),
+                    (SnapshotPhase.AFTER, pairing.after_capture_path),
+                ):
+                    observation = await snapshots.get(run_id, phase)
+                    if observation is not None:
+                        observations.append(
+                            _shopify_observation_document(phase, observation, capture_path)
+                        )
+            except SnapshotIntegrityError as corrupt:
+                raise ApiError(
+                    ApiErrorCode.HARNESS_ERROR,
+                    "Stored Shopify cart evidence failed its integrity check and was not served.",
+                ) from corrupt
+            return document
+
     # -- internals ------------------------------------------------------------
 
     async def _require_no_live_pairing(self, work: UnitOfWork, workspace_id: str) -> None:
@@ -1166,6 +1213,59 @@ _SHOPIFY_ADAPTER_ID: Final = "integrations.shopify"
 #: §9.1: an external target has no pre/post fixture, so this is the only mode it
 #: can honestly report observing.
 _EXTERNAL_SCENARIO_MODE: Final = "external_current"
+
+#: The provider id written by the Shopify observation adapter. Kept here as
+#: recorded protocol data so the generic service never imports the integration.
+_SHOPIFY_CART_PROVIDER: Final = "shopify_cart_state"
+
+
+def _shopify_observation_document(
+    phase: SnapshotPhase, observation: Observation, capture_path: object
+) -> dict[str, Any]:
+    """A bounded, validated summary for the status UI; never the raw cart."""
+    cart = observation.payload.get("cart")
+    if not isinstance(cart, Mapping):
+        raise _invalid_shopify_snapshot("cart")
+
+    item_count = cart.get("item_count")
+    currency = cart.get("currency")
+    subtotal = cart.get("subtotal")
+    total = cart.get("total")
+    if isinstance(item_count, bool) or not isinstance(item_count, int) or item_count < 0:
+        raise _invalid_shopify_snapshot("cart.item_count")
+    if not isinstance(currency, str) or len(currency) != 3 or not currency.isalpha():
+        raise _invalid_shopify_snapshot("cart.currency")
+    if not isinstance(subtotal, str) or not subtotal:
+        raise _invalid_shopify_snapshot("cart.subtotal")
+    if not isinstance(total, str) or not total:
+        raise _invalid_shopify_snapshot("cart.total")
+    if observation.provider_id != _SHOPIFY_CART_PROVIDER:
+        raise _invalid_shopify_snapshot("provider")
+    if observation.provenance != PLATFORM_SESSION_API:
+        raise _invalid_shopify_snapshot("provenance")
+    if capture_path is not None and not isinstance(capture_path, str):
+        raise _invalid_shopify_snapshot("capture_url_path")
+
+    return {
+        "phase": phase.value,
+        "captured_at": _iso(observation.captured_at),
+        "content_hash": observation.content_hash(),
+        "capture_url_path": capture_path,
+        "provider": observation.provider_id,
+        "provenance": observation.provenance,
+        "item_count": item_count,
+        "currency": currency,
+        "subtotal": subtotal,
+        "total": total,
+    }
+
+
+def _invalid_shopify_snapshot(field: str) -> ApiError:
+    return ApiError(
+        ApiErrorCode.HARNESS_ERROR,
+        "Stored Shopify cart evidence does not match the recorded observation schema.",
+        details=[{"path": field, "message": "stored observation is invalid"}],
+    )
 
 
 def _mint() -> str:

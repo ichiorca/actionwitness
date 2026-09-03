@@ -76,6 +76,8 @@ describe("normalized cart evidence (FR-113)", () => {
           captured_at: "2026-09-03T12:05:00Z",
           content_hash: "sha256:bbb",
           capture_url_path: "/en-gb/cart.js",
+          provider: "shopify_cart_state",
+          provenance: "platform_session_api",
           item_count: 1,
           currency: "USD",
           subtotal: "25.00",
@@ -90,6 +92,8 @@ describe("normalized cart evidence (FR-113)", () => {
     // Assert
     expect(pairing.observations[0]?.subtotal).toBe("25.00");
     expect(pairing.observations[0]?.capturePath).toBe("/en-gb/cart.js");
+    expect(pairing.observations[0]?.provider).toBe("shopify_cart_state");
+    expect(pairing.observations[0]?.provenance).toBe("platform_session_api");
   });
 
   it("refuses a numeric money value instead of converting it", async () => {
@@ -100,7 +104,16 @@ describe("normalized cart evidence (FR-113)", () => {
     // silently converted 25 is a total they would believe.
     respond({
       ...RECORD,
-      observations: [{ phase: "after", subtotal: 2500, total: 2500, item_count: 1 }],
+      observations: [
+        {
+          phase: "after",
+          provider: "shopify_cart_state",
+          provenance: "platform_session_api",
+          subtotal: 2500,
+          total: 2500,
+          item_count: 1,
+        },
+      ],
     });
 
     // Act
@@ -134,5 +147,27 @@ describe("createShopifyPairing", () => {
     // boundary's job is only to hand over exactly what the server issued.
     expect(created.launchUrl).toBe(launch);
     expect(created.status).toBe("created");
+  });
+
+  it("accepts the service's minimal minted response without inventing lifecycle state", async () => {
+    // Arrange - this is the concrete FastAPI response, not the richer status
+    // fixture used by the polling tests. Status must come from the server.
+    const launch = "https://authorized-dev-store.example/#actionwitness=pair_abcd.secret";
+    respond({
+      pairing_id: "pair_abcd",
+      status: "created",
+      contract_id: "con_1",
+      store_origin: "https://authorized-dev-store.example",
+      expires_at: "2026-09-03T12:15:00Z",
+      launch_url: launch,
+    });
+
+    // Act
+    const created = await createShopifyPairing("con_1");
+
+    // Assert
+    expect(created.status).toBe("created");
+    expect(created.launchUrl).toBe(launch);
+    expect(created.observations).toEqual([]);
   });
 });

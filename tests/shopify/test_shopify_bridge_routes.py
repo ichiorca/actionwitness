@@ -46,6 +46,7 @@ async def test_the_bridge_carries_one_trial_from_pairing_to_a_verdict(trial: Tri
     minted = created.json()
     assert created.headers["cache-control"] == "no-store"
     assert minted["store_origin"] == trial.STORE
+    assert minted["status"] == "created"
     assert minted["launch_url"].startswith(f"{trial.STORE}/#actionwitness={minted['pairing_id']}.")
 
     # Act - redeem, as the bridge.
@@ -91,6 +92,22 @@ async def test_the_bridge_carries_one_trial_from_pairing_to_a_verdict(trial: Tri
     assert read.json()["pairing"]["run_id"] == run_id
     assert read.json()["pairing"]["bridge_version"] == "1.0.0"
     assert read.json()["pairing"]["theme_build_id"] == "theme-build-7"
+    # The operator-facing status is a proof surface, not merely a state badge.
+    # Both independently observed carts and their source are visible without
+    # asking somebody to inspect a raw event stream or trust explanatory copy.
+    pairing = read.json()["pairing"]
+    assert pairing["overall_result"] == "passed"
+    assert pairing["report"] == read.json()["report_path"]
+    assert [observation["phase"] for observation in pairing["observations"]] == [
+        "before",
+        "after",
+    ]
+    assert [observation["item_count"] for observation in pairing["observations"]] == [0, 1]
+    for observation in pairing["observations"]:
+        assert observation["provider"] == "shopify_cart_state"
+        assert observation["provenance"] == "platform_session_api"
+        assert observation["capture_url_path"] == "/cart.js"
+        assert observation["content_hash"].startswith("sha256:")
 
 
 async def test_the_status_endpoint_offers_a_report_link_that_resolves(trial: Trial) -> None:

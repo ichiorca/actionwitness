@@ -54,6 +54,7 @@ __all__ = [
     "capture_target_state",
     "ensure_observed_workspace",
     "observes_a_separate_workspace",
+    "scope_target_adapter",
 ]
 
 #: The descriptor id `integrations.self_target` advertises. Used for messages a
@@ -152,6 +153,34 @@ async def capture_target_state(
     return await provider.capture_observed(recording_workspace_id, observed_workspace_id)
 
 
+def scope_target_adapter(
+    adapter: Any, recording_workspace_id: str, observed_workspace_id: str | None
+) -> Any:
+    """Bind a scoped target through server-owned workspace identities.
+
+    The adapter protocol identifies the targets that need the second workspace;
+    the two refusals keep absence and self-reference from becoming implicit
+    authority. Ordinary adapters pass through unchanged.
+    """
+    if not isinstance(adapter, ScopedTargetAdapter):
+        return adapter
+    if not observed_workspace_id:
+        raise ApiError(
+            ApiErrorCode.SELF_OBSERVATION_LOOP,
+            "The selected target acts on a workspace separate from the one recording "
+            "the run, and this workspace has none. Nothing was dispatched.",
+            details=[{"path": "observed_workspace_id", "message": "no observed workspace"}],
+        )
+    if observed_workspace_id == recording_workspace_id:
+        raise ApiError(
+            ApiErrorCode.SELF_OBSERVATION_LOOP,
+            "A self-witnessing run may not act on its own recording workspace; the "
+            "call would change the very state the run is recording.",
+            details=[{"path": "observed_workspace_id", "message": "names its own workspace"}],
+        )
+    return adapter.observing(observed_workspace_id)
+
+
 async def bound_adapter(database: Database, adapter: Any, workspace_id: str) -> Any:
     """The adapter this workspace's run should act through.
 
@@ -166,25 +195,8 @@ async def bound_adapter(database: Database, adapter: Any, workspace_id: str) -> 
     A run permitted to act on a workspace it may not observe would be able to
     change state that no verdict could ever see.
     """
-    if not isinstance(adapter, ScopedTargetAdapter):
-        return adapter
-
     observed = await _observed_workspace_of(database, workspace_id)
-    if not observed:
-        raise ApiError(
-            ApiErrorCode.SELF_OBSERVATION_LOOP,
-            "The selected target acts on a workspace separate from the one recording "
-            "the run, and this workspace has none. Nothing was dispatched.",
-            details=[{"path": "observed_workspace_id", "message": "no observed workspace"}],
-        )
-    if observed == workspace_id:
-        raise ApiError(
-            ApiErrorCode.SELF_OBSERVATION_LOOP,
-            "A self-witnessing run may not act on its own recording workspace; the "
-            "call would change the very state the run is recording.",
-            details=[{"path": "observed_workspace_id", "message": "names its own workspace"}],
-        )
-    return adapter.observing(observed)
+    return scope_target_adapter(adapter, workspace_id, observed)
 
 
 async def _observed_workspace_of(database: Database, workspace_id: str) -> str | None:

@@ -13,6 +13,7 @@
     "test:e2e": "node scripts/build-e2e-static.mjs && playwright test",
     "test:e2e:ui": "node scripts/build-e2e-static.mjs && playwright test --ui",
     "capture:demo": "node scripts/build-e2e-static.mjs && playwright test -c playwright.demo.config.ts",
+    "capture:shopify-demo": "playwright test -c playwright.shopify-demo.config.ts",
     "build": "vite build",
     "lint": "eslint ."
   },

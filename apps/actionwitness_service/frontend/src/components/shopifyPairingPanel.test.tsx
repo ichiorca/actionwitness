@@ -180,6 +180,8 @@ describe("cart evidence", () => {
             capturedAt: "2026-09-03T12:00:00Z",
             contentHash: "sha256:aaa",
             capturePath: "/en-gb/cart.js",
+            provider: "shopify_cart_state",
+            provenance: "platform_session_api",
             itemCount: 0,
             currency: "USD",
             subtotal: "0.00",
@@ -190,6 +192,8 @@ describe("cart evidence", () => {
             capturedAt: "2026-09-03T12:05:00Z",
             contentHash: "sha256:bbb",
             capturePath: "/en-gb/cart.js",
+            provider: "shopify_cart_state",
+            provenance: "platform_session_api",
             itemCount: 1,
             currency: "USD",
             subtotal: "25.00",
@@ -202,6 +206,8 @@ describe("cart evidence", () => {
     // Assert
     expect(screen.getByText("25.00")).toBeDefined();
     expect(screen.getAllByText("not reported").length).toBe(1);
+    expect(screen.getByRole("columnheader", { name: "Source" })).toBeDefined();
+    expect(screen.getAllByText("shopify_cart_state / platform_session_api")).toHaveLength(2);
   });
 
   it("says there is no evidence yet rather than showing an empty table", () => {

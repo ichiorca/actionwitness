@@ -77,7 +77,7 @@ export default tseslint.config(
     // Linted without type information on purpose: the typed rules are bound to
     // `tsconfig.json`, which covers `src/` alone. `npm run typecheck:e2e` is
     // where these files get their strict type coverage, from their own project.
-    files: ["e2e/**/*.ts", "playwright.config.ts", "scripts/**/*.mjs"],
+    files: ["e2e/**/*.ts", "playwright*.config.ts", "scripts/**/*.mjs"],
     languageOptions: {
       parser: tseslint.parser,
       // Both, because the lane straddles the boundary: fixtures run in Node,

@@ -74,7 +74,6 @@ from actionwitness_service.application.contract_service import ContractService
 from actionwitness_service.application.shopify_pairing import (
     CapturedPhase,
     PairingStatus,
-    PairingView,
     ShopifyPairingService,
     resolve_shopify_adapter,
 )
@@ -221,6 +220,7 @@ async def create_pairing(
         status_code=201,
         content={
             "pairing_id": minted.pairing_id,
+            "status": PairingStatus.CREATED.value,
             "contract_id": contract_id,
             "store_origin": configured.store_origin,
             "expires_at": minted.expires_at,
@@ -249,8 +249,15 @@ async def read_pairing(
     later can publish one.
     """
     configured = _require_configured(settings)
-    view = await _service(database, locks, artifacts, configured).read(workspace_id, pairing_id)
-    return {"pairing": view.as_document(), "report_path": _report_path(view)}
+    document = await _service(database, locks, artifacts, configured).status_document(
+        workspace_id, pairing_id
+    )
+    status = PairingStatus(str(document["status"]))
+    run_id_value = document.get("run_id")
+    run_id = None if run_id_value is None else str(run_id_value)
+    report_path = _report_path(status, run_id)
+    document["report"] = report_path
+    return {"pairing": document, "report_path": report_path}
 
 
 # --- the theme bridge: credential- and origin-authorized ----------------------
@@ -623,8 +630,8 @@ def _captured(captured: CapturedPhase) -> dict[str, Any]:
     }
 
 
-def _report_path(view: PairingView) -> str | None:
+def _report_path(status: PairingStatus, run_id: str | None) -> str | None:
     """Where this pairing's outcome report is served from, once one exists."""
-    if view.run_id is None or view.status not in _VERDICT_STATUSES:
+    if run_id is None or status not in _VERDICT_STATUSES:
         return None
-    return _REPORT_PATH.format(run_id=view.run_id)
+    return _REPORT_PATH.format(run_id=run_id)
