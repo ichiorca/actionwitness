@@ -66,7 +66,11 @@ def transform(raw: dict, *, model: str, commit: str, fixture: str) -> dict:
             }
         )
 
-    model_parameters = raw.get("config", {}).get("modelParameters") or {}
+    # Exactly what the evaluator exported, or null when it exported nothing.
+    # AC-17 forbids inventing missing values, and the normalizer's own rule
+    # (normalize.py) is that an empty dict would invent the claim "the
+    # evaluator reported no parameters" — absent must stay absent.
+    model_parameters = raw.get("config", {}).get("modelParameters")
     return {
         "config": {
             **PINNED_CONFIG,
