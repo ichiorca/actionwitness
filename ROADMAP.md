@@ -12,8 +12,19 @@ behavior from work that remains optional or deferred.
 - Append-only, hash-linked evidence and explicit integrity verification.
 - Deterministic Buggy Store with pre-fix and post-fix scenarios.
 - Portable regression-case generation and replay.
-- Imported call-level evaluator reports with source classification and correlation.
-- React workspace, browser adapter, public Docker deployment, and release gates.
+- Imported call-level evaluator reports with source classification, explicit
+  binding, repeated-trial correlation, and the dual-layer benchmark matrix.
+- Self-witnessing: the harness audited through its own public API.
+- The external storefront audit: single asserted origin, browser-side
+  collection, sealed and re-verified merchant reports.
+- The Shopify development-store integration: pairing, the reviewed theme
+  bridge observing the shopper's own cart via `/cart.js`, native Shopify
+  WebMCP tools on the agent side, cart-only by contract — exercised end to
+  end against the authorized development store.
+- Live Gemini intent-variant drafting behind an explicit provider credential,
+  with human review before anything is frozen.
+- React workspace, browser adapter, public Docker deployment on Render, and
+  release gates.
 
 ## Near term
 
@@ -23,14 +34,20 @@ behavior from work that remains optional or deferred.
 - Publish a stable packaged CLI and versioned release artifacts.
 - Expand real-browser accessibility and cross-browser validation as WebMCP stabilizes.
 
-## Optional modules that remain gated
+## Optional modules — implemented, configuration-gated, off by default
 
-- Shopify development-store, single-variant, cart-only integration.
-- Live-model evaluator runs with explicit provider credentials and recorded provenance.
-- External storefront audit for operator-allowlisted origins.
+All three are built and tested to the same standard as the deterministic demo;
+what gates them now is deployment configuration, not pending work. Each reports
+its state and reason at `GET /api/v1/workspace` under `modules`.
 
-These modules turn on only after their boundaries, recovery behavior, and tests meet
-the same standard as the deterministic demo.
+- **Shopify development-store integration** — enables only for one exact
+  authorized store origin, one server-controlled variant, and one currency.
+- **Live-model evaluator** — variant drafting and the import pipeline are
+  complete and CI-proven from the recorded fixture; the live-credential
+  benchmark run itself remains an open operator gate
+  (`specs/010-live-model-benchmark/tasks.md` T11).
+- **External storefront audit** — enables only for operator-allowlisted
+  origins, with a per-audit authorization assertion.
 
 ## Explicitly out of scope
 
