@@ -62,7 +62,7 @@ author, cannot test, and cannot observe — the audience the
 
 All captured against the live deployment (§29.2):
 
-![The workspace: a left rail with Workflow and Administration sections, the run-status pill, and the verdict stage showing a failed finding beside five passing ones](docs/screenshots/workspace-overview.png)
+![The workspace: the WebMCP tagline and capability bar, the five-stage workflow rail with Audit and Administration sections, a failed run in the status pill, and the contract templates](docs/screenshots/workspace-overview.png)
 
 The agent's `apply_discount` call returns `success` and claims the discounted
 total; the independently observed cart says the discount never landed:
@@ -74,7 +74,7 @@ total; the independently observed cart says the discount never landed:
 A protected checkout pauses on a server-issued confirmation until a person
 decides, with the consequence spelled out and a live expiry:
 
-![The consent dialog: Approve this action? — the consequence as labelled rows, a countdown beside the absolute expiry, and Approve once / Deny withheld from the tab that does not own the waiting call](docs/screenshots/consent-dialog.png)
+![The consent dialog: Approve this action? — the agent wants proceed_to_checkout, the consequence as labelled rows, a countdown beside the absolute expiry, and Approve once / Deny while the agent's call visibly waits](docs/screenshots/consent-dialog.png)
 
 **Status.** Implemented and tested end to end: the target-neutral core, the
 failure-injectable Buggy Store, the React/WebMCP workspace and human
