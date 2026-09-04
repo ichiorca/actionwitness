@@ -164,13 +164,9 @@ function unwrap(value: unknown): unknown {
   return isRecord(value) && isRecord(value["pairing"]) ? value["pairing"] : value;
 }
 
-export async function createShopifyPairing(
-  contractId: string,
-  signal?: AbortSignal,
-): Promise<CreatedPairing> {
+export async function createShopifyPairing(signal?: AbortSignal): Promise<CreatedPairing> {
   return await request("/shopify/pairings", {
     method: "POST",
-    body: { contract_id: contractId },
     parse: (value) => {
       const body = unwrap(value);
       return {

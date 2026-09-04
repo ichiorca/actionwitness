@@ -127,12 +127,29 @@ describe("normalized cart evidence (FR-113)", () => {
 });
 
 describe("createShopifyPairing", () => {
+  it("leaves the contract unstated so the server expands its configured variant and currency", async () => {
+    // Arrange — a raw built-in Shopify template deliberately omits the two
+    // server-controlled assertions. Sending its id would bypass expansion.
+    const launch = "https://authorized-dev-store.example/#actionwitness=pair_abcd.secret";
+    respond({ ...RECORD, status: "created", launch_url: launch });
+
+    // Act
+    await createShopifyPairing();
+
+    // Assert — absence is load-bearing: FastAPI's default request tells the
+    // server to create and bind the configured Shopify contract.
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/v1/shopify/pairings",
+      expect.not.objectContaining({ body: expect.anything() }),
+    );
+  });
+
   it("requires the launch URL, because a pairing nobody can open is not one", async () => {
     // Arrange
     respond({ ...RECORD, status: "created" });
 
     // Act / Assert
-    await expect(createShopifyPairing("con_1")).rejects.toThrow(/launch_url/);
+    await expect(createShopifyPairing()).rejects.toThrow(/launch_url/);
   });
 
   it("returns the launch URL beside the record", async () => {
@@ -141,7 +158,7 @@ describe("createShopifyPairing", () => {
     respond({ ...RECORD, status: "created", launch_url: launch });
 
     // Act
-    const created = await createShopifyPairing("con_1");
+    const created = await createShopifyPairing();
 
     // Assert — the caller is responsible for keeping it out of the DOM; this
     // boundary's job is only to hand over exactly what the server issued.
@@ -163,7 +180,7 @@ describe("createShopifyPairing", () => {
     });
 
     // Act
-    const created = await createShopifyPairing("con_1");
+    const created = await createShopifyPairing();
 
     // Assert
     expect(created.status).toBe("created");

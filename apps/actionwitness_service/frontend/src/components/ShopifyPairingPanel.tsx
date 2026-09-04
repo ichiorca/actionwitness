@@ -404,7 +404,10 @@ export function ShopifyPairingSection({
     }
     setBusy(true);
     setError(null);
-    void createShopifyPairing(contractId).then(
+    // The selected template establishes operator intent and the Shopify target.
+    // The request deliberately leaves the contract id unstated so FastAPI binds
+    // the configured variant and currency into a fresh immutable contract.
+    void createShopifyPairing().then(
       (created) => {
         // Split, deliberately: the URL goes to the ref and the *rest* goes to
         // state. Passing `created` straight to `setPairing` would work and would

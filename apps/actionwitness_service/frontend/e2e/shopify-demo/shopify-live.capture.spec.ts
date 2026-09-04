@@ -162,17 +162,27 @@ function updateArguments(inputSchema: unknown, rawVariantId: string): Record<str
 function configuredVariant(contract: Record<string, unknown>): string {
   const document = asRecord(contract["document"], "contract.document");
   const assertions = asArray(document["assertions"], "contract.document.assertions");
+  let variantId: string | null = null;
+  let hasConfiguredCurrency = false;
   for (const assertionValue of assertions) {
     const assertion = asRecord(assertionValue, "contract assertion");
-    if (assertion["id"] !== "the-configured-test-variant") {
-      continue;
+    if (assertion["id"] === "the-configured-test-variant") {
+      const value = assertion["value"];
+      if ((typeof value === "string" || typeof value === "number") && String(value) !== "") {
+        variantId = String(value);
+      }
     }
-    const value = assertion["value"];
-    if ((typeof value === "string" || typeof value === "number") && String(value) !== "") {
-      return String(value);
+    if (assertion["id"] === "the-expected-currency") {
+      hasConfiguredCurrency =
+        typeof assertion["value"] === "string" && /^[A-Z]{3}$/.test(assertion["value"]);
     }
   }
-  throw new Error("The selected Shopify contract did not expose its server-configured variant.");
+  if (variantId !== null && hasConfiguredCurrency) {
+    return variantId;
+  }
+  throw new Error(
+    "The pairing contract did not expose its server-configured variant and currency.",
+  );
 }
 
 test("04 — real Shopify same-session cart proof", async ({ context, page }) => {
@@ -195,20 +205,27 @@ test("04 — real Shopify same-session cart proof", async ({ context, page }) =>
   await shopifyContract.click();
   await expect(shopifyContract).toHaveAttribute("aria-pressed", "true");
 
-  const workspace = await jsonResponse(page, "/api/v1/workspace");
-  const contractId = workspace["selected_contract_id"];
-  if (typeof contractId !== "string" || contractId === "") {
-    throw new Error("The Shopify contract selection did not produce a contract id.");
-  }
-  const variantId = configuredVariant(
-    await jsonResponse(page, `/api/v1/contracts/${encodeURIComponent(contractId)}`),
-  );
-
   const pairing = page.getByRole("region", { name: "Shopify pairing", exact: true });
   await pairing.scrollIntoViewIfNeeded();
   await expect(pairing.getByRole("button", { name: "Create pairing", exact: true })).toBeEnabled();
   await hold(page, 2_000);
+  const createdPairingResponse = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return (
+      response.request().method() === "POST" && url.pathname === "/api/v1/shopify/pairings"
+    );
+  });
   await pairing.getByRole("button", { name: "Create pairing", exact: true }).click();
+  const createdPairing = await createdPairingResponse;
+  expect(createdPairing.ok(), "The server refused to create the Shopify pairing.").toBeTruthy();
+  const createdDocument = asRecord(await createdPairing.json(), "created Shopify pairing");
+  const contractId = createdDocument["contract_id"];
+  if (typeof contractId !== "string" || contractId === "") {
+    throw new Error("The pairing did not name its server-expanded contract.");
+  }
+  const variantId = configuredVariant(
+    await jsonResponse(page, `/api/v1/contracts/${encodeURIComponent(contractId)}`),
+  );
   await expect(pairing.locator(".pairing__live")).toHaveAttribute("data-status", "created");
   await expect(pairing).toContainText("#…");
   await hold(page, 3_200);
