@@ -1,5 +1,12 @@
 # Tier 1 gate — operator checklist (spec 006 / BUILD_ORDER M5)
 
+> **Scope note (2026-09-04).** This checklist is the Tier 1 gate record and its
+> attestations below are historical — do not re-date them. The project has since
+> implemented and tested the Tier 2 and Tier 3 feature set; where *their*
+> verification lives is summarized in [Beyond Tier 1](#beyond-tier-1--where-tier-2-and-tier-3-are-verified)
+> at the end, and the living release procedure is
+> [`docs/release-checklist.md`](release-checklist.md).
+
 Two of M5's exit criteria are about a **real browser**, and one Tier 1
 acceptance criterion is about a **deployed URL**. None can be discharged by
 `pytest` or `vitest`, and none should be faked by a test that pretends
@@ -125,6 +132,49 @@ step below can still be done by hand" in a WebMCP-less fresh Chromium context,
 evidence in docs/release-checklist.md criterion 3)
 Date: 2026-09-03 (UTC)  Build: Playwright Chromium (1.62.1) / Chrome stable,
 #enable-webmcp-testing Enabled
+
+## Beyond Tier 1 — where Tier 2 and Tier 3 are verified
+
+Tier 2 and Tier 3 are implemented and tested; this section exists so a reader
+of the Tier 1 gate does not conclude the project stopped here. Nothing below
+adds a hand-check to this file — each item names where its verification
+actually lives.
+
+**Tier 2 — external evaluator import and the dual-layer benchmark.** Fully
+automated, no operator attestation: `tests/integration/test_008_exit_gate.py`
+holds AC-16 (import, normalization, explicit binding, correlation, dual-layer
+reporting from the checked-in redacted fixture), and
+`tests/integration/test_010_exit_gate.py` holds the live-pipeline criteria that
+CI can prove without a credential — `live_model_run` labelling, exported
+parameters recorded without invention, the credential boundary, and the matrix
+counts. Both run inside `uv run pytest -q`.
+
+**Tier 3 — three optional modules, each configuration-gated and off by
+default** (their current state is reported at `GET /api/v1/workspace` under
+`modules`):
+
+- **External audit (Storefront Witness).** Implemented and tested; the
+  operator journey is the workspace's Audit → External surface view, and the
+  guardrails (single asserted origin, no harness request to the audited site,
+  sealed re-verified reports) are asserted in the architecture and integration
+  lanes.
+- **Live model benchmark (AC-17).** The pipeline is implemented end to end and
+  CI proves it from the recorded fixture; the **live-credential run itself is
+  still an open operator gate** (`specs/010-live-model-benchmark/tasks.md`
+  T11). The run procedure is
+  `integrations/google_evals/scenarios/README.md`; until it is executed,
+  nothing may claim a live model run occurred —
+  `test_gate_6_ac_17_needs_a_live_run_this_suite_cannot_perform` records the
+  gap deliberately.
+- **Shopify development-store integration (toward AC-18).** Implemented and
+  exercised end to end against the authorized development store: pairing,
+  theme-bridge same-session `/cart.js` observation, native Shopify WebMCP
+  tools on the agent side, and a status panel projected from
+  integrity-checked evidence (`tests/shopify/`,
+  `tests/integration/test_self_target.py`). The formal 011 close-out (ticking
+  its tasks and retiring `test_gate_6_shopify_work_has_not_started`) follows
+  AC-17 per BUILD_ORDER's ordering and is recorded in
+  `specs/011-shopify-cart-proof/` when it happens.
 
 ## If something here fails
 
