@@ -232,12 +232,12 @@ test.describe("Devpost source footage", () => {
     await hold(workspace.page, 2_200);
 
     await manifest.getByLabel("Canonical intent").fill(CANONICAL_INTENT);
-    await manifest.getByLabel("Reviewer").fill("Ranee Bajaj");
+    await manifest.getByLabel("Reviewer").fill("Rohit Bajaj");
     await manifest.getByLabel("Variant 1", { exact: true }).fill(BENCHMARK_VARIANT);
     await hold(workspace.page, 1_800);
     await manifest.getByRole("button", { name: "Freeze variant set" }).click();
     await expect(manifest).toContainText("Variant set: Frozen");
-    await expect(manifest).toContainText("Ranee Bajaj");
+    await expect(manifest).toContainText("Rohit Bajaj");
     await expect(manifest).toContainText("Manifest identity");
     await hold(workspace.page, 3_600);
 
