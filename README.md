@@ -1,10 +1,25 @@
+<p align="center">
+  <img src="docs/assets/actionwitness-mark.svg" width="88" alt="ActionWitness mark">
+</p>
+
 # ActionWitness
 
 > The agent says it did the thing. **ActionWitness says what actually happened.**
 
+<p align="center">
+  <a href="https://github.com/ichiorca/actionwitness/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/ichiorca/actionwitness/actions/workflows/ci.yml/badge.svg"></a>
+  <img alt="Python 3.12" src="https://img.shields.io/badge/Python-3.12-3652c4">
+  <img alt="TypeScript strict" src="https://img.shields.io/badge/TypeScript-strict-3652c4">
+  <a href="LICENSE"><img alt="License Apache 2.0" src="https://img.shields.io/badge/license-Apache--2.0-1d7a43"></a>
+</p>
+
 An independent witness for WebMCP-enabled applications: it observes authoritative
 business state around an agent's journey, holds that state to an explicit contract,
 and turns every silent failure into a portable regression test.
+
+**[Try it live](https://actionwitness.onrender.com)** ·
+**[Inspect the evidence](docs/SUBMISSION_EVIDENCE.md)** ·
+**[Explore the architecture](docs/ARCHITECTURE.md)**
 
 Built for the [WebMCP Challenge](https://webmcp.devpost.com/).
 
@@ -123,8 +138,20 @@ That test arms the §10.1 cart contract against the Buggy Store in `pre_fix` and
 asserts three things at once: the tool reported `status: success`, the
 independently observed cart total did not move, and the run classified as
 `false_success_or_state_mismatch` with execution and trajectory layers
-*passing*. Flip to `post_fix` and the same journey passes. To see it in a
-browser instead:
+*passing*. Flip to `post_fix` and the same journey passes.
+
+**The same proof, live:** open the [workspace](https://actionwitness.onrender.com)
+and the [Buggy Store](https://actionwitness.onrender.com/demo) side by side; in
+**Setup & tools** choose `pre_fix` with `discount_reported_but_not_applied`,
+select the `one-mug-save20-no-checkout` contract, arm it, and in a
+WebMCP-capable browser ask the agent:
+
+> Search for a mug, add one mug, apply `SAVE20`, verify the outcome, show the
+> failed finding, and create a regression eval. Do not proceed to checkout.
+
+Every tool call reports success; the storefront total stays `$25.00` instead of
+`$20.00`; ActionWitness reads the cart through its separate observation path
+and fails the run. To run it from source instead:
 
 ```bash
 uv run buggy-store &                                        # target on :8001
@@ -535,6 +562,20 @@ outside this repository at the operator's direction**, so the `ADR-000N`
 references here and throughout the source name a decision rather than a file you
 can open from a clone.
 
+## Documentation
+
+| Document | Purpose |
+|---|---|
+| [Submission evidence](docs/SUBMISSION_EVIDENCE.md) | Claim-to-proof index and reproducible commands |
+| [Architecture](docs/ARCHITECTURE.md) | Diagram-first system, evidence, consent, and deployment views |
+| [Development](docs/DEVELOPMENT.md) | Setup, browser support, commands, and repository boundaries |
+| [Deployment](docs/DEPLOYMENT.md) | Docker, Render, health checks, and recovery |
+| [Security policy](SECURITY.md) | Threat boundary, supported scope, and disclosure process |
+| [Roadmap](ROADMAP.md) | Shipped scope and explicitly deferred work |
+| [Third-party notices](THIRD_PARTY_NOTICES.md) | Dependency attribution and licenses |
+
+Token-lean subsystem maps live under [`docs/CODEMAPS/`](docs/CODEMAPS/).
+
 ## Provenance
 
 All WebMCP-facing work in this repository was written during the challenge's
@@ -544,6 +585,12 @@ dependencies below. PyPI distributions are `actionwitness-core`,
 `actionwitness-service`, and `actionwitness-integration-*`; the CLI is
 `actionwitness`. Unrelated to the similarly-named `mcpact` project, which
 occupies a different layer.
+
+**Built with AI coding agents.** The human operator defined the product thesis,
+contracts, safety boundaries, architecture, and release decisions; Codex and
+Claude Code were used as implementation, testing, review, and documentation
+partners. The shipped product does not use an LLM as the authoritative
+business-state judge.
 
 ## Attribution
 
