@@ -27,12 +27,12 @@ describe("the Shopify live update_cart schema", () => {
       },
     };
 
-    expect(updateArguments(inputSchema, "1234567890")).toEqual({
+    expect(updateArguments(inputSchema, "1234567890", 2)).toEqual({
       cart: {
         line_items: [
           {
             item: { id: "gid://shopify/ProductVariant/1234567890" },
-            quantity: 1,
+            quantity: 2,
           },
         ],
       },

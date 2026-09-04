@@ -37,7 +37,11 @@ function itemIdentifier(rawVariantId: string, field: string): string | number {
 export function updateArguments(
   inputSchema: unknown,
   rawVariantId: string,
+  quantity = 1,
 ): Record<string, unknown> {
+  if (!Number.isSafeInteger(quantity) || quantity < 1) {
+    throw new Error("Shopify update_cart quantity must be a positive safe integer.");
+  }
   for (const alternative of schemaAlternatives(inputSchema)) {
     const properties = asRecord(alternative["properties"] ?? {}, "update_cart.properties");
     const cartSchema = properties["cart"];
@@ -65,7 +69,7 @@ export function updateArguments(
                 line_items: [
                   {
                     item: { id: itemIdentifier(rawVariantId, "id") },
-                    quantity: 1,
+                    quantity,
                   },
                 ],
               },
@@ -99,7 +103,7 @@ export function updateArguments(
         [collectionName]: [
           {
             [identifier]: itemIdentifier(rawVariantId, identifier),
-            quantity: 1,
+            quantity,
           },
         ],
       };

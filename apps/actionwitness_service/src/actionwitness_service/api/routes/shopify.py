@@ -380,6 +380,10 @@ async def verify_pairing(
             # transaction, so a bridge reading this and an operator reading the
             # run cannot be told different things.
             "verdict": str(verified.pairing.status.value),
+            # Compatibility for the already-installed 1.0.0 theme asset, which
+            # consumed the lifecycle field name used by the earlier bridge
+            # responses. `verdict` remains canonical; both carry one value.
+            "status": str(verified.pairing.status.value),
             "content_hash": verified.content_hash,
             "replayed": verified.replayed,
         },

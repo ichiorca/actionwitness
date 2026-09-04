@@ -784,7 +784,10 @@
         );
         var verdictRecord = record(verdict);
         runId = firstString(verdictRecord, ["run_id"]) || runId;
-        var settled = firstString(verdictRecord, ["status"]) || "error";
+        var settled = firstString(verdictRecord, ["verdict"]);
+        if (settled !== "passed" && settled !== "failed" && settled !== "error") {
+          throw new Error("The harness returned an invalid verification verdict.");
+        }
         moveTo(settled, "");
         return toolResult(
           "Verified. Result: " + settled + (runId === null ? "" : ". Run " + runId) + ".",

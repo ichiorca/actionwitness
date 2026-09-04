@@ -141,7 +141,7 @@ function storefrontFetch(options: { readonly carts?: readonly string[] } = {}): 
       return response({ url, body: JSON.stringify({ status: "armed", run_id: "run_1" }) });
     }
     if (url.endsWith("/verify")) {
-      return response({ url, body: JSON.stringify({ status: "passed", run_id: "run_1" }) });
+      return response({ url, body: JSON.stringify({ verdict: "passed", run_id: "run_1" }) });
     }
     throw new Error(`unexpected request to ${url}`);
   };
@@ -538,6 +538,9 @@ describe("the pairing lifecycle (§16.5, FR-115)", () => {
     // unregistration, so it cannot be forgotten separately from the register.
     expect(bridge.view().state).toBe("passed");
     expect(result.isError).toBeUndefined();
+    expect(result.content).toEqual([
+      { type: "text", text: "Verified. Result: passed. Run run_1." },
+    ]);
     expect(registered[0]?.aborted()).toBe(true);
     expect(bridge.isToolRegistered()).toBe(false);
   });

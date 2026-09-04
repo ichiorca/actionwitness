@@ -81,6 +81,7 @@ async def test_the_bridge_carries_one_trial_from_pairing_to_a_verdict(trial: Tri
         "pairing_id": pairing_id,
         "run_id": run_id,
         "verdict": "passed",
+        "status": "passed",
         "content_hash": verified.json()["content_hash"],
         "replayed": False,
     }

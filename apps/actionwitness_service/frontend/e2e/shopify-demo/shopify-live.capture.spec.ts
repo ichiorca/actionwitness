@@ -101,6 +101,44 @@ function toolText(result: ToolResult): string {
     .map((block) => block.text)
     .join("\n");
 }
+
+async function redactedReportSummary(page: Page, verificationText: string): Promise<string> {
+  const runId = verificationText.match(/\bRun (run_[A-Za-z0-9]+)\./)?.[1];
+  if (runId === undefined) {
+    return "no run id was returned";
+  }
+  try {
+    const response = await page.request.get(
+      `/api/v1/runs/${encodeURIComponent(runId)}/report`,
+    );
+    if (!response.ok()) {
+      return `report request returned ${String(response.status())}`;
+    }
+    const envelope = asRecord(await response.json(), "report response");
+    const report = asRecord(envelope["report"], "report response.report");
+    const primaryValue = report["primary_failure"];
+    const primary =
+      primaryValue === null || primaryValue === undefined
+        ? null
+        : asRecord(primaryValue, "report.primary_failure");
+    return JSON.stringify({
+      overall_result: report["overall_result"],
+      layers: report["layers"],
+      primary_failure:
+        primary === null
+          ? null
+          : {
+              check_id: primary["check_id"],
+              status: primary["status"],
+              classification: primary["classification"],
+              path: primary["path"],
+              evidence: primary["evidence"],
+            },
+    });
+  } catch (error: unknown) {
+    return `report summary unavailable: ${error instanceof Error ? error.message : "unknown error"}`;
+  }
+}
 function configuredVariant(contract: Record<string, unknown>): string {
   const document = asRecord(contract["document"], "contract.document");
   const assertions = asArray(document["assertions"], "contract.document.assertions");
@@ -125,6 +163,33 @@ function configuredVariant(contract: Record<string, unknown>): string {
   throw new Error(
     "The pairing contract did not expose its server-configured variant and currency.",
   );
+}
+
+async function redactedPairingSummary(page: Page, pairingId: string): Promise<string> {
+  try {
+    const response = await page.request.get(
+      `/api/v1/shopify/pairings/${encodeURIComponent(pairingId)}`,
+    );
+    if (!response.ok()) {
+      return `pairing request returned ${String(response.status())}`;
+    }
+    const envelope = asRecord(await response.json(), "pairing response");
+    const pairing = asRecord(envelope["pairing"], "pairing response.pairing");
+    const runId = pairing["run_id"];
+    const report =
+      typeof runId === "string" && runId !== ""
+        ? await redactedReportSummary(page, `Run ${runId}.`)
+        : "no run id is recorded";
+    return `${JSON.stringify({
+      status: pairing["status"],
+      overall_result: pairing["overall_result"],
+      observation_count: Array.isArray(pairing["observations"])
+        ? pairing["observations"].length
+        : "unknown",
+    })}; report=${report}`;
+  } catch (error: unknown) {
+    return `pairing summary unavailable: ${error instanceof Error ? error.message : "unknown error"}`;
+  }
 }
 
 test("04 — real Shopify same-session cart proof", async ({ context, page }) => {
@@ -161,6 +226,10 @@ test("04 — real Shopify same-session cart proof", async ({ context, page }) =>
   const createdPairing = await createdPairingResponse;
   expect(createdPairing.ok(), "The server refused to create the Shopify pairing.").toBeTruthy();
   const createdDocument = asRecord(await createdPairing.json(), "created Shopify pairing");
+  const pairingId = createdDocument["pairing_id"];
+  if (typeof pairingId !== "string" || pairingId === "") {
+    throw new Error("The pairing response did not name its pairing.");
+  }
   const contractId = createdDocument["contract_id"];
   if (typeof contractId !== "string" || contractId === "") {
     throw new Error("The pairing did not name its server-expanded contract.");
@@ -215,14 +284,22 @@ test("04 — real Shopify same-session cart proof", async ({ context, page }) =>
   );
   await hold(storefront, 3_200);
 
-  const mutation = updateArguments(updateTool.inputSchema, variantId);
+  // The contract requires exactly one item. A real native tool call that
+  // successfully sets two gives the demo its consequential counterexample:
+  // transport success is not business-outcome success.
+  const mutation = updateArguments(updateTool.inputSchema, variantId, 2);
   await invokeTool(storefront, UPDATE_CART, mutation);
   await hold(storefront, 3_200);
   const verification = await invokeTool(storefront, VERIFY_SHOPIFY_OUTCOME, {}, true);
-  expect(
-    toolText(verification),
-    `The bridge must complete a real failed verdict, not stop with an observation or transport error. Network: ${verificationNetwork.join("; ")}`,
-  ).toMatch(/^Verified\. Result: failed\./);
+  const verificationText = toolText(verification);
+  if (!/^Verified\. Result: failed\./.test(verificationText)) {
+    throw new Error(
+      `The bridge must complete a real failed verdict. Received: ${verificationText}. ` +
+        `Network: ${verificationNetwork.join("; ")}. ` +
+        `Pairing: ${await redactedPairingSummary(page, pairingId)}. ` +
+        `Report: ${await redactedReportSummary(page, verificationText)}`,
+    );
+  }
   await expect(storefront.getByRole("status", { name: "ActionWitness pairing" })).toContainText(
     "State: failed",
     { timeout: 45_000 },
