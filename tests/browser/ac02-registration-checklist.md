@@ -57,7 +57,7 @@ Do not re-test these by hand.
    - Flag state: `chrome://flags/#enable-webmcp-testing`.
 2. Start the service and the workspace:
 
-       uv run actionwitness serve
+       uv run uvicorn actionwitness_service.api.app:create_app --factory --port 8000
        cd apps/actionwitness_service/frontend && npm install && npm run dev
 
 3. Open **`/`** (the workspace, not `/spike.html`).

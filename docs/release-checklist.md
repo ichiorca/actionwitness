@@ -85,7 +85,8 @@ will be invisible until it matters.
       final video recording through September 21 (spec §29.1). A cold start
       during judging is a failed demo. `render.yaml` commits to the **free**
       tier by operator decision, so on that tier this means confirming the
-      external `/healthz` pinger is running at a five-minute interval — Render
+      `/healthz` pinger (`.github/workflows/keep-warm.yml`, or an external
+      service) is actually running at a five-minute interval — Render
       spins down after fifteen idle minutes. Tick this by naming which of the
       two holds:
       - [ ] Paid / verified no-sleep tier, **or**

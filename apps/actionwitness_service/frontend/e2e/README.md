@@ -8,8 +8,17 @@ SQLite file each.
 ```bash
 npm run test:e2e          # build the composed tree, start both services, run
 npm run test:e2e:ui       # the same, in Playwright's UI mode
-npm run typecheck:e2e     # strict tsc over e2e/ and playwright.config.ts
+npm run typecheck:e2e     # strict tsc over e2e/ and every playwright*.config.ts
 ```
+
+`e2e/specs/` is the lane this README describes and the only directory
+`npm run test:e2e` runs (`playwright.config.ts`). Two non-gating capture lanes
+live beside it, each with its own config: `demo-captures/`
+(`npm run capture:demo`, `playwright.demo.config.ts`) records paced demo footage
+against the same composed deployment, and `shopify-demo/`
+(`npm run capture:shopify-demo`, `playwright.shopify-demo.config.ts`) records
+the live Shopify development-store proof against a deployed origin, starting no
+local servers. Neither is part of any gate below.
 
 ## Where this lane sits
 
@@ -138,10 +147,10 @@ found it.
    now remembers the case it created, and a caller's selection wins.
 7. **`EvalPanel` was exported, unit-tested, and never rendered.** The regression
    surface had no human path at all. It is now wired to §15.4 through
-   `api/evals.ts`. **Still open:** `BenchmarkPanel` is likewise unrendered, and
-   there is no panel for the §15.9 audit routes — both need import/creation
-   flows that do not exist yet (spec 008's and 015's UI), which is a scope
-   decision rather than a defect.
+   `api/evals.ts`. `BenchmarkPanel` was likewise unrendered, and there was no
+   panel for the §15.9 audit routes — both since closed: `BenchmarkSection`
+   supplies the suite-creation and import flows around `BenchmarkPanel`, and
+   `AuditSection` owns the audit view.
 8. **`GET /` was inside the request bucket**, so a burst of ordinary navigations
    answered with the JSON envelope rendered as the page body. It is a static
    `index.html`, which FR-009 exempts; it was metered only because

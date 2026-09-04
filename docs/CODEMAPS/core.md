@@ -27,7 +27,7 @@ everything else is written against).
 
 | File | Lines | Owns | Watch for |
 |---|---|---|---|
-| `ports/__init__.py` | 207 | `TargetAdapter`, `ManagedTargetAdapter`, `ExternalTargetAdapter`, `ScenarioReportingAdapter`, `ObservationProvider`, repository protocols | `ObservationProvider` is deliberately **unrelated** to the execution protocols, so no adapter can satisfy an observation by handing back what a tool said. Repositories have no `update` method — append-only is a shape, not a rule. |
+| `ports/__init__.py` | 272 | `TargetAdapter`, `ManagedTargetAdapter`, `ExternalTargetAdapter`, `ScenarioReportingAdapter`, `ObservationProvider`, repository protocols | `ObservationProvider` is deliberately **unrelated** to the execution protocols, so no adapter can satisfy an observation by handing back what a tool said. Repositories have no `update` method — append-only is a shape, not a rule. |
 | `ports/models.py` | 323 | `ToolExecutionResult`, `Observation`, `TargetToolSpec`, `TargetDescriptor` | The two-channel split lives here. A self-report and an observation are different types on purpose; making one assignable to the other would dissolve the product. |
 | `ports/enums.py` | 124 | `RetrySemantics`, `SideEffectClass` | |
 | `ports/schemas.py` | 185 | Tool input-schema validation | |
@@ -56,7 +56,7 @@ everything else is written against).
 | `evidence/surface.py` | 364 | Tool-surface capture, hashing, and diffing (`getTools()` evidence) | Where an undeclared tool-surface change becomes `tool_surface_mutation`. |
 | `evidence/effects.py` | 241 | Effect/consequence modelling | |
 | `evidence/models.py` · `evidence/enums.py` | 191 · 144 | Evidence records | Append-only, hash-linked, verified before trusted (constitution §4). |
-| `reports/models.py` | 588 | Outcome-report composition | |
+| `reports/models.py` | 660 | Outcome-report composition | |
 | `reports/comparison.py` | 234 | Matched pre-fix/post-fix comparison | |
 | `reports/enums.py` | 142 | Report vocabulary | |
 

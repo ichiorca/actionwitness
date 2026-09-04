@@ -41,7 +41,7 @@ implementation may differ from the double in exactly the ways that matter.
 2. Start the harness:
 
        cd apps/actionwitness_service/frontend
-       npm install          # NOT npm ci — there is no lockfile until the pin lands
+       npm install          # npm ci also works — the post-pin lockfile is committed
        npm run dev
 
 3. Open **`/spike.html`** (not `/`). The harness mounts under `React.StrictMode`,
@@ -101,7 +101,7 @@ ADR-0002** — an awkward API is itself evidence for the decision.
       **if either is missing, `stable_tool_surface` is visibly disabled rather
       than reported as passing** (spec §29.3, §33 q10)
 - [ ] Selected hook package **and its exact tested version**
-- [ ] Tested `webmcp-types` version (currently resolves to 0.1.5 from `"*"`)
+- [ ] Tested `webmcp-types` version (pinned at 0.1.5 in `package.json`)
 - [ ] Any `compat.d.ts` augmentation the tested build needed
 
 ---
@@ -124,5 +124,6 @@ ADR-0002** — an awkward API is itself evidence for the decision.
 - [ ] Commit `package-lock.json`
 - [ ] Fill the README §29.3 pinning table
 - [ ] Replace the guard in
-      `tests/architecture/test_frontend_command_surface.py` that currently
-      asserts *no* hook is pinned with one asserting *exactly one* is
+      `tests/architecture/test_frontend_command_surface.py` that asserted *no*
+      hook was pinned with one asserting *exactly one* is (now
+      `test_exactly_one_webmcp_hook_is_pinned_per_adr_0002`)

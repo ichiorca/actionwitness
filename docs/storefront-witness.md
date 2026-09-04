@@ -75,12 +75,14 @@ Stated plainly, because the temptation runs the other way.
 - **A clean audit is not a guarantee.** It is evidence about the journey that was
   tried. The report says so in its own voice rather than in a footnote, because a
   merchant who reads a pass as a warranty stops looking.
-- **No one-click audit yet.** The server runs the pass end to end and seals the
-  report; the browser half that would enumerate the tools, exercise the pack, and
-  read the cart in the operator's own session is not built, so today this is driven
-  by an API client rather than from the app. See the status note at the end of the
-  next section — a merchant cannot use this unaided, and saying otherwise would be
-  the same kind of confident-and-wrong the feature exists to catch.
+- **No one-click audit.** The workspace now walks the pass — assert the origin,
+  choose the pack, submit the transcript, read the sealed report — but the
+  collection itself stays in the operator's hands: the app generates a collector
+  script, and the operator runs it in the storefront's own console, in their own
+  session, filling in the tool arguments only they can know. See the status note
+  at the end of the next section — the console step still asks for a technical
+  operator, and saying otherwise would be the same kind of confident-and-wrong
+  the feature exists to catch.
 
 ## What an audit actually does
 
@@ -96,8 +98,8 @@ Each step below is a call a client makes, in order, against `/api/v1/audits`.
    supplied by a human, recorded against the workspace, checked against a
    server-controlled allowlist that no request body can widen. Nothing proceeds
    without it.
-3. **The published tools are enumerated** through the browser adapter, as an
-   external, untrusted surface.
+3. **The published tools are enumerated** in the operator's own browser, on the
+   storefront itself, as an external, untrusted surface.
 4. **The pack is selected explicitly.** The submission names it, and the server
    re-checks that the enumerated surface actually satisfies it — a cart pack sent
    against a surface with no cart tool is refused as a selection error rather than
@@ -142,16 +144,19 @@ Each step below is a call a client makes, in order, against `/api/v1/audits`.
    the next audit. A cancelled audit is not resumed — it is re-authorized, so
    nothing can quietly continue against an origin whose assertion was withdrawn.
 
-**Status: the server path is complete; the browser client is not built.** Every
-step above is reachable over HTTP today and covered end to end by
-`tests/integration/test_external_audit_pass.py`, which drives the API and imports
-no application module. What does not exist is the operator-facing half: there is no
-audit UI in the workspace, and nothing in the frontend calls `/audits`. The
-enumeration, the tool exercise, and the `cart.js` read in step 3 through 5 are
-described as the browser's work because that is where they must happen — but today
-a person doing them is doing them by hand and posting the transcript with an API
-client. That is a missing feature, stated here rather than left for a reader to
-infer from a screenshot that does not exist.
+**Status: the server path is complete, and the workspace now carries the
+operator-facing half.** Every step above is reachable over HTTP and covered end to
+end by `tests/integration/test_external_audit_pass.py`, which drives the API and
+imports no application module. The workspace's audit view asserts the origin,
+offers the packs, submits the transcript, and reads the sealed report back. The
+enumeration, the tool exercise, and the `cart.js` read in steps 3 through 5 still
+happen on the storefront itself: the app generates a collector script from the
+chosen pack — with the never-invoked tools baked in rather than left to whoever
+pastes it — and the operator runs it in the storefront's console in their own
+session, supplying the tool arguments only they can know. A page can enumerate
+only its own tools and read only its own cart, so the pasted snippet is not a
+missing convenience; it is the trust boundary, stated here rather than left for a
+reader to infer from a screenshot.
 
 ## The guardrails, and why they are shaped this way
 

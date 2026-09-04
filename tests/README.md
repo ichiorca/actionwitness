@@ -39,11 +39,3 @@ the product code so no later path has an excuse to call `datetime.now()` or
 | `fixture_file` | Loads a JSON fixture by path relative to `tests/fixtures/` |
 | `build_settings` | `ServiceSettings` from an explicit environment mapping, never `os.environ` |
 | `workspace_dir` | An isolated per-test directory; the workspace is the isolation boundary |
-
-## Known gap
-
-The `evals/` lane has no test yet. The cavesson L0 policy hook denies every write
-whose path contains an `evals` segment, which over-matches this lane and
-`actionwitness_core/evals/` in addition to the root-level grading corpus it is
-meant to protect. The exemption is recorded and bounded in
-`tests/architecture/test_test_lanes.py`, which fails if it ever grows.

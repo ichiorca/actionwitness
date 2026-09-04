@@ -91,17 +91,17 @@ flowchart LR
         S2["Recorded runs"]
         S3["Independent verification"]
         S4["Evidence, replay and benchmarks"]
-        S5["Storefront Witness server path"]
+        S5["Storefront Witness<br/>server path + workspace audit view"]
     end
 
     subgraph Partial["Deliberately partial"]
-        P1["Storefront Witness browser UI<br/>not built"]
+        P1["External audit persists only the<br/>bounded authorized → completed path"]
         P2["Real-WebMCP coverage<br/>manual checklist (tests/browser);<br/>the Playwright lane automates the seam<br/>with a registry double, not release-gating"]
     end
 
-    subgraph Disabled["Not claimed as capability"]
-        D1["Shopify dev-store adapter"]
-        D2["Shopify route and bridge"]
+    subgraph Disabled["Configuration-gated, off by default"]
+        D1["Shopify dev-store adapter<br/>(observe-only, cart-only)"]
+        D2["Shopify pairing routes and theme bridge"]
     end
 
     classDef live fill:#dcfce7,stroke:#15803d,color:#052e16;
@@ -115,8 +115,9 @@ flowchart LR
 The browser API is used deliberately, not pervasively. The product complements
 call-selection evaluators: they assess whether an invocation looked right;
 ActionWitness assesses whether independently observed state proves the outcome.
-Configuration is never treated as capability: Shopify remains disabled until a
-real adapter is registered and its route is mounted.
+Configuration is never treated as capability: the Shopify adapter and pairing
+routes are implemented and tested, but they mount only when the exact
+server-side store configuration is present, and the module ships off.
 
 ---
 
@@ -536,7 +537,10 @@ flowchart TB
 
 The server never touches the audited site; architecture tests forbid audit
 modules from acquiring a network client. The server path is complete and tested,
-while the operator-facing browser client is not yet built.
+and the workspace's **Audit → External surface** view
+(`components/AuditSection.tsx`) walks the operator journey: assert one
+authorized origin, choose a pack explicitly, run the generated collector in the
+operator's own browser, paste the transcript back, and read the report.
 
 ---
 
@@ -686,8 +690,9 @@ stateDiagram-v2
 
 The nine statuses are the specification's closed vocabulary. The current server
 persists the bounded API path directly from `authorized` to `completed` or
-`cancelled`; the browser client that would surface every intermediate phase is
-not built. A partial unique index permits one nonterminal audit per workspace.
+`cancelled`; the intermediate phases remain lifecycle vocabulary that the
+workspace's audit view steps through client-side rather than persisted states.
+A partial unique index permits one nonterminal audit per workspace.
 
 ### Regression eval and benchmark suite
 
@@ -1022,8 +1027,8 @@ flowchart TB
     SIZE --> S4["webmcp/adapter.ts"]
 
     ROOT --> PRODUCT["Product surface"]
-    PRODUCT --> P1["Storefront Witness UI not built"]
-    PRODUCT --> P2["Shopify dev-store target not built"]
+    PRODUCT --> P1["Audit intermediate phases<br/>not persisted server-side"]
+    PRODUCT --> P2["Shopify dev-store target is observe-only,<br/>cart-only, and ships off by default"]
 
     ROOT --> JUDGE["Authority"]
     JUDGE --> J1["An LLM is never the business-state judge"]

@@ -59,9 +59,11 @@ and is not a scaling toggle.
 ## Render demo
 
 The public demo is <https://actionwitness.onrender.com>. The free plan can sleep
-after inactivity, so warm `/healthz` before a live presentation and keep the
-recorded video available. A production deployment that must never cold-start needs
-an appropriate paid or reserved runtime.
+after fifteen idle minutes, and the cold start that follows takes roughly thirty
+seconds. `.github/workflows/keep-warm.yml` pings `/healthz` every five minutes as
+a mitigation, not a guarantee, so still warm `/healthz` before a live presentation
+and keep the recorded video available. A production deployment that must never
+cold-start needs an appropriate paid or reserved runtime.
 
 Demo data is ephemeral. A redeploy starts from deterministic seeded state.
 

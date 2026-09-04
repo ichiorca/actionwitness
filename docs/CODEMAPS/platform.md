@@ -8,7 +8,7 @@ is felt by every route.
 | File | Lines | Owns | Watch for |
 |---|---|---|---|
 | `database.py` | 219 | `Database`, `UnitOfWork`, `transaction()`, `reading()` | `transaction()` issues `BEGIN IMMEDIATE` — SQLite's single writer for the **whole database**, not one workspace. Nothing may be held across a wait: no file I/O, no HTTP, no human confirmation. `reading()` stays off the write lock so polling cannot starve a mutation. Every connection re-applies the four ADR-0003 PRAGMAs (WAL, foreign keys, busy timeout, `synchronous = FULL`) — a test asserts all four. |
-| `migrations.py` | 751 | The ordered migration runner and every schema version | Run once in the lifespan, before the first request. **Startup-time table creation is forbidden**; so are placeholder migrations. A destructive migration needs operator approval with a rollback plan. |
+| `migrations.py` | 946 | The ordered migration runner and every schema version | Run once in the lifespan, before the first request. **Startup-time table creation is forbidden**; so are placeholder migrations. A destructive migration needs operator approval with a rollback plan. |
 | `locks.py` | 137 | `WorkspaceLocks` — per-workspace admission control | Reference-counted, so it never accumulates one entry per workspace ever seen, and two different workspaces never block each other. Timeout matches the database busy timeout by design. |
 | `repositories.py` | 431 | Row mapping for events, snapshots, findings, contracts, artifacts | `EventRepository.append` allocates `MAX(sequence_number)+1` inside the transaction, so a retry cannot become a duplicate event. |
 
@@ -16,7 +16,7 @@ is felt by every route.
 (which spawns a thread) and re-applies the PRAGMAs. Known, deliberate, and
 deferred pending a measurement — see ARCHITECTURE §14 before "optimising" it.
 
-## Configuration — `config.py` (554 lines)
+## Configuration — `config.py` (581 lines)
 
 The only reader of the environment besides `app.py`'s call into it.
 
@@ -25,9 +25,10 @@ The only reader of the environment besides `app.py`'s call into it.
 - **Fail-closed**: an unparseable value disables its module with an actionable
   reason; it never falls back to a permissive default. `HARNESS_PUBLIC_ORIGIN`
   drops to `None` when invalid, which `/healthz` reports.
-- **A disabled module exposes no settings object.** `shopify` parses its four
-  variables and still reports `disabled`, because no adapter is registered and no
-  route is mounted (`_SHOPIFY_ADAPTER_SHIPPED`). Configuration is not capability.
+- **A disabled module exposes no settings object.** `shopify` now reports
+  `enabled` when its four variables parse: `_SHOPIFY_ADAPTER_SHIPPED` is `True`,
+  the registry registers the adapter, and the routes mount. Flip the flag back if
+  the registration is ever removed — configuration is not capability.
 - Store origins, variants, currencies and allowlists are **server-controlled**;
   no request body widens them.
 

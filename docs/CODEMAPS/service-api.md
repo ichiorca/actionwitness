@@ -12,7 +12,7 @@ fields, then hand off to `application/` — they do not orchestrate.
 
 | File | Lines | Owns | Watch for |
 |---|---|---|---|
-| `app.py` | 431 | `create_app`, lifespan, `/healthz`, exception handlers, router mounting | The one place the environment is read. Migrations run in the lifespan before the first request — never lazily. `/healthz` probes the database **live** (a cached startup value answers `ok` for a database that has since vanished) and returns 503 when the database is unreadable or a production deployment has no valid public origin. |
+| `app.py` | 606 | `create_app`, lifespan, `/healthz`, exception handlers, router mounting | The one place the environment is read. Migrations run in the lifespan before the first request — never lazily. `/healthz` probes the database **live** (a cached startup value answers `ok` for a database that has since vanished) and returns 503 when the database is unreadable or a production deployment has no valid public origin. |
 | `errors.py` | 484 | `ApiError`, closed `ApiErrorCode` registry, `error_from_core` | Each code's HTTP status and **retryability** live in the registry, so a call site cannot widen retryability. A 500 never carries a traceback to the client. Adding a code means adding a registry row. |
 | `dependencies.py` | 104 | `WorkspaceDependency`, `DatabaseDependency`, `LocksDependency`, `ArtifactsDependency`, `SettingsDependency`, `RegistryDependency` | `DatabaseDependency` exposes raw `fetch_one`/`execute`. Resist it: SQL belongs in `application/`, and no route currently contains any. |
 | `composition.py` | 206 | Static mounts and the `/demo` proxy (§29.1) | The proxy reaches the store over the same lifespan-owned client the adapter uses, so tests exercise the composed path. |

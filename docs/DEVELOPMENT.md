@@ -104,6 +104,7 @@ packages/actionwitness_core       deterministic, synchronous, target-neutral cor
 apps/actionwitness_service        FastAPI application, persistence, orchestration, UI
 integrations/buggy_store          target adapter and independent observer
 integrations/google_evals         imported webmcp-evals report adapter
+integrations/self_target          built-in self target driven through the public API
 integrations/shopify              optional development-store and audit integration
 examples/buggy_store              standalone failure-injectable target
 tests                             architecture, unit, integration, adapter, eval lanes

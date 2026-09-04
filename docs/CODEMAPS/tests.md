@@ -11,16 +11,18 @@ asserted with `pytest.warns` or ignored with a stated reason.
 |---|---|---|---|
 | `tests/unit` | 35 | `unit` | Engine operators, policies, hashing, canonicalization, classification. Pure, fast. `test_live_variant_client.py` is here rather than in `integration` because it drives the model client over an `httpx.MockTransport` — no app, no database, and no route to Google. `test_transform_report.py` holds the AC-17 transform script to its own no-guessing contract. |
 | `tests/integration` | 86 | `integration` | Run lifecycle, confirmation, replay — **through the real app** with a temp database. The largest lane and where journeys belong. |
-| `tests/architecture` | 16 | `architecture` | Forbidden-import, layering, and repository-reference gates. See below. |
-| `tests/adapters` | 8 | `adapters` | Adapter protocol conformance, including a non-commerce fake that proves the protocols are not cart-shaped. |
-| `tests/contracts` | 5 | `contracts` | Outcome-contract parsing, validation, limits. |
+| `tests/architecture` | 17 | `architecture` | Forbidden-import, layering, and repository-reference gates. See below. |
+| `tests/adapters` | 9 | `adapters` | Adapter protocol conformance, including a non-commerce fake that proves the protocols are not cart-shaped. |
+| `tests/contracts` | 6 | `contracts` | Outcome-contract parsing, validation, limits. |
 | `tests/evals` · `tests/benchmarks` | 1 · 1 | `evals` · `benchmarks` | Guard files only; the real tests live in `integration`/`unit`. |
 | `tests/guidance` | 3 | `guidance` | Human–agent guidance states (§12.13). `test_guidance_derivation.py` checks the pure projection; `test_guidance_reachability.py` checks the server can actually reach each phase, which totality alone does not prove. |
 | `tests/shopify` | 5 | `shopify` | Fail-closed configuration parsing, plus §15.7's bridge driven **over HTTP only** — no test here imports an application module, because what was missing was the door rather than the logic. `test_shopify_bridge_routes.py` holds the trial that works; `test_shopify_bridge_refusals.py` holds every way one is refused, and keeps a *refusal* (nothing captured) apart from a *failed verdict* (real evidence of a wrong cart). `test_shopify_contract_template.py` holds FR-023's generic-path door: the template listed and instantiable when the module is on, absent when off, and the locked variant/currency refused from any request body. `conftest.py` hangs its helpers off one `trial` fixture because `tests/` is not a package. |
 | `tests/browser` | 1 | `browser` | Manual smoke checklists — **never automated in CI** (§26.4). |
 
 The Playwright lane lives separately at
-`apps/actionwitness_service/frontend/e2e/` (14 spec files, 78 tests) and is
+`apps/actionwitness_service/frontend/e2e/` (14 spec files, 79 tests; the one
+spec under `e2e/shopify-demo/` belongs to the separate operator-run
+`playwright.shopify-demo.config.ts` capture config, not this lane) and is
 deliberately outside every release gate — §26 makes it conditional. It is the
 only layer exercising real WebMCP, so run it by hand before a release. The
 workspace splits Workflow from Administration behind a left rail, and a hidden
@@ -46,6 +48,7 @@ to catch by eye.
 | `test_core_only_install.py` · `test_store_only_install.py` | Claim independent installability without proving it — the paired `scripts/*_isolation.py` build a fresh virtualenv and install exactly one distribution. |
 | `test_release_artifact_hygiene.py` | Ship secrets, local paths, build debris, lose the single-worker pin — or ship an image whose harness venv omits an integration the service imports (`google_evals` broke only in the image, once; `shopify` ships too, so enabling the audit module on the artifact is not one env var away from the same 500). |
 | `test_bundle_shape.py` | Ship a bundle needing a CSP directive the policy does not grant. |
+| `test_shopify_bridge_artifact.py` | Give the checked-in theme bridge storage, checkout, or navigation behavior. |
 | `test_evaluator_pin.py` | Drift off the pinned evaluator version. |
 | `test_test_lanes.py` | Put a test in a lane whose marker it does not carry. |
 | `test_exit_gate_traceability.py` | Claim an exit criterion with nothing mapped to it. |
