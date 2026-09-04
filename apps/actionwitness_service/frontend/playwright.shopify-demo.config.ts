@@ -4,7 +4,9 @@
  * This lane intentionally starts no local servers. It records the deployed
  * ActionWitness UI and the one explicitly configured Shopify development store.
  * Configuration is supplied by the operator at invocation time; no .env file is
- * read and no storefront credential belongs in this repository.
+ * read and no storefront credential belongs in this repository. Trace capture is
+ * deliberately disabled because an authenticated storefront trace can retain
+ * request metadata from the temporary storage state.
  */
 
 import { defineConfig, devices } from "@playwright/test";
@@ -39,7 +41,7 @@ export default defineConfig({
     viewport: { width: 1920, height: 1080 },
     deviceScaleFactor: 1,
     screenshot: "on",
-    trace: "on",
+    trace: "off",
     video: {
       mode: "on",
       size: { width: 1920, height: 1080 },

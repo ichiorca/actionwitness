@@ -302,6 +302,32 @@ describe("the cart observation (FR-112)", () => {
     await expect(read(html)).rejects.toThrow(/not JSON/);
   });
 
+  it("accepts Shopify JSON served with its legacy text/javascript media type", async () => {
+    // Arrange — the authorized development store serves `/cart.js` this way,
+    // while Shopify documents the endpoint body itself as JSON-formatted.
+    const legacyJson = response({
+      headers: { get: () => "text/javascript; charset=utf-8" },
+      body: EMPTY_CART,
+    });
+
+    // Act / Assert
+    await expect(read(legacyJson)).resolves.toEqual({
+      cart: JSON.parse(EMPTY_CART) as unknown,
+      capturePath: "/en-gb/cart.js",
+    });
+  });
+
+  it("never executes non-JSON JavaScript served under the legacy media type", async () => {
+    // Arrange
+    const executable = response({
+      headers: { get: () => "text/javascript" },
+      body: "globalThis.compromised = true;",
+    });
+
+    // Act / Assert
+    await expect(read(executable)).rejects.toThrow(/valid JSON/);
+    expect(Reflect.get(globalThis, "compromised")).not.toBe(true);
+  });
   it("refuses a payload over 256 KiB, whatever its declared length said", async () => {
     // Arrange — an honest content type, a silent (absent) length, and a body
     // one byte past the cap. The declared length is a claim; the bytes are not.
@@ -398,6 +424,42 @@ describe("the pairing lifecycle (§16.5, FR-115)", () => {
     bridge.dispose();
   });
 
+  it("sends the exact strict request bodies accepted by the bridge API", async () => {
+    // Arrange
+    const { fetch, calls } = storefrontFetch();
+    const bridge = makeBridge({ fetch });
+
+    // Act
+    await bridge.start({ pairingId: "pair_abcd", credential: ONE_TIME });
+    await bridge.verify();
+
+    // Assert — the FastAPI boundary forbids unknown fields. Store origin is
+    // authenticated by exact-origin CORS and server-owned pairing state, not a
+    // caller-controlled JSON field. The bridge-owned page witness belongs
+    // inside the cart observation because Python requires it before treating
+    // the cart as authoritative evidence.
+    const harnessBodies = calls
+      .filter((call) => call.url.startsWith(HARNESS))
+      .map((call) => JSON.parse(String(call.init["body"])) as unknown);
+    expect(harnessBodies).toEqual([
+      { bridge_version: "1.0.0" },
+      {
+        capture_path: "/en-gb/cart.js",
+        cart: {
+          ...(JSON.parse(EMPTY_CART) as Record<string, unknown>),
+          page: { checkout_navigation_observed: false },
+        },
+      },
+      {
+        capture_path: "/en-gb/cart.js",
+        cart: {
+          ...(JSON.parse(ONE_LINE_CART) as Record<string, unknown>),
+          page: { checkout_navigation_observed: false },
+        },
+      },
+    ]);
+    bridge.dispose();
+  });
   it("carries credentials in the Authorization header and never in a URL", async () => {
     // Arrange
     const { fetch, calls } = storefrontFetch();

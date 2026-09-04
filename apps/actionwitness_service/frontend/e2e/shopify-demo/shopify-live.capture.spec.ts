@@ -9,6 +9,8 @@
 
 import { expect, test, type Page } from "@playwright/test";
 
+import { updateArguments } from "../../src/test/shopifyUpdateArguments";
+
 import { installWebMcpAgent } from "../support/webmcpAgent";
 
 const SHOPIFY_TEMPLATE = "shopify_exact_cart";
@@ -75,6 +77,7 @@ async function invokeTool(
   page: Page,
   name: string,
   arguments_: Record<string, unknown>,
+  allowErrorResult = false,
 ): Promise<ToolResult> {
   const result = (await page.evaluate(
     async ([toolName, toolArguments]) =>
@@ -84,81 +87,20 @@ async function invokeTool(
       ),
     [name, arguments_] as const,
   )) as ToolResult;
-  if (result === undefined || result.isError === true) {
+  if (result === undefined || (result.isError === true && !allowErrorResult)) {
     throw new Error(`${name} returned an error result.`);
   }
   return result;
 }
-
-function schemaAlternatives(inputSchema: unknown): readonly Record<string, unknown>[] {
-  const root = asRecord(inputSchema, "update_cart.inputSchema");
-  const alternatives = [root];
-  for (const keyword of ["oneOf", "anyOf"] as const) {
-    const candidate = root[keyword];
-    if (Array.isArray(candidate)) {
-      for (const [index, entry] of candidate.entries()) {
-        alternatives.push(asRecord(entry, `update_cart.inputSchema.${keyword}[${String(index)}]`));
-      }
-    }
-  }
-  return alternatives;
+function toolText(result: ToolResult): string {
+  return (result.content ?? [])
+    .filter(
+      (block): block is { readonly type: "text"; readonly text: string } =>
+        block.type === "text" && typeof block.text === "string",
+    )
+    .map((block) => block.text)
+    .join("\n");
 }
-
-function itemIdentifier(rawVariantId: string, field: string): string | number {
-  const gid = rawVariantId.startsWith("gid://")
-    ? rawVariantId
-    : `gid://shopify/ProductVariant/${rawVariantId}`;
-  if (field === "merchandise_id" || field === "merchandiseId" || field === "id") {
-    return gid;
-  }
-  if (field === "variant_id" || field === "variantId") {
-    return /^\d+$/.test(rawVariantId) ? Number(rawVariantId) : rawVariantId;
-  }
-  throw new Error(`Unrecognized Shopify variant identifier field ${field}.`);
-}
-
-function updateArguments(inputSchema: unknown, rawVariantId: string): Record<string, unknown> {
-  for (const alternative of schemaAlternatives(inputSchema)) {
-    const properties = asRecord(alternative["properties"] ?? {}, "update_cart.properties");
-    for (const collectionName of ["add_items", "addItems", "lines", "items"] as const) {
-      const collectionSchema = properties[collectionName];
-      if (collectionSchema === undefined) {
-        continue;
-      }
-      const collection = asRecord(collectionSchema, `update_cart.${collectionName}`);
-      const item = asRecord(collection["items"], `update_cart.${collectionName}.items`);
-      const itemProperties = asRecord(
-        item["properties"] ?? {},
-        `update_cart.${collectionName}.items.properties`,
-      );
-      const identifier = ["merchandise_id", "merchandiseId", "variant_id", "variantId", "id"].find(
-        (field) => field in itemProperties,
-      );
-      if (identifier === undefined || !("quantity" in itemProperties)) {
-        continue;
-      }
-      return {
-        [collectionName]: [
-          {
-            [identifier]: itemIdentifier(rawVariantId, identifier),
-            quantity: 1,
-          },
-        ],
-      };
-    }
-  }
-
-  const names = schemaAlternatives(inputSchema).flatMap((alternative) => {
-    const properties = alternative["properties"];
-    return typeof properties === "object" && properties !== null && !Array.isArray(properties)
-      ? Object.keys(properties as Record<string, unknown>)
-      : [];
-  });
-  throw new Error(
-    `The live update_cart schema is not one of the reviewed cart-only shapes (properties: ${names.join(", ")}). No mutation was sent.`,
-  );
-}
-
 function configuredVariant(contract: Record<string, unknown>): string {
   const document = asRecord(contract["document"], "contract.document");
   const assertions = asArray(document["assertions"], "contract.document.assertions");
@@ -233,13 +175,41 @@ test("04 — real Shopify same-session cart proof", async ({ context, page }) =>
   const storefrontPromise = context.waitForEvent("page");
   await pairing.getByRole("button", { name: "Open the storefront tab" }).click();
   const storefront = await storefrontPromise;
+  const harnessOrigin = new URL(page.url()).origin;
+  const verificationNetwork: string[] = [];
+  storefront.on("response", (response) => {
+    const url = new URL(response.url());
+    if (url.origin === harnessOrigin && url.pathname.startsWith("/api/v1/shopify/")) {
+      verificationNetwork.push(
+        `${response.request().method()} ${url.pathname} -> ${String(response.status())}`,
+      );
+    }
+  });
+  storefront.on("requestfailed", (request) => {
+    const url = new URL(request.url());
+    if (url.origin === harnessOrigin && url.pathname.startsWith("/api/v1/shopify/")) {
+      verificationNetwork.push(
+        `${request.method()} ${url.pathname} -> ${request.failure()?.errorText ?? "request failed"}`,
+      );
+    }
+  });
   await storefront.waitForLoadState("domcontentloaded");
   await expect(storefront.getByRole("status", { name: "ActionWitness pairing" })).toBeVisible({
     timeout: 45_000,
   });
 
   const updateTool = await waitForTool(storefront, UPDATE_CART);
-  await waitForTool(storefront, VERIFY_SHOPIFY_OUTCOME);
+  try {
+    await waitForTool(storefront, VERIFY_SHOPIFY_OUTCOME);
+  } catch (error: unknown) {
+    const bridgeState = await storefront
+      .getByRole("status", { name: "ActionWitness pairing" })
+      .innerText();
+    throw new Error(
+      `The bridge did not arm. Visible bridge state: ${bridgeState}. Network: ${verificationNetwork.join("; ")}`,
+      { cause: error },
+    );
+  }
   await expect(storefront.getByRole("status", { name: "ActionWitness pairing" })).toContainText(
     "State: armed",
   );
@@ -248,15 +218,19 @@ test("04 — real Shopify same-session cart proof", async ({ context, page }) =>
   const mutation = updateArguments(updateTool.inputSchema, variantId);
   await invokeTool(storefront, UPDATE_CART, mutation);
   await hold(storefront, 3_200);
-  await invokeTool(storefront, VERIFY_SHOPIFY_OUTCOME, {});
+  const verification = await invokeTool(storefront, VERIFY_SHOPIFY_OUTCOME, {}, true);
+  expect(
+    toolText(verification),
+    `The bridge must complete a real failed verdict, not stop with an observation or transport error. Network: ${verificationNetwork.join("; ")}`,
+  ).toMatch(/^Verified\. Result: failed\./);
   await expect(storefront.getByRole("status", { name: "ActionWitness pairing" })).toContainText(
-    "State: passed",
+    "State: failed",
     { timeout: 45_000 },
   );
   await hold(storefront, 3_800);
 
   await page.bringToFront();
-  await expect(pairing.locator(".pairing__live")).toHaveAttribute("data-status", "passed", {
+  await expect(pairing.locator(".pairing__live")).toHaveAttribute("data-status", "failed", {
     timeout: 45_000,
   });
   await expect(pairing).toContainText("platform_session_api");

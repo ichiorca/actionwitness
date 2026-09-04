@@ -259,35 +259,38 @@ def create_app(
     app.state.artifacts = ArtifactStore(settings.harness.artifact_root)
     app.state.cleaner = cleaner
 
-    # Starlette runs middleware in reverse registration order, so the origin
-    # check registered last runs first: a mutation from a disallowed origin is
-    # refused before it can create a workspace (§20.1).
+    # Starlette runs middleware in reverse registration order. The origin check
+    # is registered after the cookie and rate-limit layers, so a mutation from a
+    # disallowed origin is refused before either can spend or create anything
+    # (§20.1). It also remains outside the limiter so scoped Shopify callers can
+    # read a 429 rather than seeing an opaque browser network error.
     app.add_middleware(
         WorkspaceCookieMiddleware,
         store=workspaces,
         secure=settings.harness.secure_cookies,
     )
     app.add_middleware(
-        OriginMiddleware,
-        policy=OriginPolicy(
-            settings.harness.public_origin,
-            # §20.1's one exception, scoped to one corridor: the Shopify bridge
-            # routes are called from the configured storefront, which cannot
-            # present the harness origin. The mapping pairs the path prefix with
-            # the origin so the allowance cannot be spent anywhere else, and it
-            # exists only when the module does - an entry for an unconfigured
-            # store would be an allowlist row for nobody.
-            scoped_origins=(
-                {}
-                if settings.shopify is None
-                else {f"{API_PREFIX}/shopify": settings.shopify.store_origin}
-            ),
-        ),
-    )
-    app.add_middleware(
         RateLimitMiddleware,
         limiter=limiter,
         trusted_proxies=settings.harness.trusted_proxies,
+    )
+    origin_policy = OriginPolicy(
+        settings.harness.public_origin,
+        # §20.1's one exception, scoped to one corridor: the Shopify bridge
+        # routes are called from the configured storefront, which cannot
+        # present the harness origin. The mapping pairs the path prefix with
+        # the origin so the allowance cannot be spent anywhere else, and it
+        # exists only when the module does - an entry for an unconfigured
+        # store would be an allowlist row for nobody.
+        scoped_origins=(
+            {}
+            if settings.shopify is None
+            else {f"{API_PREFIX}/shopify": settings.shopify.store_origin}
+        ),
+    )
+    app.add_middleware(
+        OriginMiddleware,
+        policy=origin_policy,
     )
     # Registered last, so they run first and therefore *outermost*. Both have to
     # see what the layers below refuse: a 429 from the rate limiter never reaches

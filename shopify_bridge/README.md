@@ -109,10 +109,16 @@ must emit a **URL-safe** credential — base64url, or percent-encoded. A raw `+`
 in a standard-base64 credential decodes to a space and the redemption fails
 closed, which is a confusing way to learn about an encoding choice.
 
-Request bodies carry `store_origin`, `bridge_version`, `capture_url_path` (path
-only — no query, no fragment, per FR-117), `captured_at`, and the raw `/cart.js`
-document under `cart`. `verify` adds `checkout_navigation_observed`, which this
-bridge can only ever report as `false` because it never navigates.
+The redeem body carries the bounded `bridge_version` (and may carry a theme
+build identifier when one exists). Observation bodies carry `capture_path`
+(path only — no query or fragment, per FR-117) and the raw `/cart.js` document
+under `cart`, augmented with the bridge-owned
+`page.checkout_navigation_observed` witness required by FR-114. That witness is
+`false` only while the original storefront document is still alive; `pagehide`
+disposes the bridge, so a checkout navigation cannot later produce a successful
+verification. Store origin and capture time remain server-owned: the exact
+request origin is checked against the immutable pairing, and the server records
+its own receipt time. A checkout path is refused at the API boundary.
 
 ## Safety notes worth reading before you install
 
@@ -123,9 +129,10 @@ bridge can only ever report as `false` because it never navigates.
 - **Redirects are refused, not followed.** A cart read that redirects, or whose
   final URL is off the configured origin, is refused before its body is read. A
   redirected cart read is a read of something that is not this cart.
-- **Non-JSON is refused.** On a storefront, an HTML response to `/cart.js` means
-  an error page or a consent interstitial. Parsing one would record an empty
-  cart as an observation.
+- **Non-JSON is refused.** The bridge accepts Shopify's JSON media type and its
+  observed legacy `text/javascript` media type, then always parses the bounded
+  body with `JSON.parse`; it never evaluates script. An HTML response to
+  `/cart.js` means an error page or consent interstitial and is refused.
 - **256 KiB, checked twice.** Once against the declared `Content-Length` and
   once against the bytes actually read, because a declared length is a claim.
 - **The tool takes no arguments.** Appendix D.3's schema is empty and

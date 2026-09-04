@@ -210,10 +210,10 @@ class WorkspaceCookieMiddleware(BaseHTTPMiddleware):
 class OriginMiddleware(BaseHTTPMiddleware):
     """Refuses a mutating request whose `Origin` is not the harness's (§20.1).
 
-    Registered *after* the cookie middleware so that it runs *before* it —
-    Starlette applies middleware in reverse registration order. That ordering
-    is deliberate: a mutation from a disallowed origin should be refused
-    without first minting a workspace for whoever sent it, or a hostile page
+    Registered after the cookie and rate-limit middleware so that it runs
+    before both. That ordering is deliberate: a mutation from a disallowed
+    origin should be refused without first minting a workspace for whoever sent
+    it, or a hostile page
     could fill the table by being rejected repeatedly.
 
     The refusal is built here rather than raised, because an exception thrown
@@ -237,7 +237,16 @@ class OriginMiddleware(BaseHTTPMiddleware):
             # precisely the line an operator needs to see.
             request.state.error_code = refusal.code.value
             return JSONResponse(status_code=refusal.http_status, content=refusal.as_envelope())
-        return await call_next(request)
+        response = await call_next(request)
+        scoped_origin = self._policy.scoped_cors_origin_for(request)
+        if scoped_origin is not None:
+            response.headers["Access-Control-Allow-Origin"] = scoped_origin
+            vary = response.headers.get("Vary")
+            if vary is None:
+                response.headers["Vary"] = "Origin"
+            elif "origin" not in {item.strip().lower() for item in vary.split(",")}:
+                response.headers["Vary"] = f"{vary}, Origin"
+        return response
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):

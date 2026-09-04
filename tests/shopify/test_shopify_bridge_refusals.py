@@ -141,6 +141,23 @@ async def test_an_unexpected_variant_fails_the_trial_rather_than_being_refused(
     assert (await trial.status(pairing_id)).json()["pairing"]["status"] == "failed"
 
 
+async def test_an_empty_final_cart_fails_the_trial_rather_than_crashing(
+    trial: Trial,
+) -> None:
+    """A missing expected line item is a witnessed failure, not a server error."""
+    # Arrange
+    pairing_id, session = await trial.armed()
+
+    # Act
+    verified = await trial.verify(pairing_id, session, trial.cart())
+
+    # Assert
+    assert verified.status_code == 200, verified.text
+    assert verified.headers["access-control-allow-origin"] == trial.STORE
+    assert verified.json()["verdict"] == "failed"
+    assert (await trial.status(pairing_id)).json()["pairing"]["status"] == "failed"
+
+
 async def test_observed_checkout_navigation_fails_the_trial(trial: Trial) -> None:
     """FR-114's other half, carried by the one fact the bridge can witness.
 
@@ -468,6 +485,31 @@ async def test_a_refusal_still_carries_the_cors_header_the_bridge_needs(trial: T
     assert refused.headers["access-control-allow-origin"] == trial.STORE
     assert "Origin" in refused.headers["vary"]
     assert "access-control-allow-credentials" not in refused.headers
+
+
+async def test_a_rate_limit_refusal_still_carries_the_storefront_cors_header(
+    trial: Trial,
+) -> None:
+    """A middleware 429 must remain readable inside the configured storefront."""
+    # Arrange
+    created = await trial.create()
+    pairing_id = created.json()["pairing_id"]
+    credential = trial.credential_in(created.json()["launch_url"])
+    for _ in range(100):
+        exhausted = await trial.ui.get("/api/v1/workspace")
+        if exhausted.status_code == 429:
+            break
+    else:  # pragma: no cover - protects the test if the public limit changes
+        raise AssertionError("the request bucket did not exhaust within the test bound")
+
+    # Act
+    refused = await trial.redeem(pairing_id, credential)
+
+    # Assert
+    assert refused.status_code == 429, refused.text
+    assert refused.headers["access-control-allow-origin"] == trial.STORE
+    assert "Origin" in refused.headers["vary"]
+    assert int(refused.headers["retry-after"]) >= 1
 
 
 async def test_an_unknown_field_on_a_bridge_body_is_refused(trial: Trial) -> None:

@@ -352,7 +352,7 @@
       .split(";")[0]
       .trim()
       .toLowerCase();
-    if (contentType !== "application/json") {
+    if (contentType !== "application/json" && contentType !== "text/javascript") {
       throw new Error("the cart response was not JSON (" + (contentType || "no content type") + ")");
     }
 
@@ -366,7 +366,12 @@
       throw new Error("the cart response is larger than 256 KiB");
     }
 
-    var parsed = JSON.parse(text);
+    var parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch (_error) {
+      throw new Error("the cart response body was not valid JSON");
+    }
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
       throw new Error("the cart response was not a JSON object");
     }
@@ -374,6 +379,22 @@
     // carries neither today; recording the path rather than the href is what
     // keeps that true if one ever does.
     return { cart: parsed, capturePath: new URL(url).pathname };
+  }
+
+  /**
+   * Add the one page fact Python requires before treating a cart as evidence.
+   *
+   * The bridge is installed on the storefront document and is disposed on
+   * pagehide; if checkout navigation occurs, this document cannot stay alive
+   * to submit a successful verification. While this frame is still able to
+   * read the same-session cart, the truthful page witness is therefore false.
+   * It is nested under cart because the strict HTTP envelope accepts only
+   * capture_path and the complete observation document.
+   */
+  function cartObservation(cart) {
+    return Object.assign({}, cart, {
+      page: { checkout_navigation_observed: false },
+    });
   }
 
   // --- the harness -----------------------------------------------------------
@@ -687,7 +708,7 @@
           harnessOrigin,
           "/api/v1/shopify/pairings/" + encodeURIComponent(pairingId) + "/redeem",
           pairing.credential,
-          { store_origin: storeOrigin, bridge_version: BRIDGE_VERSION },
+          { bridge_version: BRIDGE_VERSION },
         );
         // The one-time credential is spent the moment it is redeemed. Dropping
         // the caller's copy here means the only surviving credential is the
@@ -716,12 +737,8 @@
           "/api/v1/shopify/pairings/" + encodeURIComponent(pairingId) + "/observations/before",
           sessionCredential,
           {
-            phase: "before",
-            bridge_version: BRIDGE_VERSION,
-            store_origin: storeOrigin,
-            capture_url_path: observed.capturePath,
-            captured_at: env.now().toISOString(),
-            cart: observed.cart,
+            capture_path: observed.capturePath,
+            cart: cartObservation(observed.cart),
           },
         );
         var armedRecord = record(armedResponse);
@@ -758,16 +775,11 @@
           "/api/v1/shopify/pairings/" + encodeURIComponent(pairingId) + "/verify",
           sessionCredential,
           {
-            phase: "after",
-            bridge_version: BRIDGE_VERSION,
-            store_origin: storeOrigin,
-            capture_url_path: observed.capturePath,
-            captured_at: env.now().toISOString(),
+            capture_path: observed.capturePath,
             // Recorded rather than asserted: this bridge never navigates, so
             // the honest value is what this frame observed, and the server
             // decides what it means.
-            checkout_navigation_observed: false,
-            cart: observed.cart,
+            cart: cartObservation(observed.cart),
           },
         );
         var verdictRecord = record(verdict);

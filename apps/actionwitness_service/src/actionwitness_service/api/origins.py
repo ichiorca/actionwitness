@@ -115,6 +115,14 @@ class OriginPolicy:
             None,
         )
 
+    def scoped_cors_origin_for(self, request: Request) -> str | None:
+        """Return the scoped origin only when this request presented it exactly."""
+        scoped = self.scoped_origin_for(request.url.path)
+        presented = request.headers.get("origin")
+        if scoped is None or presented is None or _normalize(presented) != scoped:
+            return None
+        return scoped
+
     def _allowed(self, request: Request) -> frozenset[str]:
         base = (
             _normalize(self._configured)
