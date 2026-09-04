@@ -34,20 +34,17 @@ behavior from work that remains optional or deferred.
 - Publish a stable packaged CLI and versioned release artifacts.
 - Expand real-browser accessibility and cross-browser validation as WebMCP stabilizes.
 
-## Optional modules — implemented, configuration-gated, off by default
+## Live on the deployed demo
 
-All three are built and tested to the same standard as the deterministic demo;
-what gates them now is deployment configuration, not pending work. Each reports
-its state and reason at `GET /api/v1/workspace` under `modules`.
-
-- **Shopify development-store integration** — enables only for one exact
-  authorized store origin, one server-controlled variant, and one currency.
-- **Live-model evaluator** — variant drafting and the import pipeline are
-  complete and CI-proven from the recorded fixture; the live-credential
-  benchmark run itself remains an open operator gate
-  (`specs/010-live-model-benchmark/tasks.md` T11).
-- **External storefront audit** — enables only for operator-allowlisted
-  origins, with a per-audit authorization assertion.
+Everything above runs on the public deployment, including the Shopify
+development-store integration (enabled against the authorized store) and the
+external storefront audit (enabled for the allowlisted origins). Store origin,
+variant, currency, and audit origins are server-controlled configuration as a
+safety stance, not a feature flag: a deployment without them refuses rather
+than guesses, and no request body can override them. The one
+credential-dependent piece is live-model variant drafting — it requires a
+provider credential in the deployment, and the benchmark view otherwise runs
+from the clearly-labelled recorded fixture.
 
 ## Explicitly out of scope
 

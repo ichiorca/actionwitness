@@ -76,7 +76,7 @@ decides, with the consequence spelled out and a live expiry:
 
 ![The consent dialog: Approve this action? — the consequence as labelled rows, a countdown beside the absolute expiry, and Approve once / Deny withheld from the tab that does not own the waiting call](docs/screenshots/consent-dialog.png)
 
-**Status.** Tiers 1–3 are implemented and tested: the target-neutral core, the
+**Status.** Implemented and tested end to end: the target-neutral core, the
 failure-injectable Buggy Store, the React/WebMCP workspace and human
 confirmation, regression replay, evaluator import, self-witnessing, live Gemini
 variant drafting, repeated-trial correlation, the operator-driven external
@@ -311,10 +311,10 @@ Registered markers: `architecture`, `unit`, `integration`, `adapters`, `contract
 | `npm test` | Vitest (jsdom) — adapter lifecycle, polling, panels, confirmation |
 | `npm run build` | Vite production bundle |
 | `npm run typecheck:e2e` | Strict `tsc --noEmit` over the browser lane's own sources |
-| `npm run test:e2e` | **Tier 3, opt-in.** Playwright against the composed deployment |
+| `npm run test:e2e` | **Opt-in.** Playwright against the composed deployment |
 
 `npm run test:e2e` builds the one-origin tree of spec §29.1 and drives the UI,
-storefront, and WebMCP tool surface in a real browser. Spec §26 makes this tier
+storefront, and WebMCP tool surface in a real browser. Spec §26 makes this lane
 **conditional** — outside every release gate and CI job; `tests/browser/` stays
 the manual §26.4 checklist. Requires `npx playwright install chromium` once; the
 lane's own README documents each spec.
@@ -376,7 +376,7 @@ Exit codes are fixed by FR-088: `0` matched, `1` replay ran and **differed**,
 `reproduce_source` must reproduce the original failure exactly; `current` is the
 regression gate.
 
-## Importing an external evaluator report (Tier 2)
+## Importing an external evaluator report
 
 ActionWitness correlates the pinned Google `webmcp-evals` reporter's output with its
 own outcome layer into a dual-layer benchmark (spec §9.9, §25.3), via
@@ -524,16 +524,17 @@ runtime.
 Report a security issue by opening an issue without exploit detail, and we will
 arrange a private channel.
 
-## Optional modules and deliberate limits
+## Configuration-gated modules and deliberate limits
 
-Named, not hidden. Each configuration-gated module reports its state and reason at
-`GET /api/v1/workspace` under `modules`.
+Named, not hidden. Each module reports its state and reason live at
+`GET /api/v1/workspace`; the gating is server-controlled configuration as a
+safety stance — an unconfigured deployment refuses rather than guesses.
 
-| Module | State | Why |
+| Module | On the live demo | Gating |
 |---|---|---|
-| `shopify` | **off by default** (Tier 3, optional) | Implemented and tested against the authorized development store. Enables only for one exact store origin, one server-controlled variant, one currency, and the exact harness origin. |
-| `live_evaluator` | **off by default** (Tier 3, optional) | Live generation needs an explicitly enabled provider/model and a server-side credential. Recorded fixtures stay labelled `recorded_fixture`, never `live_model_run`. |
-| `external_audit` | **off by default** (Tier 3, optional) | An anonymous workspace must never direct an audit at an origin the deployment did not allow (`EXTERNAL_AUDIT_ALLOWED_ORIGINS` + per-audit authorization assertion). |
+| `shopify` | **enabled** — cart-only proof against the authorized development store | One exact store origin, one server-controlled variant, one currency, the exact harness origin |
+| `external_audit` | **enabled** for the allowlisted origins | `EXTERNAL_AUDIT_ALLOWED_ORIGINS` plus a per-audit authorization assertion |
+| `live_evaluator` | recorded-fixture path (clearly labelled `recorded_fixture`, never `live_model_run`) | Live generation needs an explicitly enabled provider/model and a server-side credential |
 
 Other known limitations: SQLite, single worker, single instance; demo data is
 ephemeral across redeploys; the contract form is the only declarative tool; the
