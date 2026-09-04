@@ -1,0 +1,3 @@
+# Decompose the PRD into specs
+
+Run `cavesson spec-kit specify --prd specs/PRD.md` with your shell tool to decompose the PRD into an ordered set of thin, end-to-end specs (spec.md/plan.md/tasks.md), grounded in the PRD + constitution. The spec count auto-scales to PRD size; pass `--max-specs` to override. HEED THE COVERAGE REPORT it prints — it lists any numbered PRD section left unanchored by the specs; re-run with a higher `--max-specs --force` (or pass `--strict-coverage` to fail hard) so no section is silently dropped. Then review `specs/*/spec.md` WITH the operator before building — the spec set is the contract the autonomous build implements.

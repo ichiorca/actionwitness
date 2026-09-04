@@ -61,7 +61,11 @@ Thumbs.db
 # deleting them.
 /hooks/
 /scripts/cavesson-*.sh
-/.codex/
+#/.codex/
+# The prompts and agent definitions publish; the machine-generated hook
+# wiring carries local absolute paths and the .lock files are runtime debris.
+/.codex/hooks.json
+/.codex/**/*.lock
 /.agents/
 /.claude/
 /.gemini/
@@ -143,3 +147,6 @@ examples/buggy_store/frontend/dist/
 apps/actionwitness_service/frontend/.e2e/
 apps/actionwitness_service/frontend/e2e/.auth/
 apps/actionwitness_service/frontend/playwright-report/
+
+videos/
+docs/devpost-aboutproject.md

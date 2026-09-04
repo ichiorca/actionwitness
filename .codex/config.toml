@@ -1,0 +1,11 @@
+# Merged by cavesson: the sandbox/approval governance keys are
+# reconciled on each apply; all other keys are your own.
+# Source: internal/adapters/codexcli/compile.go.
+
+approval_policy = 'on-request'
+default_permissions = ':workspace'
+sandbox_mode = 'workspace-write'
+
+[sandbox_workspace_write]
+network_access = false
+writable_roots = ['${HOME}/.cache/cavesson/codex']
