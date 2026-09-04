@@ -16,7 +16,7 @@ test.describe("the composed one-origin deployment", () => {
   test("serves the harness at / and reports its own health", async ({ workspace, harness }) => {
     await workspace.open();
 
-    await expect(workspace.page).toHaveTitle("ActionWitness");
+    await expect(workspace.page).toHaveTitle("ActionWitness — a WebMCP outcome witness");
 
     const health = await harness.raw.get("/healthz");
     expect(health.ok()).toBeTruthy();

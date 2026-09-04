@@ -632,8 +632,9 @@ export default function App(): React.ReactElement {
             sentence says what the harness *does* — compare two sources — and
             promises nothing about what that prevents. */}
         <p className="sidebar__tagline">
-          An agent&rsquo;s tool call reports its own result. This compares that report against
-          business state observed independently, and judges the run on the difference.
+          An independent witness for <strong>WebMCP</strong> agents. A WebMCP tool call reports
+          its own result; this compares that report against business state observed
+          independently, and judges the run on the difference.
         </p>
         {/* A persistent glance at facts the Target and Findings panels already
             show in full — repeated display, never a second source: both values

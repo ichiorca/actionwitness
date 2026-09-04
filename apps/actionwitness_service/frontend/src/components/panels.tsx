@@ -50,7 +50,7 @@ export function CapabilityBar({
   return (
     <section className="capabilities" aria-label="Capabilities">
       <p>
-        <span className="capabilities__label">Browser agent support:</span>{" "}
+        <span className="capabilities__label">WebMCP browser agent:</span>{" "}
         {webMcpSupported ? (
           <>
             <strong>available</strong> — {registeredToolCount} tool
