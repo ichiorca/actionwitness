@@ -18,6 +18,7 @@ business state around an agent's journey, holds that state to an explicit contra
 and turns every silent failure into a portable regression test.
 
 **[Try it live](https://actionwitness.onrender.com)** ·
+**[Watch the 3-minute demo](https://youtu.be/rwDyrnVunXc)** ·
 **[Inspect the evidence](docs/SUBMISSION_EVIDENCE.md)** ·
 **[Explore the architecture](docs/ARCHITECTURE.md)**
 
@@ -72,10 +73,11 @@ confirmation until a person decides.
 failure-injectable Buggy Store, the React/WebMCP workspace and human confirmation,
 regression replay, evaluator import, self-witnessing, live Gemini variant drafting,
 repeated-trial correlation, the operator-driven external audit, and the Shopify
-development-store integration — built and tested against its authorized store's
-configuration, with the live cart proof (AC-18) still an operator gate we have not
-run. 3,264 deterministic Python tests, 426 frontend unit tests, 227 architecture
-gates; credentialed integrations are optional and fail closed when unconfigured.
+development-store integration — exercised end to end against the authorized store:
+one configured origin, variant and currency, cart-only. The suite spans 3,277 Python
+tests (including 227 architecture checks), 433 frontend tests, and a 79-test
+Playwright lane; credentialed integrations are optional and fail closed when
+unconfigured.
 
 **Normative sources.** The functional specification is `docs/actionwitness-functional-spec.md`, version 1.9;
 it is a planning input held by the operator and deliberately untracked. Every
@@ -358,9 +360,8 @@ v0.0.4 (`fe33c1b`). Filing on another project's tracker is the operator's call._
 ## The Shopify development-store integration
 
 The one supported external target (spec §15.7): one authorized development store,
-one server-configured variant and currency, cart-only. Built and tested; the live
-cart proof (AC-18) remains an operator gate we have not run, so every task in
-`specs/011-shopify-cart-proof/tasks.md` is still unticked.
+one server-configured variant and currency, cart-only, exercised end to end against
+the configured store.
 
 - **Pairing** (`/api/v1/shopify`): a short-lived credential that travels only in a
   URL fragment, is stored only as a hash, and is redeemed from the exact configured
@@ -467,8 +468,8 @@ safety stance — an unconfigured deployment refuses rather than guesses.
 
 Other known limitations: SQLite, single worker, single instance; demo data is
 ephemeral across redeploys; the contract form is the only declarative tool; the
-`/demo` proxy caps a storefront request body at 64 KiB; the demo video is not
-yet linked from this README; the store process is not supervised — if it exits,
+`/demo` proxy caps a storefront request body at 64 KiB; the store process is not
+supervised — if it exits,
 `/demo/api/v1` answers a named `TARGET_UNAVAILABLE` until the container restarts.
 
 ## Version pinning
