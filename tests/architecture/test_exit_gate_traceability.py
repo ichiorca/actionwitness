@@ -212,7 +212,7 @@ EXIT_GATE_005: dict[str, tuple[str, str]] = {
 #: Criteria 1 and 2 are about a *real browser*, and no automated test in this
 #: repository can discharge them: the browser lane is opt-in, and the gate below
 #: forbids covering an exit-gate criterion from an opt-in lane. They are
-#: operator-attested against `docs/tier-1-gate-checklist.md`, whose existence is
+#: operator-attested against `docs/browser-gate-checklist.md`, whose existence is
 #: asserted — a deleted checklist would leave two criteria covered by nothing
 #: while this map still looked complete.
 #:
@@ -220,7 +220,7 @@ EXIT_GATE_005: dict[str, tuple[str, str]] = {
 #: path needs no tool, because the tools drive the endpoints the page does.
 EXIT_GATE_006: dict[str, tuple[str, str]] = {
     "1. a compatible browser completes Journeys A and B through real WebMCP tools "
-    "(OPERATOR-ATTESTED: docs/tier-1-gate-checklist.md)": (
+    "(OPERATOR-ATTESTED: docs/browser-gate-checklist.md)": (
         "tests/architecture/test_exit_gate_traceability.py",
         "test_the_operator_checklist_covers_the_browser_criteria",
     ),
@@ -854,7 +854,9 @@ def _defines(path: Path, function: str) -> bool:
     )
 
 
-CHECKLIST = REPO_ROOT / "docs" / "tier-1-gate-checklist.md"
+# Renamed from docs/tier-1-gate-checklist.md on 2026-09-04; specs that cite the
+# old name refer to the same record.
+CHECKLIST = REPO_ROOT / "docs" / "browser-gate-checklist.md"
 RELEASE_CHECKLIST = REPO_ROOT / "docs" / "release-checklist.md"
 
 

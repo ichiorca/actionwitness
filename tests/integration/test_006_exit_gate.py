@@ -12,7 +12,7 @@ journey through every transition and compare them at each step rather than
 asserting each surface's copy in isolation.
 
 Criteria 1 and 2 concern a real browser and are operator-attested; see
-`docs/tier-1-gate-checklist.md` and the 006 plan's ledger. Everything below
+`docs/browser-gate-checklist.md` and the 006 plan's ledger. Everything below
 them is deterministic and lives here.
 """
 

@@ -1,13 +1,16 @@
-# Tier 1 gate — operator checklist (spec 006 / BUILD_ORDER M5)
+# Browser gate — operator checklist (spec 006 / BUILD_ORDER M5)
 
-> **Scope note (2026-09-04).** This checklist is the Tier 1 gate record and its
-> attestations below are historical — do not re-date them. The project has since
-> implemented and tested the Tier 2 and Tier 3 feature set; where *their*
-> verification lives is summarized in [Beyond Tier 1](#beyond-tier-1--where-tier-2-and-tier-3-are-verified)
+> **Scope note (2026-09-04).** This checklist is the browser-gate record for
+> the workspace/confirmation milestone and its attestations below are
+> historical — do not re-date them. The project has since implemented and
+> tested far more; where the rest is verified is summarized in
+> [Beyond this gate](#beyond-this-gate--where-the-rest-of-the-product-is-verified)
 > at the end, and the living release procedure is
-> [`docs/release-checklist.md`](release-checklist.md).
+> [`docs/release-checklist.md`](release-checklist.md). (This file was
+> previously `docs/tier-1-gate-checklist.md`; specs that cite that name refer
+> to this record.)
 
-Two of M5's exit criteria are about a **real browser**, and one Tier 1
+Two of M5's exit criteria are about a **real browser**, and one milestone
 acceptance criterion is about a **deployed URL**. None can be discharged by
 `pytest` or `vitest`, and none should be faked by a test that pretends
 otherwise:
@@ -133,14 +136,14 @@ evidence in docs/release-checklist.md criterion 3)
 Date: 2026-09-03 (UTC)  Build: Playwright Chromium (1.62.1) / Chrome stable,
 #enable-webmcp-testing Enabled
 
-## Beyond Tier 1 — where Tier 2 and Tier 3 are verified
+## Beyond this gate — where the rest of the product is verified
 
-Tier 2 and Tier 3 are implemented and tested; this section exists so a reader
-of the Tier 1 gate does not conclude the project stopped here. Nothing below
+The later feature set is implemented and tested; this section exists so a
+reader of this gate record does not conclude the project stopped here. Nothing below
 adds a hand-check to this file — each item names where its verification
 actually lives.
 
-**Tier 2 — external evaluator import and the dual-layer benchmark.** Fully
+**External evaluator import and the dual-layer benchmark.** Fully
 automated, no operator attestation: `tests/integration/test_008_exit_gate.py`
 holds AC-16 (import, normalization, explicit binding, correlation, dual-layer
 reporting from the checked-in redacted fixture), and
@@ -149,9 +152,9 @@ CI can prove without a credential — `live_model_run` labelling, exported
 parameters recorded without invention, the credential boundary, and the matrix
 counts. Both run inside `uv run pytest -q`.
 
-**Tier 3 — three optional modules, each configuration-gated and off by
-default** (their current state is reported at `GET /api/v1/workspace` under
-`modules`):
+**Three configuration-gated modules** — enabled on the live deployment where
+their server-side configuration is present; each reports its current state at
+`GET /api/v1/workspace`:
 
 - **External audit (Storefront Witness).** Implemented and tested; the
   operator journey is the workspace's Audit → External surface view, and the
@@ -180,4 +183,4 @@ default** (their current state is reported at `GET /api/v1/workspace` under
 
 A failure on this checklist is an exit-gate failure, not a note. Record it in
 `specs/006-ui-webmcp-confirmation/plan.md` under the deviations ledger, and fix
-it before declaring the Tier 1 gate green.
+it before declaring this gate green.

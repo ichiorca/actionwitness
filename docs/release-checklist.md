@@ -10,7 +10,7 @@ are **operator-attested**: run them by hand, record the result, and date it.
 for those criteria — a deleted checklist fails that gate rather than leaving the map
 looking complete.
 
-This closes the AC-01 row deferred from `docs/tier-1-gate-checklist.md`.
+This closes the AC-01 row deferred from `docs/browser-gate-checklist.md`.
 
 ## What is already automated
 
@@ -168,7 +168,7 @@ Date: 2026-09-03 (UTC)
 
 ## Criterion 4 — Tier 1 and Tier 2 manual acceptance against the deployed URL
 
-Run `docs/tier-1-gate-checklist.md` in full **against the deployed URL** rather
+Run `docs/browser-gate-checklist.md` in full **against the deployed URL** rather
 than against localhost. Most of it will pass identically; the ones that do not are
 the ones this criterion exists for — origin policy, cookie `Secure`, and anything
 that behaves differently behind a proxy.
@@ -233,7 +233,8 @@ Date: 2026-09-03 (UTC)
 
 ## After attesting
 
-- [x] Tick the AC-01 row in `docs/tier-1-gate-checklist.md` and date it there too.
+- [x] Tick the AC-01 row in `docs/browser-gate-checklist.md` (then named
+      `docs/tier-1-gate-checklist.md`) and date it there too.
 - [x] Replace the README's "_deployed URL pending_" line with the live URL.
 - [x] Add the screenshots to the README.
 
